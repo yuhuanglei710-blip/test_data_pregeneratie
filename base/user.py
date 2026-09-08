@@ -104,7 +104,11 @@ class User:
             self.uid = res_data["data"]["user"]["id"]
             self.token = res_data["data"]["token"]
 
-
+    def login(self):
+        email = self.email
+        password = self.password
+        
+        pass
 
 
 if __name__ == "__main__":
