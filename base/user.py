@@ -1,33 +1,39 @@
 import http.client
 import json
 import base64
+import os
 import time
 import random
 import string
-
+from dotenv import load_dotenv
 #抽象用户类，创建用户模拟数据
 class User:
     #初始化用户信息，可指定环境、邮箱、平台、渠道代码，默认创建ios，b面用户,密码写死123456
     def __init__(self, 
                  email:str = ''.join(random.choices(string.ascii_lowercase, k=4)) + ''.join(random.choices(string.digits, k=2)) + "@cc.cc",
-                 platform: int = 3,
-                 channel_code: str = 'TT_iOS_funrise',
-                 environment: str = "devapi.ushdev.top",
+                 
+                 environment: str = "dev",
                  ):
+        #根据环境变量加载不同的配置文件
+        if environment not in ["dev","huidu","prod"]:
+            return "Invalid environment. Choose from 'dev', 'huidu', or 'prod'."
+        else:
+            load_dotenv(f"{environment}.env")
+            self.domain = os.getenv("domain")
         self.email = email
         self.password="e10adc3949ba59abbe56e057f20f883e"
-        self.platform = platform
-        self.channel_code = channel_code
-        self.environment = environment
         self.uid = None
         self.token = None
 
     #创建注册函数,oaid为当前时间戳
-    def register(self,platform: int=3, 
+    def register(self,
                 channel_code: str='TT_iOS_funrise',
+                platform: int = 3,
                 ):
+        self.platform = platform
+        self.channel_code = channel_code
         #创建HTTPS连接
-        conn = http.client.HTTPSConnection(self.environment)
+        conn = http.client.HTTPSConnection(self.domain)
         oaid = str(int(time.time() * 1000))
         #设置请求体
         payload = json.dumps({
@@ -103,11 +109,10 @@ class User:
         elif res_data:
             self.uid = res_data["data"]["user"]["id"]
             self.token = res_data["data"]["token"]
-
+    #老账号用于获取token
     def login(self):
         email = self.email
         password = self.password
-        
         pass
 
 
