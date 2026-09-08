@@ -14,7 +14,7 @@ class User:
                  environment: str = "dev",
                  ):
         #根据环境变量加载不同的配置文件
-        if environment not in ["dev","huidu","prod"]:
+        if environment not in ["dev","huidu","prod","yy","individual"]:
             return "Invalid environment. Choose from 'dev', 'huidu', or 'prod'."
         else:
             load_dotenv(f"{environment}.env")
@@ -28,9 +28,11 @@ class User:
 
     #创建注册函数,oaid为当前时间戳
     def register(self,
-                channel_code: str='TT_iOS_funrise',
+                channel_code: str='com.ushafdemo.androidapk|None|',
+                down_origin: str='gpa17drop',
                 platform: int = 3,
                 ):
+        self.down_origin = down_origin
         self.platform = platform
         self.channel_code = channel_code
         #创建HTTPS连接
@@ -44,7 +46,7 @@ class User:
         "confirm_password": self.password,
         "platform": self.platform,
         "channel_code": self.channel_code,
-        "distribution_channel": "dev",
+        "distribution_channel": self.down_origin,
         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1",
         "ip_json": json.dumps({
             "ip": "172.83.157.240",
@@ -61,10 +63,10 @@ class User:
         "phone_os_version": "",
         "adjust_info": json.dumps({
             "network": self.channel_code,
-            "trackerName": self.channel_code,
+            "trackerName": self.down_origin,
             "trackerToken": "19huppx7",
             "adid": oaid,
-            "campaign": "",
+            "campaign": "b4733853b4790ac2e4aa85e1c2c69438",
             "creative": "",
             "costType": "",
             "costCurrency": "",
@@ -101,7 +103,7 @@ class User:
                 response["data"] = json.loads(res_data)
             except json.JSONDecodeError:
                 response["data"] = res_data
-        print(json.dumps(response, ensure_ascii=False, indent=2))
+        #print(json.dumps(response, ensure_ascii=False, indent=2))
 
         if isinstance(response.get("data"), dict):
             self.uid = response["data"]["user"]["id"]
@@ -118,8 +120,8 @@ class User:
 
 
 if __name__ == "__main__":
-    user = User()
-    user.register()
+    user = User(environment="dev")
+    user.register(platform=2)
     print("注册成功!"'\n',
           "邮箱:", user.email, '\n', 
           "密码:", user.password,'\n', 

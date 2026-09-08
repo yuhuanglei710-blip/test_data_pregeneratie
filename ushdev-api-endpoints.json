@@ -1,0 +1,2366 @@
+[
+  {
+    "method": "DELETE",
+    "path": "/api/deleteApisByIds",
+    "url": "https://admin.ushdev.top/api/api/deleteApisByIds",
+    "source": "087AC4D233B64EB0api.e1bf9c7a.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/cfgAgentRatio/deleteCfgAgentRatio",
+    "url": "https://admin.ushdev.top/api/cfgAgentRatio/deleteCfgAgentRatio",
+    "source": "087AC4D233B64EB0cfgAgentRatio.e1736e85.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/cfgGoods/deleteCfgGoods",
+    "url": "https://admin.ushdev.top/api/cfgGoods/deleteCfgGoods",
+    "source": "087AC4D233B64EB0cfgGoods.a89183ad.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/cfgGoods/deleteCfgGoodsByIds",
+    "url": "https://admin.ushdev.top/api/cfgGoods/deleteCfgGoodsByIds",
+    "source": "087AC4D233B64EB0cfgGoods.a89183ad.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/channelDateCost/deleteChannelDateCost",
+    "url": "https://admin.ushdev.top/api/channelDateCost/deleteChannelDateCost",
+    "source": "087AC4D233B64EB0channelDateCost.5caf7ad9.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/channelDateCost/deleteChannelDateCostByIds",
+    "url": "https://admin.ushdev.top/api/channelDateCost/deleteChannelDateCostByIds",
+    "source": "087AC4D233B64EB0channelDateCost.5caf7ad9.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/chatGpt/deleteSK",
+    "url": "https://admin.ushdev.top/api/chatGpt/deleteSK",
+    "source": "087AC4D233B64EB0chatTable.210ddfbf.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/customer/customer",
+    "url": "https://admin.ushdev.top/api/customer/customer",
+    "source": "087AC4D233B64EB0customer.ce1f3cc9.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/sysDictionary/deleteSysDictionary",
+    "url": "https://admin.ushdev.top/api/sysDictionary/deleteSysDictionary",
+    "source": "087AC4D233B64EB0sysDictionary.cd18ab33.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/sysDictionaryDetail/deleteSysDictionaryDetail",
+    "url": "https://admin.ushdev.top/api/sysDictionaryDetail/deleteSysDictionaryDetail",
+    "source": "087AC4D233B64EB0sysDictionaryDetail.6d5526f3.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/sysOperationRecord/deleteSysOperationRecord",
+    "url": "https://admin.ushdev.top/api/sysOperationRecord/deleteSysOperationRecord",
+    "source": "087AC4D233B64EB0sysOperationRecord.95fa498b.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/sysOperationRecord/deleteSysOperationRecordByIds",
+    "url": "https://admin.ushdev.top/api/sysOperationRecord/deleteSysOperationRecordByIds",
+    "source": "087AC4D233B64EB0sysOperationRecord.95fa498b.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/systemMail/deleteSystemMail",
+    "url": "https://admin.ushdev.top/api/systemMail/deleteSystemMail",
+    "source": "087AC4D233B64EB0systemMail.37954599.js"
+  },
+  {
+    "method": "DELETE",
+    "path": "/user/deleteUser",
+    "url": "https://admin.ushdev.top/api/user/deleteUser",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "GET",
+    "path": "/activity/get_lottery_gc_rate_list",
+    "url": "https://admin.ushdev.top/api/activity/get_lottery_gc_rate_list",
+    "source": "087AC4D233B64EB0lottery.bc6bbe94.js"
+  },
+  {
+    "method": "GET",
+    "path": "/activity/get_lottery_k_list",
+    "url": "https://admin.ushdev.top/api/activity/get_lottery_k_list",
+    "source": "087AC4D233B64EB0lottery.bc6bbe94.js"
+  },
+  {
+    "method": "GET",
+    "path": "/AgentPackage/findCfgAgentPackage",
+    "url": "https://admin.ushdev.top/api/AgentPackage/findCfgAgentPackage",
+    "source": "087AC4D233B64EB0cfgAgentPackage.72d847af.js"
+  },
+  {
+    "method": "GET",
+    "path": "/AgentPackage/getCfgAgentPackageList",
+    "url": "https://admin.ushdev.top/api/AgentPackage/getCfgAgentPackageList",
+    "source": "087AC4D233B64EB0cfgAgentPackage.72d847af.js"
+  },
+  {
+    "method": "GET",
+    "path": "/api/freshCasbin",
+    "url": "https://admin.ushdev.top/api/api/freshCasbin",
+    "source": "087AC4D233B64EB0api.e1bf9c7a.js"
+  },
+  {
+    "method": "GET",
+    "path": "/autoCode/getColumn",
+    "url": "https://admin.ushdev.top/api/autoCode/getColumn",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "GET",
+    "path": "/autoCode/getDB",
+    "url": "https://admin.ushdev.top/api/autoCode/getDB",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "GET",
+    "path": "/autoCode/getTables",
+    "url": "https://admin.ushdev.top/api/autoCode/getTables",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgAgentRatio/findCfgAgentRatio",
+    "url": "https://admin.ushdev.top/api/cfgAgentRatio/findCfgAgentRatio",
+    "source": "087AC4D233B64EB0cfgAgentRatio.e1736e85.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgAgentRatio/getCfgAgentRatioList",
+    "url": "https://admin.ushdev.top/api/cfgAgentRatio/getCfgAgentRatioList",
+    "source": "087AC4D233B64EB0cfgAgentRatio.e1736e85.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgBase/getBaseCfg",
+    "url": "https://admin.ushdev.top/api/cfgBase/getBaseCfg",
+    "source": "087AC4D233B64EB0cfgBase.762e97db.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgBase/getMaintainCfg",
+    "url": "https://admin.ushdev.top/api/cfgBase/getMaintainCfg",
+    "source": "087AC4D233B64EB0maintainConf.0ea823b6.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgBase/getPayCfg",
+    "url": "https://admin.ushdev.top/api/cfgBase/getPayCfg",
+    "source": "087AC4D233B64EB0cfgPay.bdff65dd.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgBase/getWarnCfg",
+    "url": "https://admin.ushdev.top/api/cfgBase/getWarnCfg",
+    "source": "087AC4D233B64EB0old_cfgWarn.50140558.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgBase/updateCfgDataVersion",
+    "url": "https://admin.ushdev.top/api/cfgBase/updateCfgDataVersion",
+    "source": "087AC4D233B64EB0cfgBase.762e97db.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgGameVersionUpdate/detail",
+    "url": "https://admin.ushdev.top/api/cfgGameVersionUpdate/detail",
+    "source": "087AC4D233B64EB0index.152974d6.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgGameVersionUpdate/list",
+    "url": "https://admin.ushdev.top/api/cfgGameVersionUpdate/list",
+    "source": "087AC4D233B64EB0index.152974d6.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgGoods/findCfgGoods",
+    "url": "https://admin.ushdev.top/api/cfgGoods/findCfgGoods",
+    "source": "087AC4D233B64EB0cfgGoods.a89183ad.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgGoods/getCfgGoodsList",
+    "url": "https://admin.ushdev.top/api/cfgGoods/getCfgGoodsList",
+    "source": "087AC4D233B64EB0cfgGoods.a89183ad.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgGoodsCategory/list",
+    "url": "https://admin.ushdev.top/api/cfgGoodsCategory/list",
+    "source": "087AC4D233B64EB0index.88aa0ef1.js"
+  },
+  {
+    "method": "GET",
+    "path": "/cfgStatementFilter/list",
+    "url": "https://admin.ushdev.top/api/cfgStatementFilter/list",
+    "source": "087AC4D233B64EB0formCom.31d89c86.js"
+  },
+  {
+    "method": "GET",
+    "path": "/channelDateCost/findChannelDateCost",
+    "url": "https://admin.ushdev.top/api/channelDateCost/findChannelDateCost",
+    "source": "087AC4D233B64EB0channelDateCost.5caf7ad9.js"
+  },
+  {
+    "method": "GET",
+    "path": "/channelDateCost/getChannelDateCostList",
+    "url": "https://admin.ushdev.top/api/channelDateCost/getChannelDateCostList",
+    "source": "087AC4D233B64EB0channelDateCost.5caf7ad9.js"
+  },
+  {
+    "method": "GET",
+    "path": "/chatGpt/getSK",
+    "url": "https://admin.ushdev.top/api/chatGpt/getSK",
+    "source": "087AC4D233B64EB0chatTable.210ddfbf.js"
+  },
+  {
+    "method": "GET",
+    "path": "/customer/customer",
+    "url": "https://admin.ushdev.top/api/customer/customer",
+    "source": "087AC4D233B64EB0customer.ce1f3cc9.js"
+  },
+  {
+    "method": "GET",
+    "path": "/customer/customerList",
+    "url": "https://admin.ushdev.top/api/customer/customerList",
+    "source": "087AC4D233B64EB0customer.ce1f3cc9.js"
+  },
+  {
+    "method": "GET",
+    "path": "/fileUploadAndDownload/findFile",
+    "url": "https://admin.ushdev.top/api/fileUploadAndDownload/findFile",
+    "source": "087AC4D233B64EB0breakpoint.44134c8f.js"
+  },
+  {
+    "method": "GET",
+    "path": "/list/get_scene_map",
+    "url": "https://admin.ushdev.top/api/list/get_scene_map",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "GET",
+    "path": "/minigame/get_gear_list",
+    "url": "https://admin.ushdev.top/api/minigame/get_gear_list",
+    "source": "087AC4D233B64EB0minigame.53d0d3ea.js"
+  },
+  {
+    "method": "GET",
+    "path": "/order/findOrder",
+    "url": "https://admin.ushdev.top/api/order/findOrder",
+    "source": "087AC4D233B64EB0order.543cf931.js"
+  },
+  {
+    "method": "GET",
+    "path": "/report/get_user_action_map",
+    "url": "https://admin.ushdev.top/api/report/get_user_action_map",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "GET",
+    "path": "/sysDictionary/findSysDictionary",
+    "url": "https://admin.ushdev.top/api/sysDictionary/findSysDictionary",
+    "source": "087AC4D233B64EB0sysDictionary.cd18ab33.js"
+  },
+  {
+    "method": "GET",
+    "path": "/sysDictionary/getSysDictionaryList",
+    "url": "https://admin.ushdev.top/api/sysDictionary/getSysDictionaryList",
+    "source": "087AC4D233B64EB0sysDictionary.cd18ab33.js"
+  },
+  {
+    "method": "GET",
+    "path": "/sysDictionaryDetail/findSysDictionaryDetail",
+    "url": "https://admin.ushdev.top/api/sysDictionaryDetail/findSysDictionaryDetail",
+    "source": "087AC4D233B64EB0sysDictionaryDetail.6d5526f3.js"
+  },
+  {
+    "method": "GET",
+    "path": "/sysDictionaryDetail/getSysDictionaryDetailList",
+    "url": "https://admin.ushdev.top/api/sysDictionaryDetail/getSysDictionaryDetailList",
+    "source": "087AC4D233B64EB0sysDictionaryDetail.6d5526f3.js"
+  },
+  {
+    "method": "GET",
+    "path": "/sysOperationRecord/getSysOperationRecordList",
+    "url": "https://admin.ushdev.top/api/sysOperationRecord/getSysOperationRecordList",
+    "source": "087AC4D233B64EB0sysOperationRecord.95fa498b.js"
+  },
+  {
+    "method": "GET",
+    "path": "/systemMail/findSystemMail",
+    "url": "https://admin.ushdev.top/api/systemMail/findSystemMail",
+    "source": "087AC4D233B64EB0systemMail.37954599.js"
+  },
+  {
+    "method": "GET",
+    "path": "/systemMail/getMailTemplateList",
+    "url": "https://admin.ushdev.top/api/systemMail/getMailTemplateList",
+    "source": "087AC4D233B64EB0systemMail.37954599.js"
+  },
+  {
+    "method": "GET",
+    "path": "/systemMail/getSystemMailList",
+    "url": "https://admin.ushdev.top/api/systemMail/getSystemMailList",
+    "source": "087AC4D233B64EB0systemMail.37954599.js"
+  },
+  {
+    "method": "GET",
+    "path": "/user/getUserInfo",
+    "url": "https://admin.ushdev.top/api/user/getUserInfo",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "GET",
+    "path": "/userCashout/findUserCashout",
+    "url": "https://admin.ushdev.top/api/userCashout/findUserCashout",
+    "source": "087AC4D233B64EB0userCashout.5004a9e4.js"
+  },
+  {
+    "method": "GET",
+    "path": "/userCashout/getUserCashoutList",
+    "url": "https://admin.ushdev.top/api/userCashout/getUserCashoutList",
+    "source": "087AC4D233B64EB0userCashout.5004a9e4.js"
+  },
+  {
+    "method": "POST",
+    "path": "/activity/update_lottery_gc_rate_list",
+    "url": "https://admin.ushdev.top/api/activity/update_lottery_gc_rate_list",
+    "source": "087AC4D233B64EB0lottery.bc6bbe94.js"
+  },
+  {
+    "method": "POST",
+    "path": "/activity/update_lottery_k_list",
+    "url": "https://admin.ushdev.top/api/activity/update_lottery_k_list",
+    "source": "087AC4D233B64EB0lottery.bc6bbe94.js"
+  },
+  {
+    "method": "POST",
+    "path": "/agent/agent_user_list",
+    "url": "https://admin.ushdev.top/api/agent/agent_user_list",
+    "source": "087AC4D233B64EB0agent.2f27917f.js"
+  },
+  {
+    "method": "POST",
+    "path": "/agent/agentUserProfitList",
+    "url": "https://admin.ushdev.top/api/agent/agentUserProfitList",
+    "source": "087AC4D233B64EB0formCom.d36668e2.js"
+  },
+  {
+    "method": "POST",
+    "path": "/agent/agentUserSelect",
+    "url": "https://admin.ushdev.top/api/agent/agentUserSelect",
+    "source": "087AC4D233B64EB0formCom.d36668e2.js"
+  },
+  {
+    "method": "POST",
+    "path": "/agent/agentUserSettlement",
+    "url": "https://admin.ushdev.top/api/agent/agentUserSettlement",
+    "source": "087AC4D233B64EB0formCom.d36668e2.js"
+  },
+  {
+    "method": "POST",
+    "path": "/agent/profit_list",
+    "url": "https://admin.ushdev.top/api/agent/profit_list",
+    "source": "087AC4D233B64EB0agent.2f27917f.js"
+  },
+  {
+    "method": "POST",
+    "path": "/AgentPackage/createCfgAgentPackage",
+    "url": "https://admin.ushdev.top/api/AgentPackage/createCfgAgentPackage",
+    "source": "087AC4D233B64EB0cfgAgentPackage.72d847af.js"
+  },
+  {
+    "method": "POST",
+    "path": "/AgentPackage/updateAgentPackageApp",
+    "url": "https://admin.ushdev.top/api/AgentPackage/updateAgentPackageApp",
+    "source": "087AC4D233B64EB0cfgAgentPackage.72d847af.js"
+  },
+  {
+    "method": "POST",
+    "path": "/api/createApi",
+    "url": "https://admin.ushdev.top/api/api/createApi",
+    "source": "087AC4D233B64EB0api.e1bf9c7a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/api/deleteApi",
+    "url": "https://admin.ushdev.top/api/api/deleteApi",
+    "source": "087AC4D233B64EB0api.e1bf9c7a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/api/getAllApis",
+    "url": "https://admin.ushdev.top/api/api/getAllApis",
+    "source": "087AC4D233B64EB0api.e1bf9c7a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/api/getApiById",
+    "url": "https://admin.ushdev.top/api/api/getApiById",
+    "source": "087AC4D233B64EB0api.e1bf9c7a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/api/getApiList",
+    "url": "https://admin.ushdev.top/api/api/getApiList",
+    "source": "087AC4D233B64EB0api.e1bf9c7a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/api/updateApi",
+    "url": "https://admin.ushdev.top/api/api/updateApi",
+    "source": "087AC4D233B64EB0api.e1bf9c7a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/authority_data/getPlatformAuth",
+    "url": "https://admin.ushdev.top/api/authority_data/getPlatformAuth",
+    "source": "087AC4D233B64EB0platformAuth.c645b698.js"
+  },
+  {
+    "method": "POST",
+    "path": "/authority_data/getPlatformAuthDataTree",
+    "url": "https://admin.ushdev.top/api/authority_data/getPlatformAuthDataTree",
+    "source": "087AC4D233B64EB0platformAuth.c645b698.js"
+  },
+  {
+    "method": "POST",
+    "path": "/authority_data/updatePlatformAuthData",
+    "url": "https://admin.ushdev.top/api/authority_data/updatePlatformAuthData",
+    "source": "087AC4D233B64EB0platformAuth.c645b698.js"
+  },
+  {
+    "method": "POST",
+    "path": "/authority/copyAuthority",
+    "url": "https://admin.ushdev.top/api/authority/copyAuthority",
+    "source": "087AC4D233B64EB0authority.00ecf08a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/authority/createAuthority",
+    "url": "https://admin.ushdev.top/api/authority/createAuthority",
+    "source": "087AC4D233B64EB0authority.00ecf08a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/authority/deleteAuthority",
+    "url": "https://admin.ushdev.top/api/authority/deleteAuthority",
+    "source": "087AC4D233B64EB0authority.00ecf08a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/authority/getAuthorityList",
+    "url": "https://admin.ushdev.top/api/authority/getAuthorityList",
+    "source": "087AC4D233B64EB0authority.00ecf08a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/authority/setDataAuthority",
+    "url": "https://admin.ushdev.top/api/authority/setDataAuthority",
+    "source": "087AC4D233B64EB0authority.00ecf08a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/authorityBtn/canRemoveAuthorityBtn",
+    "url": "https://admin.ushdev.top/api/authorityBtn/canRemoveAuthorityBtn",
+    "source": "087AC4D233B64EB0authorityBtn.afc80072.js"
+  },
+  {
+    "method": "POST",
+    "path": "/authorityBtn/getAuthorityBtn",
+    "url": "https://admin.ushdev.top/api/authorityBtn/getAuthorityBtn",
+    "source": "087AC4D233B64EB0authorityBtn.afc80072.js"
+  },
+  {
+    "method": "POST",
+    "path": "/authorityBtn/setAuthorityBtn",
+    "url": "https://admin.ushdev.top/api/authorityBtn/setAuthorityBtn",
+    "source": "087AC4D233B64EB0authorityBtn.afc80072.js"
+  },
+  {
+    "method": "POST",
+    "path": "/autoCode/createPackage",
+    "url": "https://admin.ushdev.top/api/autoCode/createPackage",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/autoCode/createPlug",
+    "url": "https://admin.ushdev.top/api/autoCode/createPlug",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/autoCode/createTemp",
+    "url": "https://admin.ushdev.top/api/autoCode/createTemp",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/autoCode/delPackage",
+    "url": "https://admin.ushdev.top/api/autoCode/delPackage",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/autoCode/delSysHistory",
+    "url": "https://admin.ushdev.top/api/autoCode/delSysHistory",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/autoCode/getMeta",
+    "url": "https://admin.ushdev.top/api/autoCode/getMeta",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/autoCode/getPackage",
+    "url": "https://admin.ushdev.top/api/autoCode/getPackage",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/autoCode/getSysHistory",
+    "url": "https://admin.ushdev.top/api/autoCode/getSysHistory",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/autoCode/preview",
+    "url": "https://admin.ushdev.top/api/autoCode/preview",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/autoCode/pubPlug",
+    "url": "https://admin.ushdev.top/api/autoCode/pubPlug",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/autoCode/rollback",
+    "url": "https://admin.ushdev.top/api/autoCode/rollback",
+    "source": "087AC4D233B64EB0autoCode.ea21dc13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/base/captcha",
+    "url": "https://admin.ushdev.top/api/base/captcha",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/base/login",
+    "url": "https://admin.ushdev.top/api/base/login",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/casbin/getPolicyPathByAuthorityId",
+    "url": "https://admin.ushdev.top/api/casbin/getPolicyPathByAuthorityId",
+    "source": "087AC4D233B64EB0apis.2f0a581e.js"
+  },
+  {
+    "method": "POST",
+    "path": "/casbin/updateCasbin",
+    "url": "https://admin.ushdev.top/api/casbin/updateCasbin",
+    "source": "087AC4D233B64EB0apis.2f0a581e.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdDailyWheel/createCfgAdDailyWheel",
+    "url": "https://admin.ushdev.top/api/cfgAdDailyWheel/createCfgAdDailyWheel",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdDailyWheel/deleteCfgAdDailyWheel",
+    "url": "https://admin.ushdev.top/api/cfgAdDailyWheel/deleteCfgAdDailyWheel",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdDailyWheel/findCfgAdDailyWheel",
+    "url": "https://admin.ushdev.top/api/cfgAdDailyWheel/findCfgAdDailyWheel",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdDailyWheel/getCfgAdDailyWheelBaseInfo",
+    "url": "https://admin.ushdev.top/api/cfgAdDailyWheel/getCfgAdDailyWheelBaseInfo",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdDailyWheel/getCfgAdDailyWheelList",
+    "url": "https://admin.ushdev.top/api/cfgAdDailyWheel/getCfgAdDailyWheelList",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdDailyWheel/updateCfgAdDailyWheel",
+    "url": "https://admin.ushdev.top/api/cfgAdDailyWheel/updateCfgAdDailyWheel",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdDailyWheel/updateCfgAdDailyWheelBaseInfo",
+    "url": "https://admin.ushdev.top/api/cfgAdDailyWheel/updateCfgAdDailyWheelBaseInfo",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdPackage/getCfgAdPackageList",
+    "url": "https://admin.ushdev.top/api/cfgAdPackage/getCfgAdPackageList",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdPackage/updateCfgAdPackage",
+    "url": "https://admin.ushdev.top/api/cfgAdPackage/updateCfgAdPackage",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdStrategy/createCfgAdStrategy",
+    "url": "https://admin.ushdev.top/api/cfgAdStrategy/createCfgAdStrategy",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdStrategy/findCfgAdStrategy",
+    "url": "https://admin.ushdev.top/api/cfgAdStrategy/findCfgAdStrategy",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdStrategy/getCfgAdStrategyList",
+    "url": "https://admin.ushdev.top/api/cfgAdStrategy/getCfgAdStrategyList",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdStrategy/updateCfgAdStrategy",
+    "url": "https://admin.ushdev.top/api/cfgAdStrategy/updateCfgAdStrategy",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdUserGroup/createCfgAdUserGroup",
+    "url": "https://admin.ushdev.top/api/cfgAdUserGroup/createCfgAdUserGroup",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdUserGroup/deleteCfgAdUserGroup",
+    "url": "https://admin.ushdev.top/api/cfgAdUserGroup/deleteCfgAdUserGroup",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdUserGroup/findCfgAdUserGroup",
+    "url": "https://admin.ushdev.top/api/cfgAdUserGroup/findCfgAdUserGroup",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdUserGroup/getCfgAdUserGroupList",
+    "url": "https://admin.ushdev.top/api/cfgAdUserGroup/getCfgAdUserGroupList",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAdUserGroup/updateCfgAdUserGroup",
+    "url": "https://admin.ushdev.top/api/cfgAdUserGroup/updateCfgAdUserGroup",
+    "source": "087AC4D233B64EB0index.b3f5f398.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAgentRatio/createCfgAgentRatio",
+    "url": "https://admin.ushdev.top/api/cfgAgentRatio/createCfgAgentRatio",
+    "source": "087AC4D233B64EB0cfgAgentRatio.e1736e85.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAlarm/findCfgAlarm",
+    "url": "https://admin.ushdev.top/api/cfgAlarm/findCfgAlarm",
+    "source": "087AC4D233B64EB0useDialogHooks.15777ac5.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgAlarm/updateCfgAlarm",
+    "url": "https://admin.ushdev.top/api/cfgAlarm/updateCfgAlarm",
+    "source": "087AC4D233B64EB0useDialogHooks.15777ac5.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgBase/blacklistConfig",
+    "url": "https://admin.ushdev.top/api/cfgBase/blacklistConfig",
+    "source": "087AC4D233B64EB0index.bdd27341.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgBase/deleteCashoutAutoConfig",
+    "url": "https://admin.ushdev.top/api/cfgBase/deleteCashoutAutoConfig",
+    "source": "087AC4D233B64EB0cfgBase.762e97db.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgBase/getBlacklistConfig",
+    "url": "https://admin.ushdev.top/api/cfgBase/getBlacklistConfig",
+    "source": "087AC4D233B64EB0index.bdd27341.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgBase/updateBaseCfg",
+    "url": "https://admin.ushdev.top/api/cfgBase/updateBaseCfg",
+    "source": "087AC4D233B64EB0cfgBase.762e97db.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgBase/updateMaintainCfg",
+    "url": "https://admin.ushdev.top/api/cfgBase/updateMaintainCfg",
+    "source": "087AC4D233B64EB0maintainConf.0ea823b6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgBase/updatePayCfg",
+    "url": "https://admin.ushdev.top/api/cfgBase/updatePayCfg",
+    "source": "087AC4D233B64EB0cfgPay.bdff65dd.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgBase/updateWarnCfg",
+    "url": "https://admin.ushdev.top/api/cfgBase/updateWarnCfg",
+    "source": "087AC4D233B64EB0old_cfgWarn.50140558.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgCashoutManual/createCfgCashoutManual",
+    "url": "https://admin.ushdev.top/api/cfgCashoutManual/createCfgCashoutManual",
+    "source": "087AC4D233B64EB0cfgForm.868bc53c.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgCashoutManual/deleteCfgCashoutManual",
+    "url": "https://admin.ushdev.top/api/cfgCashoutManual/deleteCfgCashoutManual",
+    "source": "087AC4D233B64EB0cfgForm.868bc53c.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgCashoutManual/findCfgCashoutManual",
+    "url": "https://admin.ushdev.top/api/cfgCashoutManual/findCfgCashoutManual",
+    "source": "087AC4D233B64EB0cfgForm.868bc53c.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgCashoutManual/getCfgCashoutManualList",
+    "url": "https://admin.ushdev.top/api/cfgCashoutManual/getCfgCashoutManualList",
+    "source": "087AC4D233B64EB0cfgForm.868bc53c.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgCashoutManual/updateCfgCashoutManual",
+    "url": "https://admin.ushdev.top/api/cfgCashoutManual/updateCfgCashoutManual",
+    "source": "087AC4D233B64EB0cfgForm.868bc53c.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgCashoutManual/updateCfgCashoutManualVer",
+    "url": "https://admin.ushdev.top/api/cfgCashoutManual/updateCfgCashoutManualVer",
+    "source": "087AC4D233B64EB0cfgForm.868bc53c.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgGoods/createCfgGoods",
+    "url": "https://admin.ushdev.top/api/cfgGoods/createCfgGoods",
+    "source": "087AC4D233B64EB0cfgGoods.a89183ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgGoods/importCfgGoods",
+    "url": "https://admin.ushdev.top/api/cfgGoods/importCfgGoods",
+    "source": "087AC4D233B64EB0cfgGoods.a89183ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgGoods/updateCfgGoodsVer",
+    "url": "https://admin.ushdev.top/api/cfgGoods/updateCfgGoodsVer",
+    "source": "087AC4D233B64EB0cfgGoods.a89183ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgGoodsCategory/add",
+    "url": "https://admin.ushdev.top/api/cfgGoodsCategory/add",
+    "source": "087AC4D233B64EB0index.88aa0ef1.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgGoodsCategory/import",
+    "url": "https://admin.ushdev.top/api/cfgGoodsCategory/import",
+    "source": "087AC4D233B64EB0index.88aa0ef1.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgGoodsCategory/update",
+    "url": "https://admin.ushdev.top/api/cfgGoodsCategory/update",
+    "source": "087AC4D233B64EB0index.88aa0ef1.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgSpinCoupon/createCfgSpinCoupon",
+    "url": "https://admin.ushdev.top/api/cfgSpinCoupon/createCfgSpinCoupon",
+    "source": "087AC4D233B64EB0index.10bc323c.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgSpinCoupon/deleteCfgSpinCoupon",
+    "url": "https://admin.ushdev.top/api/cfgSpinCoupon/deleteCfgSpinCoupon",
+    "source": "087AC4D233B64EB0index.10bc323c.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgSpinCoupon/findCfgSpinCoupon",
+    "url": "https://admin.ushdev.top/api/cfgSpinCoupon/findCfgSpinCoupon",
+    "source": "087AC4D233B64EB0index.10bc323c.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgSpinCoupon/getCfgSpinCouponList",
+    "url": "https://admin.ushdev.top/api/cfgSpinCoupon/getCfgSpinCouponList",
+    "source": "087AC4D233B64EB0index.10bc323c.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgSpinCoupon/updateCfgSpinCoupon",
+    "url": "https://admin.ushdev.top/api/cfgSpinCoupon/updateCfgSpinCoupon",
+    "source": "087AC4D233B64EB0index.10bc323c.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgStatementFilter/add",
+    "url": "https://admin.ushdev.top/api/cfgStatementFilter/add",
+    "source": "087AC4D233B64EB0formCom.31d89c86.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgStatementFilter/delete",
+    "url": "https://admin.ushdev.top/api/cfgStatementFilter/delete",
+    "source": "087AC4D233B64EB0formCom.31d89c86.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgStatementFilter/import",
+    "url": "https://admin.ushdev.top/api/cfgStatementFilter/import",
+    "source": "087AC4D233B64EB0formCom.31d89c86.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgStatementFilter/update",
+    "url": "https://admin.ushdev.top/api/cfgStatementFilter/update",
+    "source": "087AC4D233B64EB0formCom.31d89c86.js"
+  },
+  {
+    "method": "POST",
+    "path": "/cfgVersion/updateCfgVersion",
+    "url": "https://admin.ushdev.top/api/cfgVersion/updateCfgVersion",
+    "source": "087AC4D233B64EB0ussutil.d5b65b0f.js"
+  },
+  {
+    "method": "POST",
+    "path": "/channelDateCost/createChannelDateCost",
+    "url": "https://admin.ushdev.top/api/channelDateCost/createChannelDateCost",
+    "source": "087AC4D233B64EB0channelDateCost.5caf7ad9.js"
+  },
+  {
+    "method": "POST",
+    "path": "/chatGpt/createSK",
+    "url": "https://admin.ushdev.top/api/chatGpt/createSK",
+    "source": "087AC4D233B64EB0chatTable.210ddfbf.js"
+  },
+  {
+    "method": "POST",
+    "path": "/chatGpt/getTable",
+    "url": "https://admin.ushdev.top/api/chatGpt/getTable",
+    "source": "087AC4D233B64EB0chatTable.210ddfbf.js"
+  },
+  {
+    "method": "POST",
+    "path": "/customer/customer",
+    "url": "https://admin.ushdev.top/api/customer/customer",
+    "source": "087AC4D233B64EB0customer.ce1f3cc9.js"
+  },
+  {
+    "method": "POST",
+    "path": "/email/emailTest",
+    "url": "https://admin.ushdev.top/api/email/emailTest",
+    "source": "087AC4D233B64EB0system.8c93d5eb.js"
+  },
+  {
+    "method": "POST",
+    "path": "/exchange_code/code_list",
+    "url": "https://admin.ushdev.top/api/exchange_code/code_list",
+    "source": "087AC4D233B64EB0exchangeCode.60259e94.js"
+  },
+  {
+    "method": "POST",
+    "path": "/exchange_code/coupon_list",
+    "url": "https://admin.ushdev.top/api/exchange_code/coupon_list",
+    "source": "087AC4D233B64EB0exchangeCode.60259e94.js"
+  },
+  {
+    "method": "POST",
+    "path": "/exchange_code/create",
+    "url": "https://admin.ushdev.top/api/exchange_code/create",
+    "source": "087AC4D233B64EB0exchangeCode.60259e94.js"
+  },
+  {
+    "method": "POST",
+    "path": "/exchange_code/delete",
+    "url": "https://admin.ushdev.top/api/exchange_code/delete",
+    "source": "087AC4D233B64EB0exchangeCode.60259e94.js"
+  },
+  {
+    "method": "POST",
+    "path": "/exchange_code/distribute_code",
+    "url": "https://admin.ushdev.top/api/exchange_code/distribute_code",
+    "source": "087AC4D233B64EB0exchangeCode.60259e94.js"
+  },
+  {
+    "method": "POST",
+    "path": "/exchange_code/findCategoryIdByCode",
+    "url": "https://admin.ushdev.top/api/exchange_code/findCategoryIdByCode",
+    "source": "087AC4D233B64EB0exchangeCode.60259e94.js"
+  },
+  {
+    "method": "POST",
+    "path": "/exchange_code/info",
+    "url": "https://admin.ushdev.top/api/exchange_code/info",
+    "source": "087AC4D233B64EB0exchangeCode.60259e94.js"
+  },
+  {
+    "method": "POST",
+    "path": "/exchange_code/list",
+    "url": "https://admin.ushdev.top/api/exchange_code/list",
+    "source": "087AC4D233B64EB0exchangeCode.60259e94.js"
+  },
+  {
+    "method": "POST",
+    "path": "/fileUploadAndDownload/breakpointContinue",
+    "url": "https://admin.ushdev.top/api/fileUploadAndDownload/breakpointContinue",
+    "source": "087AC4D233B64EB0breakpoint.44134c8f.js"
+  },
+  {
+    "method": "POST",
+    "path": "/fileUploadAndDownload/breakpointContinueFinish",
+    "url": "https://admin.ushdev.top/api/fileUploadAndDownload/breakpointContinueFinish",
+    "source": "087AC4D233B64EB0breakpoint.44134c8f.js"
+  },
+  {
+    "method": "POST",
+    "path": "/fileUploadAndDownload/deleteFile",
+    "url": "https://admin.ushdev.top/api/fileUploadAndDownload/deleteFile",
+    "source": "087AC4D233B64EB0common.87d02cb6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/fileUploadAndDownload/editFileName",
+    "url": "https://admin.ushdev.top/api/fileUploadAndDownload/editFileName",
+    "source": "087AC4D233B64EB0common.87d02cb6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/fileUploadAndDownload/getFileList",
+    "url": "https://admin.ushdev.top/api/fileUploadAndDownload/getFileList",
+    "source": "087AC4D233B64EB0common.87d02cb6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/fileUploadAndDownload/removeChunk",
+    "url": "https://admin.ushdev.top/api/fileUploadAndDownload/removeChunk",
+    "source": "087AC4D233B64EB0breakpoint.44134c8f.js"
+  },
+  {
+    "method": "POST",
+    "path": "/gameNotice/createGameNotice",
+    "url": "https://admin.ushdev.top/api/gameNotice/createGameNotice",
+    "source": "087AC4D233B64EB0index.21de78a3.js"
+  },
+  {
+    "method": "POST",
+    "path": "/gameNotice/deleteGameNotice",
+    "url": "https://admin.ushdev.top/api/gameNotice/deleteGameNotice",
+    "source": "087AC4D233B64EB0index.21de78a3.js"
+  },
+  {
+    "method": "POST",
+    "path": "/gameNotice/findGameNotice",
+    "url": "https://admin.ushdev.top/api/gameNotice/findGameNotice",
+    "source": "087AC4D233B64EB0index.21de78a3.js"
+  },
+  {
+    "method": "POST",
+    "path": "/gameNotice/getGameNoticeList",
+    "url": "https://admin.ushdev.top/api/gameNotice/getGameNoticeList",
+    "source": "087AC4D233B64EB0index.21de78a3.js"
+  },
+  {
+    "method": "POST",
+    "path": "/gameNotice/updateGameNotice",
+    "url": "https://admin.ushdev.top/api/gameNotice/updateGameNotice",
+    "source": "087AC4D233B64EB0index.21de78a3.js"
+  },
+  {
+    "method": "POST",
+    "path": "/gameNotice/updateGameNoticePriority",
+    "url": "https://admin.ushdev.top/api/gameNotice/updateGameNoticePriority",
+    "source": "087AC4D233B64EB0index.21de78a3.js"
+  },
+  {
+    "method": "POST",
+    "path": "/init/initdb",
+    "url": "https://admin.ushdev.top/api/init/initdb",
+    "source": "087AC4D233B64EB0index.1412aa37.js"
+  },
+  {
+    "method": "POST",
+    "path": "/jwt/jsonInBlacklist",
+    "url": "https://admin.ushdev.top/api/jwt/jsonInBlacklist",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/list/game_machine",
+    "url": "https://admin.ushdev.top/api/list/game_machine",
+    "source": "087AC4D233B64EB0gameAnalysis.a586761e.js"
+  },
+  {
+    "method": "POST",
+    "path": "/list/game_machine_by_type",
+    "url": "https://admin.ushdev.top/api/list/game_machine_by_type",
+    "source": "087AC4D233B64EB0useDialogHooks.15777ac5.js"
+  },
+  {
+    "method": "POST",
+    "path": "/list/game_machine_info",
+    "url": "https://admin.ushdev.top/api/list/game_machine_info",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/list/game_machine_list",
+    "url": "https://admin.ushdev.top/api/list/game_machine_list",
+    "source": "087AC4D233B64EB0index.323a1e2e.js"
+  },
+  {
+    "method": "POST",
+    "path": "/list/game_machine_middle_ground_info",
+    "url": "https://admin.ushdev.top/api/list/game_machine_middle_ground_info",
+    "source": "087AC4D233B64EB0useDialogHooks.15777ac5.js"
+  },
+  {
+    "method": "POST",
+    "path": "/list/get_paypal_config",
+    "url": "https://admin.ushdev.top/api/list/get_paypal_config",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/list/update_paypal_config_status",
+    "url": "https://admin.ushdev.top/api/list/update_paypal_config_status",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logDownloadSource/createLogDownloadSource",
+    "url": "https://admin.ushdev.top/api/logDownloadSource/createLogDownloadSource",
+    "source": "087AC4D233B64EB0formCom.bf981fb2.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logDownloadSource/deleteLogDownloadSource",
+    "url": "https://admin.ushdev.top/api/logDownloadSource/deleteLogDownloadSource",
+    "source": "087AC4D233B64EB0formCom.bf981fb2.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logDownloadSource/findLogDownloadSource",
+    "url": "https://admin.ushdev.top/api/logDownloadSource/findLogDownloadSource",
+    "source": "087AC4D233B64EB0formCom.bf981fb2.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logDownloadSource/getLogDownloadSourceList",
+    "url": "https://admin.ushdev.top/api/logDownloadSource/getLogDownloadSourceList",
+    "source": "087AC4D233B64EB0formCom.bf981fb2.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logDownloadSource/getLogDownloadSourceParam",
+    "url": "https://admin.ushdev.top/api/logDownloadSource/getLogDownloadSourceParam",
+    "source": "087AC4D233B64EB0formCom.6d761ce6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logDownloadSource/updateLogDownloadSource",
+    "url": "https://admin.ushdev.top/api/logDownloadSource/updateLogDownloadSource",
+    "source": "087AC4D233B64EB0formCom.bf981fb2.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logLanguageCfg/createLogLanguageCfg",
+    "url": "https://admin.ushdev.top/api/logLanguageCfg/createLogLanguageCfg",
+    "source": "087AC4D233B64EB0formCom.a26e296a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logLanguageCfg/deleteLogLanguageCfg",
+    "url": "https://admin.ushdev.top/api/logLanguageCfg/deleteLogLanguageCfg",
+    "source": "087AC4D233B64EB0formCom.a26e296a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logLanguageCfg/findLogLanguageCfg",
+    "url": "https://admin.ushdev.top/api/logLanguageCfg/findLogLanguageCfg",
+    "source": "087AC4D233B64EB0formCom.a26e296a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logLanguageCfg/getLanguageCfg",
+    "url": "https://admin.ushdev.top/api/logLanguageCfg/getLanguageCfg",
+    "source": "087AC4D233B64EB0ussutil.d5b65b0f.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logLanguageCfg/getLogLanguageCfgList",
+    "url": "https://admin.ushdev.top/api/logLanguageCfg/getLogLanguageCfgList",
+    "source": "087AC4D233B64EB0formCom.a26e296a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logLanguageCfg/importCfgLanguage",
+    "url": "https://admin.ushdev.top/api/logLanguageCfg/importCfgLanguage",
+    "source": "087AC4D233B64EB0formCom.a26e296a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logLanguageCfg/updateLogLanguageCfg",
+    "url": "https://admin.ushdev.top/api/logLanguageCfg/updateLogLanguageCfg",
+    "source": "087AC4D233B64EB0formCom.a26e296a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logPrimaryChannel/createLogPrimaryChannel",
+    "url": "https://admin.ushdev.top/api/logPrimaryChannel/createLogPrimaryChannel",
+    "source": "087AC4D233B64EB0formCom.44ababe9.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logPrimaryChannel/deleteLogPrimaryChannel",
+    "url": "https://admin.ushdev.top/api/logPrimaryChannel/deleteLogPrimaryChannel",
+    "source": "087AC4D233B64EB0formCom.44ababe9.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logPrimaryChannel/findLogPrimaryChannel",
+    "url": "https://admin.ushdev.top/api/logPrimaryChannel/findLogPrimaryChannel",
+    "source": "087AC4D233B64EB0formCom.44ababe9.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logPrimaryChannel/getLogPrimaryChannelList",
+    "url": "https://admin.ushdev.top/api/logPrimaryChannel/getLogPrimaryChannelList",
+    "source": "087AC4D233B64EB0formCom.44ababe9.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logPrimaryChannel/getLogPrimaryChannelParam",
+    "url": "https://admin.ushdev.top/api/logPrimaryChannel/getLogPrimaryChannelParam",
+    "source": "087AC4D233B64EB0formCom.6d761ce6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logPrimaryChannel/updateLogPrimaryChannel",
+    "url": "https://admin.ushdev.top/api/logPrimaryChannel/updateLogPrimaryChannel",
+    "source": "087AC4D233B64EB0formCom.44ababe9.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logUserSource/createLogUserSource",
+    "url": "https://admin.ushdev.top/api/logUserSource/createLogUserSource",
+    "source": "087AC4D233B64EB0formCom.6d761ce6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logUserSource/deleteLogUserSource",
+    "url": "https://admin.ushdev.top/api/logUserSource/deleteLogUserSource",
+    "source": "087AC4D233B64EB0formCom.6d761ce6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logUserSource/findLogUserSource",
+    "url": "https://admin.ushdev.top/api/logUserSource/findLogUserSource",
+    "source": "087AC4D233B64EB0formCom.6d761ce6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logUserSource/getLogUserSourceList",
+    "url": "https://admin.ushdev.top/api/logUserSource/getLogUserSourceList",
+    "source": "087AC4D233B64EB0formCom.6d761ce6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logUserSource/updateLogUserSource",
+    "url": "https://admin.ushdev.top/api/logUserSource/updateLogUserSource",
+    "source": "087AC4D233B64EB0formCom.6d761ce6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logVestPackageOfflineCfg/createLogVestPackageOfflineCfg",
+    "url": "https://admin.ushdev.top/api/logVestPackageOfflineCfg/createLogVestPackageOfflineCfg",
+    "source": "087AC4D233B64EB0formCom.f6ce1c63.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logVestPackageOfflineCfg/deleteLogVestPackageOfflineCfg",
+    "url": "https://admin.ushdev.top/api/logVestPackageOfflineCfg/deleteLogVestPackageOfflineCfg",
+    "source": "087AC4D233B64EB0formCom.f6ce1c63.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logVestPackageOfflineCfg/findLogVestPackageOfflineCfg",
+    "url": "https://admin.ushdev.top/api/logVestPackageOfflineCfg/findLogVestPackageOfflineCfg",
+    "source": "087AC4D233B64EB0formCom.f6ce1c63.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logVestPackageOfflineCfg/getLogVestPackageOfflineCfgList ",
+    "url": "https://admin.ushdev.top/api/logVestPackageOfflineCfg/getLogVestPackageOfflineCfgList ",
+    "source": "087AC4D233B64EB0formCom.f6ce1c63.js"
+  },
+  {
+    "method": "POST",
+    "path": "/logVestPackageOfflineCfg/updateLogVestPackageOfflineCfg",
+    "url": "https://admin.ushdev.top/api/logVestPackageOfflineCfg/updateLogVestPackageOfflineCfg",
+    "source": "087AC4D233B64EB0formCom.f6ce1c63.js"
+  },
+  {
+    "method": "POST",
+    "path": "/menu/addBaseMenu",
+    "url": "https://admin.ushdev.top/api/menu/addBaseMenu",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/menu/addMenuAuthority",
+    "url": "https://admin.ushdev.top/api/menu/addMenuAuthority",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/menu/deleteBaseMenu",
+    "url": "https://admin.ushdev.top/api/menu/deleteBaseMenu",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/menu/getBaseMenuById",
+    "url": "https://admin.ushdev.top/api/menu/getBaseMenuById",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/menu/getBaseMenuTree",
+    "url": "https://admin.ushdev.top/api/menu/getBaseMenuTree",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/menu/getMenu",
+    "url": "https://admin.ushdev.top/api/menu/getMenu",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/menu/getMenuAuthority",
+    "url": "https://admin.ushdev.top/api/menu/getMenuAuthority",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/menu/getMenuList",
+    "url": "https://admin.ushdev.top/api/menu/getMenuList",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/menu/updateBaseMenu",
+    "url": "https://admin.ushdev.top/api/menu/updateBaseMenu",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/minigame/get_spin_list",
+    "url": "https://admin.ushdev.top/api/minigame/get_spin_list",
+    "source": "087AC4D233B64EB0minigame.53d0d3ea.js"
+  },
+  {
+    "method": "POST",
+    "path": "/minigame/update_gear_list",
+    "url": "https://admin.ushdev.top/api/minigame/update_gear_list",
+    "source": "087AC4D233B64EB0minigame.53d0d3ea.js"
+  },
+  {
+    "method": "POST",
+    "path": "/minigame/update_spin_list",
+    "url": "https://admin.ushdev.top/api/minigame/update_spin_list",
+    "source": "087AC4D233B64EB0minigame.53d0d3ea.js"
+  },
+  {
+    "method": "POST",
+    "path": "/notice/create",
+    "url": "https://admin.ushdev.top/api/notice/create",
+    "source": "087AC4D233B64EB0notice.f06c427a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/notice/delete",
+    "url": "https://admin.ushdev.top/api/notice/delete",
+    "source": "087AC4D233B64EB0notice.f06c427a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/notice/info",
+    "url": "https://admin.ushdev.top/api/notice/info",
+    "source": "087AC4D233B64EB0notice.f06c427a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/notice/list",
+    "url": "https://admin.ushdev.top/api/notice/list",
+    "source": "087AC4D233B64EB0notice.f06c427a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/notice/update",
+    "url": "https://admin.ushdev.top/api/notice/update",
+    "source": "087AC4D233B64EB0notice.f06c427a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/DeleteUser",
+    "url": "https://admin.ushdev.top/api/operationManage/user/DeleteUser",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/getDisputeUserBlackList",
+    "url": "https://admin.ushdev.top/api/operationManage/user/getDisputeUserBlackList",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/GetKycStatus",
+    "url": "https://admin.ushdev.top/api/operationManage/user/GetKycStatus",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/getUserAccountItemList",
+    "url": "https://admin.ushdev.top/api/operationManage/user/getUserAccountItemList",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/GetUserAccountList",
+    "url": "https://admin.ushdev.top/api/operationManage/user/GetUserAccountList",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/getUserActionChrisCoinsGetList",
+    "url": "https://admin.ushdev.top/api/operationManage/user/getUserActionChrisCoinsGetList",
+    "source": "087AC4D233B64EB0index.8ee048a1.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/getUserActionChrisCoinsUseList",
+    "url": "https://admin.ushdev.top/api/operationManage/user/getUserActionChrisCoinsUseList",
+    "source": "087AC4D233B64EB0index.8ee048a1.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/GetUserActionList",
+    "url": "https://admin.ushdev.top/api/operationManage/user/GetUserActionList",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/GetUserBlackList",
+    "url": "https://admin.ushdev.top/api/operationManage/user/GetUserBlackList",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/getUserCharge",
+    "url": "https://admin.ushdev.top/api/operationManage/user/getUserCharge",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/getUserChargeRebateCycle",
+    "url": "https://admin.ushdev.top/api/operationManage/user/getUserChargeRebateCycle",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/getUserContinuousRecharge",
+    "url": "https://admin.ushdev.top/api/operationManage/user/getUserContinuousRecharge",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/getUserDetailByType",
+    "url": "https://admin.ushdev.top/api/operationManage/user/getUserDetailByType",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/GetUserDetailList",
+    "url": "https://admin.ushdev.top/api/operationManage/user/GetUserDetailList",
+    "source": "087AC4D233B64EB0index.a9038468.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/GetUserInfo",
+    "url": "https://admin.ushdev.top/api/operationManage/user/GetUserInfo",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/GetUserList",
+    "url": "https://admin.ushdev.top/api/operationManage/user/GetUserList",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/getUserPaymentCategory",
+    "url": "https://admin.ushdev.top/api/operationManage/user/getUserPaymentCategory",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/GetUserProfitInfo",
+    "url": "https://admin.ushdev.top/api/operationManage/user/GetUserProfitInfo",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/GetUserProfitList",
+    "url": "https://admin.ushdev.top/api/operationManage/user/GetUserProfitList",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/logUserStatOperationList",
+    "url": "https://admin.ushdev.top/api/operationManage/user/logUserStatOperationList",
+    "source": "087AC4D233B64EB0index.c0f5bae6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/revokeLogUserStatOperation",
+    "url": "https://admin.ushdev.top/api/operationManage/user/revokeLogUserStatOperation",
+    "source": "087AC4D233B64EB0index.c0f5bae6.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/setUserComplianceStatus",
+    "url": "https://admin.ushdev.top/api/operationManage/user/setUserComplianceStatus",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/setUserCoolingPeriodSwitch",
+    "url": "https://admin.ushdev.top/api/operationManage/user/setUserCoolingPeriodSwitch",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/setUserDetailByType",
+    "url": "https://admin.ushdev.top/api/operationManage/user/setUserDetailByType",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/setUserEnableProfitTurnoverLimit",
+    "url": "https://admin.ushdev.top/api/operationManage/user/setUserEnableProfitTurnoverLimit",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/SetUserIsRisk",
+    "url": "https://admin.ushdev.top/api/operationManage/user/SetUserIsRisk",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/setUserOperationAccount",
+    "url": "https://admin.ushdev.top/api/operationManage/user/setUserOperationAccount",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/setUserPaymentCategory",
+    "url": "https://admin.ushdev.top/api/operationManage/user/setUserPaymentCategory",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/setUserPlatformInfo",
+    "url": "https://admin.ushdev.top/api/operationManage/user/setUserPlatformInfo",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/SetUserStatus",
+    "url": "https://admin.ushdev.top/api/operationManage/user/SetUserStatus",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/SetUserTester",
+    "url": "https://admin.ushdev.top/api/operationManage/user/SetUserTester",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/setUserTradPayStatus",
+    "url": "https://admin.ushdev.top/api/operationManage/user/setUserTradPayStatus",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/updateDisputeUserBlackStatus",
+    "url": "https://admin.ushdev.top/api/operationManage/user/updateDisputeUserBlackStatus",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/UpdateIsVipFriend",
+    "url": "https://admin.ushdev.top/api/operationManage/user/UpdateIsVipFriend",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/UpdateKycStatus",
+    "url": "https://admin.ushdev.top/api/operationManage/user/UpdateKycStatus",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/UpdatePayList",
+    "url": "https://admin.ushdev.top/api/operationManage/user/UpdatePayList",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/UpdateUserAccount",
+    "url": "https://admin.ushdev.top/api/operationManage/user/UpdateUserAccount",
+    "source": "087AC4D233B64EB0updateAccount.9c621b7a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/UpdateUserBlackStatus",
+    "url": "https://admin.ushdev.top/api/operationManage/user/UpdateUserBlackStatus",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/updateUserContactStatus",
+    "url": "https://admin.ushdev.top/api/operationManage/user/updateUserContactStatus",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/updateUserContactType",
+    "url": "https://admin.ushdev.top/api/operationManage/user/updateUserContactType",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/updateUserEmail",
+    "url": "https://admin.ushdev.top/api/operationManage/user/updateUserEmail",
+    "source": "087AC4D233B64EB0ussusersearch.0a4042ad.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/UpdateUserIsEcheckLate",
+    "url": "https://admin.ushdev.top/api/operationManage/user/UpdateUserIsEcheckLate",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/operationManage/user/UpdateUserPayStatus",
+    "url": "https://admin.ushdev.top/api/operationManage/user/UpdateUserPayStatus",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/order/createOrder",
+    "url": "https://admin.ushdev.top/api/order/createOrder",
+    "source": "087AC4D233B64EB0order.543cf931.js"
+  },
+  {
+    "method": "POST",
+    "path": "/order/getOrderList",
+    "url": "https://admin.ushdev.top/api/order/getOrderList",
+    "source": "087AC4D233B64EB0order.543cf931.js"
+  },
+  {
+    "method": "POST",
+    "path": "/order/updateOrderStatus",
+    "url": "https://admin.ushdev.top/api/order/updateOrderStatus",
+    "source": "087AC4D233B64EB0order.543cf931.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report_log_user_action/create_view",
+    "url": "https://admin.ushdev.top/api/report_log_user_action/create_view",
+    "source": "087AC4D233B64EB0userFunnelAnalysis.1524912d.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report_log_user_action/delete_view",
+    "url": "https://admin.ushdev.top/api/report_log_user_action/delete_view",
+    "source": "087AC4D233B64EB0userFunnelAnalysis.1524912d.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report_log_user_action/edit_view",
+    "url": "https://admin.ushdev.top/api/report_log_user_action/edit_view",
+    "source": "087AC4D233B64EB0userFunnelAnalysis.1524912d.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report_log_user_action/get_view_data",
+    "url": "https://admin.ushdev.top/api/report_log_user_action/get_view_data",
+    "source": "087AC4D233B64EB0userFunnelAnalysis.1524912d.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report_log_user_action/get_view_detail",
+    "url": "https://admin.ushdev.top/api/report_log_user_action/get_view_detail",
+    "source": "087AC4D233B64EB0userFunnelAnalysis.1524912d.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report_log_user_action/get_view_list",
+    "url": "https://admin.ushdev.top/api/report_log_user_action/get_view_list",
+    "source": "087AC4D233B64EB0userFunnelAnalysis.1524912d.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/campaign_fb_params",
+    "url": "https://admin.ushdev.top/api/report/campaign_fb_params",
+    "source": "087AC4D233B64EB0index.4005ef13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/campaign_tiktok_params",
+    "url": "https://admin.ushdev.top/api/report/campaign_tiktok_params",
+    "source": "087AC4D233B64EB0index.b451d6a1.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/cashout_pay",
+    "url": "https://admin.ushdev.top/api/report/cashout_pay",
+    "source": "087AC4D233B64EB0withdrawalRatio.e6b04fd0.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/channel_recovery",
+    "url": "https://admin.ushdev.top/api/report/channel_recovery",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/charge_cashout_summary",
+    "url": "https://admin.ushdev.top/api/report/charge_cashout_summary",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/creative_fb_params",
+    "url": "https://admin.ushdev.top/api/report/creative_fb_params",
+    "source": "087AC4D233B64EB0index.b604a4c8.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/creative_tiktok_params",
+    "url": "https://admin.ushdev.top/api/report/creative_tiktok_params",
+    "source": "087AC4D233B64EB0index.0b561a16.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/daily_flow",
+    "url": "https://admin.ushdev.top/api/report/daily_flow",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/daily_report",
+    "url": "https://admin.ushdev.top/api/report/daily_report",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_campaign_fb",
+    "url": "https://admin.ushdev.top/api/report/date_campaign_fb",
+    "source": "087AC4D233B64EB0index.4005ef13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_campaign_fb_channel",
+    "url": "https://admin.ushdev.top/api/report/date_campaign_fb_channel",
+    "source": "087AC4D233B64EB0index.4005ef13.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_campaign_tiktok",
+    "url": "https://admin.ushdev.top/api/report/date_campaign_tiktok",
+    "source": "087AC4D233B64EB0index.b451d6a1.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_campaign_tiktok_channel",
+    "url": "https://admin.ushdev.top/api/report/date_campaign_tiktok_channel",
+    "source": "087AC4D233B64EB0index.b451d6a1.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_combine_fb_channel",
+    "url": "https://admin.ushdev.top/api/report/date_combine_fb_channel",
+    "source": "087AC4D233B64EB0index.80da0653.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_combine_tt_channel",
+    "url": "https://admin.ushdev.top/api/report/date_combine_tt_channel",
+    "source": "087AC4D233B64EB0index.80da0653.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_creative_fb",
+    "url": "https://admin.ushdev.top/api/report/date_creative_fb",
+    "source": "087AC4D233B64EB0index.b604a4c8.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_creative_fb_channel",
+    "url": "https://admin.ushdev.top/api/report/date_creative_fb_channel",
+    "source": "087AC4D233B64EB0index.b604a4c8.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_creative_tiktok",
+    "url": "https://admin.ushdev.top/api/report/date_creative_tiktok",
+    "source": "087AC4D233B64EB0index.0b561a16.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_creative_tiktok_channel",
+    "url": "https://admin.ushdev.top/api/report/date_creative_tiktok_channel",
+    "source": "087AC4D233B64EB0index.0b561a16.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_goods",
+    "url": "https://admin.ushdev.top/api/report/date_goods",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_guide_event",
+    "url": "https://admin.ushdev.top/api/report/date_guide_event",
+    "source": "087AC4D233B64EB0dateGuideEventAnalysis.5581dde3.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_pay_line",
+    "url": "https://admin.ushdev.top/api/report/date_pay_line",
+    "source": "087AC4D233B64EB0index.f3c523ab.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_pay_user_action",
+    "url": "https://admin.ushdev.top/api/report/date_pay_user_action",
+    "source": "087AC4D233B64EB0payUserDateAction.bfd67e33.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_recovery",
+    "url": "https://admin.ushdev.top/api/report/date_recovery",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_user_action",
+    "url": "https://admin.ushdev.top/api/report/date_user_action",
+    "source": "087AC4D233B64EB0dateUserActionAnalysis.2681c231.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_user_bust",
+    "url": "https://admin.ushdev.top/api/report/date_user_bust",
+    "source": "087AC4D233B64EB0dateUserBust.74c5e79f.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_user_line",
+    "url": "https://admin.ushdev.top/api/report/date_user_line",
+    "source": "087AC4D233B64EB0index.c58bda2f.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/date_user_monitor",
+    "url": "https://admin.ushdev.top/api/report/date_user_monitor",
+    "source": "087AC4D233B64EB0index.ec301635.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/day7_stats_report",
+    "url": "https://admin.ushdev.top/api/report/day7_stats_report",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/game_analysis",
+    "url": "https://admin.ushdev.top/api/report/game_analysis",
+    "source": "087AC4D233B64EB0gameAnalysis.a586761e.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/game_analysis_new",
+    "url": "https://admin.ushdev.top/api/report/game_analysis_new",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/game_analysis_new_bet",
+    "url": "https://admin.ushdev.top/api/report/game_analysis_new_bet",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/game_analysis_new_flow",
+    "url": "https://admin.ushdev.top/api/report/game_analysis_new_flow",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/game_analysis_new_retain",
+    "url": "https://admin.ushdev.top/api/report/game_analysis_new_retain",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/game_analysis_total",
+    "url": "https://admin.ushdev.top/api/report/game_analysis_total",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/game_recovery",
+    "url": "https://admin.ushdev.top/api/report/game_recovery",
+    "source": "087AC4D233B64EB0gameRecoveryAnalysis.88477806.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/game_recovery_new",
+    "url": "https://admin.ushdev.top/api/report/game_recovery_new",
+    "source": "087AC4D233B64EB0gameRecoveryAnalysis.88477806.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/game_report_params",
+    "url": "https://admin.ushdev.top/api/report/game_report_params",
+    "source": "087AC4D233B64EB0ussutil.d5b65b0f.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/ignore_channel_list",
+    "url": "https://admin.ushdev.top/api/report/ignore_channel_list",
+    "source": "087AC4D233B64EB0channelDateCost.5caf7ad9.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/important_data",
+    "url": "https://admin.ushdev.top/api/report/important_data",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/log_date_ad",
+    "url": "https://admin.ushdev.top/api/report/log_date_ad",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/log_upload_combine_info",
+    "url": "https://admin.ushdev.top/api/report/log_upload_combine_info",
+    "source": "087AC4D233B64EB0index.80da0653.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/minute_statis",
+    "url": "https://admin.ushdev.top/api/report/minute_statis",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/new_user_action",
+    "url": "https://admin.ushdev.top/api/report/new_user_action",
+    "source": "087AC4D233B64EB0index.7ef5888b.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/new_user_charge_out",
+    "url": "https://admin.ushdev.top/api/report/new_user_charge_out",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/new_user_level_rate",
+    "url": "https://admin.ushdev.top/api/report/new_user_level_rate",
+    "source": "087AC4D233B64EB0index.1d007271.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/new_user_retained",
+    "url": "https://admin.ushdev.top/api/report/new_user_retained",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/order_goods",
+    "url": "https://admin.ushdev.top/api/report/order_goods",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/paypal_account_list",
+    "url": "https://admin.ushdev.top/api/report/paypal_account_list",
+    "source": "087AC4D233B64EB0ussutil.d5b65b0f.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/paypal_dispute_list",
+    "url": "https://admin.ushdev.top/api/report/paypal_dispute_list",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/recycle_report",
+    "url": "https://admin.ushdev.top/api/report/recycle_report",
+    "source": "087AC4D233B64EB0gameRecoveryAnalysis.88477806.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/total_flow",
+    "url": "https://admin.ushdev.top/api/report/total_flow",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/user_cashout_sum",
+    "url": "https://admin.ushdev.top/api/report/user_cashout_sum",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/user_churn_list",
+    "url": "https://admin.ushdev.top/api/report/user_churn_list",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/user_data_monitor",
+    "url": "https://admin.ushdev.top/api/report/user_data_monitor",
+    "source": "087AC4D233B64EB0index.02df7c8f.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/user_retained",
+    "url": "https://admin.ushdev.top/api/report/user_retained",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/user_revenue",
+    "url": "https://admin.ushdev.top/api/report/user_revenue",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/vip_user_report",
+    "url": "https://admin.ushdev.top/api/report/vip_user_report",
+    "source": "087AC4D233B64EB0index.323a1e2e.js"
+  },
+  {
+    "method": "POST",
+    "path": "/report/week_summary",
+    "url": "https://admin.ushdev.top/api/report/week_summary",
+    "source": "087AC4D233B64EB0ussreport.027c5793.js"
+  },
+  {
+    "method": "POST",
+    "path": "/sysDictionary/createSysDictionary",
+    "url": "https://admin.ushdev.top/api/sysDictionary/createSysDictionary",
+    "source": "087AC4D233B64EB0sysDictionary.cd18ab33.js"
+  },
+  {
+    "method": "POST",
+    "path": "/sysDictionaryDetail/createSysDictionaryDetail",
+    "url": "https://admin.ushdev.top/api/sysDictionaryDetail/createSysDictionaryDetail",
+    "source": "087AC4D233B64EB0sysDictionaryDetail.6d5526f3.js"
+  },
+  {
+    "method": "POST",
+    "path": "/system/getServerInfo",
+    "url": "https://admin.ushdev.top/api/system/getServerInfo",
+    "source": "087AC4D233B64EB0system.43ee47a4.js"
+  },
+  {
+    "method": "POST",
+    "path": "/system/getSystemConfig",
+    "url": "https://admin.ushdev.top/api/system/getSystemConfig",
+    "source": "087AC4D233B64EB0system.43ee47a4.js"
+  },
+  {
+    "method": "POST",
+    "path": "/system/setSystemConfig",
+    "url": "https://admin.ushdev.top/api/system/setSystemConfig",
+    "source": "087AC4D233B64EB0system.43ee47a4.js"
+  },
+  {
+    "method": "POST",
+    "path": "/systemMail/createMailTemplate",
+    "url": "https://admin.ushdev.top/api/systemMail/createMailTemplate",
+    "source": "087AC4D233B64EB0systemMail.37954599.js"
+  },
+  {
+    "method": "POST",
+    "path": "/systemMail/createSystemMail",
+    "url": "https://admin.ushdev.top/api/systemMail/createSystemMail",
+    "source": "087AC4D233B64EB0systemMail.37954599.js"
+  },
+  {
+    "method": "POST",
+    "path": "/systemMail/deleteMailTemplate",
+    "url": "https://admin.ushdev.top/api/systemMail/deleteMailTemplate",
+    "source": "087AC4D233B64EB0systemMail.37954599.js"
+  },
+  {
+    "method": "POST",
+    "path": "/systemMail/sortMailTemplate",
+    "url": "https://admin.ushdev.top/api/systemMail/sortMailTemplate",
+    "source": "087AC4D233B64EB0systemMail.37954599.js"
+  },
+  {
+    "method": "POST",
+    "path": "/systemMail/updateMailTemplate",
+    "url": "https://admin.ushdev.top/api/systemMail/updateMailTemplate",
+    "source": "087AC4D233B64EB0systemMail.37954599.js"
+  },
+  {
+    "method": "POST",
+    "path": "/systemPush/createSystemPush",
+    "url": "https://admin.ushdev.top/api/systemPush/createSystemPush",
+    "source": "087AC4D233B64EB0index.ed5c82bf.js"
+  },
+  {
+    "method": "POST",
+    "path": "/systemPush/deleteSystemPush",
+    "url": "https://admin.ushdev.top/api/systemPush/deleteSystemPush",
+    "source": "087AC4D233B64EB0index.ed5c82bf.js"
+  },
+  {
+    "method": "POST",
+    "path": "/systemPush/findSystemPush",
+    "url": "https://admin.ushdev.top/api/systemPush/findSystemPush",
+    "source": "087AC4D233B64EB0index.ed5c82bf.js"
+  },
+  {
+    "method": "POST",
+    "path": "/systemPush/getSystemPushList",
+    "url": "https://admin.ushdev.top/api/systemPush/getSystemPushList",
+    "source": "087AC4D233B64EB0index.ed5c82bf.js"
+  },
+  {
+    "method": "POST",
+    "path": "/systemPush/updateSystemPush",
+    "url": "https://admin.ushdev.top/api/systemPush/updateSystemPush",
+    "source": "087AC4D233B64EB0index.ed5c82bf.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/admin_register",
+    "url": "https://admin.ushdev.top/api/user/admin_register",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/adminRegisterAgent",
+    "url": "https://admin.ushdev.top/api/user/adminRegisterAgent",
+    "source": "087AC4D233B64EB0index.99b2f44a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/changePassword",
+    "url": "https://admin.ushdev.top/api/user/changePassword",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/delUserAgentPixelInfo",
+    "url": "https://admin.ushdev.top/api/user/delUserAgentPixelInfo",
+    "source": "087AC4D233B64EB0index.99b2f44a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/getOneUserAgent",
+    "url": "https://admin.ushdev.top/api/user/getOneUserAgent",
+    "source": "087AC4D233B64EB0index.99b2f44a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/getPkgList",
+    "url": "https://admin.ushdev.top/api/user/getPkgList",
+    "source": "087AC4D233B64EB0index.99b2f44a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/getUserAgentEffectiveInfo",
+    "url": "https://admin.ushdev.top/api/user/getUserAgentEffectiveInfo",
+    "source": "087AC4D233B64EB0index.99b2f44a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/getUserAgentList",
+    "url": "https://admin.ushdev.top/api/user/getUserAgentList",
+    "source": "087AC4D233B64EB0index.99b2f44a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/getUserAgentPixelInfo",
+    "url": "https://admin.ushdev.top/api/user/getUserAgentPixelInfo",
+    "source": "087AC4D233B64EB0index.99b2f44a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/getUserList",
+    "url": "https://admin.ushdev.top/api/user/getUserList",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/resetPassword",
+    "url": "https://admin.ushdev.top/api/user/resetPassword",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/setUserAgentPixelInfo",
+    "url": "https://admin.ushdev.top/api/user/setUserAgentPixelInfo",
+    "source": "087AC4D233B64EB0index.99b2f44a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/setUserAuthorities",
+    "url": "https://admin.ushdev.top/api/user/setUserAuthorities",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/setUserAuthority",
+    "url": "https://admin.ushdev.top/api/user/setUserAuthority",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "POST",
+    "path": "/user/updateUserAgent",
+    "url": "https://admin.ushdev.top/api/user/updateUserAgent",
+    "source": "087AC4D233B64EB0index.99b2f44a.js"
+  },
+  {
+    "method": "POST",
+    "path": "/userAuth/getUserDistributionChannelAuth",
+    "url": "https://admin.ushdev.top/api/userAuth/getUserDistributionChannelAuth",
+    "source": "087AC4D233B64EB0platformAuth.c645b698.js"
+  },
+  {
+    "method": "POST",
+    "path": "/userAuth/getUserDistributionChannelAuthDataTree",
+    "url": "https://admin.ushdev.top/api/userAuth/getUserDistributionChannelAuthDataTree",
+    "source": "087AC4D233B64EB0platformAuth.c645b698.js"
+  },
+  {
+    "method": "POST",
+    "path": "/userAuth/getUserPlatformAuth",
+    "url": "https://admin.ushdev.top/api/userAuth/getUserPlatformAuth",
+    "source": "087AC4D233B64EB0platformAuth.c645b698.js"
+  },
+  {
+    "method": "POST",
+    "path": "/userAuth/getUserPlatformAuthDataTree",
+    "url": "https://admin.ushdev.top/api/userAuth/getUserPlatformAuthDataTree",
+    "source": "087AC4D233B64EB0platformAuth.c645b698.js"
+  },
+  {
+    "method": "POST",
+    "path": "/userAuth/updateUserDistributionChannelAuthData",
+    "url": "https://admin.ushdev.top/api/userAuth/updateUserDistributionChannelAuthData",
+    "source": "087AC4D233B64EB0platformAuth.c645b698.js"
+  },
+  {
+    "method": "POST",
+    "path": "/userAuth/updateUserPlatformAuthData",
+    "url": "https://admin.ushdev.top/api/userAuth/updateUserPlatformAuthData",
+    "source": "087AC4D233B64EB0platformAuth.c645b698.js"
+  },
+  {
+    "method": "POST",
+    "path": "/userCashout/createUserCashout",
+    "url": "https://admin.ushdev.top/api/userCashout/createUserCashout",
+    "source": "087AC4D233B64EB0userCashout.5004a9e4.js"
+  },
+  {
+    "method": "POST",
+    "path": "/userCashout/updateCashoutOrderStatus",
+    "url": "https://admin.ushdev.top/api/userCashout/updateCashoutOrderStatus",
+    "source": "087AC4D233B64EB0userCashout.5004a9e4.js"
+  },
+  {
+    "method": "POST",
+    "path": "/userCashout/updateUserCashoutApiStatus",
+    "url": "https://admin.ushdev.top/api/userCashout/updateUserCashoutApiStatus",
+    "source": "087AC4D233B64EB0userCashout.5004a9e4.js"
+  },
+  {
+    "method": "POST",
+    "path": "/userPayDispute/findUserPayDispute",
+    "url": "https://admin.ushdev.top/api/userPayDispute/findUserPayDispute",
+    "source": "087AC4D233B64EB0index.05a61127.js"
+  },
+  {
+    "method": "POST",
+    "path": "/userPayDispute/getUserPayDisputeList",
+    "url": "https://admin.ushdev.top/api/userPayDispute/getUserPayDisputeList",
+    "source": "087AC4D233B64EB0index.05a61127.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/AgentPackage/updateCfgAgentPackage",
+    "url": "https://admin.ushdev.top/api/AgentPackage/updateCfgAgentPackage",
+    "source": "087AC4D233B64EB0cfgAgentPackage.72d847af.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/authority/updateAuthority",
+    "url": "https://admin.ushdev.top/api/authority/updateAuthority",
+    "source": "087AC4D233B64EB0authority.00ecf08a.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/cfgAgentRatio/updateCfgAgentRatio",
+    "url": "https://admin.ushdev.top/api/cfgAgentRatio/updateCfgAgentRatio",
+    "source": "087AC4D233B64EB0cfgAgentRatio.e1736e85.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/cfgGoods/updateCfgGoods",
+    "url": "https://admin.ushdev.top/api/cfgGoods/updateCfgGoods",
+    "source": "087AC4D233B64EB0cfgGoods.a89183ad.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/channelDateCost/updateChannelDateCost",
+    "url": "https://admin.ushdev.top/api/channelDateCost/updateChannelDateCost",
+    "source": "087AC4D233B64EB0channelDateCost.5caf7ad9.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/customer/customer",
+    "url": "https://admin.ushdev.top/api/customer/customer",
+    "source": "087AC4D233B64EB0customer.ce1f3cc9.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/order/updateOrder",
+    "url": "https://admin.ushdev.top/api/order/updateOrder",
+    "source": "087AC4D233B64EB0order.543cf931.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/sysDictionary/updateSysDictionary",
+    "url": "https://admin.ushdev.top/api/sysDictionary/updateSysDictionary",
+    "source": "087AC4D233B64EB0sysDictionary.cd18ab33.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/sysDictionaryDetail/updateSysDictionaryDetail",
+    "url": "https://admin.ushdev.top/api/sysDictionaryDetail/updateSysDictionaryDetail",
+    "source": "087AC4D233B64EB0sysDictionaryDetail.6d5526f3.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/systemMail/updateSystemMail",
+    "url": "https://admin.ushdev.top/api/systemMail/updateSystemMail",
+    "source": "087AC4D233B64EB0systemMail.37954599.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/user/setSelfInfo",
+    "url": "https://admin.ushdev.top/api/user/setSelfInfo",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/user/setUserInfo",
+    "url": "https://admin.ushdev.top/api/user/setUserInfo",
+    "source": ".tmp_api_index.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/userCashout/acceptUserCashout",
+    "url": "https://admin.ushdev.top/api/userCashout/acceptUserCashout",
+    "source": "087AC4D233B64EB0userCashout.5004a9e4.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/userCashout/rejectUserCashout",
+    "url": "https://admin.ushdev.top/api/userCashout/rejectUserCashout",
+    "source": "087AC4D233B64EB0userCashout.5004a9e4.js"
+  },
+  {
+    "method": "PUT",
+    "path": "/userCashout/updateUserCashout",
+    "url": "https://admin.ushdev.top/api/userCashout/updateUserCashout",
+    "source": "087AC4D233B64EB0userCashout.5004a9e4.js"
+  }
+]
