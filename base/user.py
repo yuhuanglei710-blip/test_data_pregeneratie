@@ -11,7 +11,6 @@ class User:
     #初始化用户信息，可指定环境、邮箱、平台、渠道代码，默认创建ios，b面用户,密码写死123456
     def __init__(self, 
                  email:str = ''.join(random.choices(string.ascii_lowercase, k=4)) + ''.join(random.choices(string.digits, k=2)) + "@cc.cc",
-                 
                  environment: str = "dev",
                  ):
         #根据环境变量加载不同的配置文件
@@ -23,6 +22,8 @@ class User:
         self.email = email
         self.password="e10adc3949ba59abbe56e057f20f883e"
         self.uid = None
+        self.platform = None
+        self.channel_code = None
         self.token = None
 
     #创建注册函数,oaid为当前时间戳
@@ -60,7 +61,7 @@ class User:
         "phone_os_version": "",
         "adjust_info": json.dumps({
             "network": self.channel_code,
-            "trackerName": channel_code,
+            "trackerName": self.channel_code,
             "trackerToken": "19huppx7",
             "adid": oaid,
             "campaign": "",

@@ -13,7 +13,7 @@ class TimestampTool:
     
     #换算时间戳
     @staticmethod
-    def modify_timestamp(timestamp, days=0, hours=0, minutes=0, seconds=0):
+    def modify_timestamp(timestamp=get_timestamp(), days=0, hours=0, minutes=0, seconds=0):
         """
         修改时间戳，增加或减少指定的天数、小时数、分钟数和秒数
         :param timestamp: 原始时间戳
