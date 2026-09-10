@@ -6,6 +6,10 @@ import time
 import random
 import string
 from dotenv import load_dotenv
+from enum import Environment, Platform, ChannelCode
+
+
+
 #抽象用户类，创建用户模拟数据
 class User:
     #初始化用户信息，可指定环境、邮箱、平台、渠道代码，默认创建ios，b面用户,密码写死123456
@@ -124,6 +128,5 @@ if __name__ == "__main__":
     user.register(platform=2)
     print("注册成功!"'\n',
           "邮箱:", user.email, '\n', 
-          "密码:", user.password,'\n', 
-          "token:", getattr(user, 'token', None),'\n', 
+          "密码:", user.password,'\n',  
           "uid:", getattr(user, 'uid', None))
