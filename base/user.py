@@ -13,11 +13,13 @@ class User:
                  email:str = ''.join(random.choices(string.ascii_lowercase, k=4)) + ''.join(random.choices(string.digits, k=2)) + "@cc.cc",
                  environment: str = "dev",
                  ):
+        print(environment)
+        self.environment = environment
         #根据环境变量加载不同的配置文件
-        if environment not in ["dev","huidu","prod","yy","individual"]:
+        if self.environment not in ["dev","huidu","prod","yy","individual"]:
             return "Invalid environment. Choose from 'dev', 'huidu', or 'prod'."
         else:
-            load_dotenv(f"{environment}.env")
+            load_dotenv(f"{self.environment}.env")
             self.domain = os.getenv("domain")
         self.email = email
         self.password="e10adc3949ba59abbe56e057f20f883e"
@@ -112,18 +114,45 @@ class User:
         elif res_data:
             self.uid = res_data["data"]["user"]["id"]
             self.token = res_data["data"]["token"]
-    #老账号用于获取token
+    #登录用于获取所有用户信息
     def login(self):
         email = self.email
         password = self.password
         pass
 
+    @staticmethod    
+    def map_translate_dic(key):
+        '''
+        将key映射为对应的值
+        '''
+        mapping = {
+            "dev": "测试环境",
+            "huidu": "灰度环境",
+            "prod": "生产环境",
+            "yy": " 运营环境",
+            "individual": "个人服环境"
+        }
+        if mapping.get(key):
+            return mapping[key]
+        return "Unknown environment"
+
+    @staticmethod
+    def map_platform(value):
+        mapping = {
+            1: "web",
+            2: "android",
+            3: "ios",
+        }
+        if mapping.get(value):
+            return mapping[value]
+        return "Unknown platform"
 
 if __name__ == "__main__":
     user = User(environment="dev")
-    user.register(platform=2)
-    print("注册成功!"'\n',
+    user.register(platform=1)
+    print('===================', "注册成功!", '\n',
+          "环境:", User.map_translate_dic(user.environment), '\n',
+          "uid:", getattr(user, 'uid', None), '\n',
           "邮箱:", user.email, '\n', 
-          "密码:", user.password,'\n', 
-          "token:", getattr(user, 'token', None),'\n', 
-          "uid:", getattr(user, 'uid', None))
+          "密码:", '123456','\n',  
+          )
