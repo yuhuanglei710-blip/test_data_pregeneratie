@@ -14,4 +14,8 @@ class Compliancestatus(Enum):
 
 class ChannelCode(Enum):
     pass
+
+class TimestampMethod(Enum):
+    add = 1
+    sub = 0
     
