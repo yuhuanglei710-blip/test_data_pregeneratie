@@ -6,7 +6,8 @@ import time
 import random
 import string
 from dotenv import load_dotenv
-from enum import Environment, Platform, ChannelCode
+import jwt
+from enums import ChannelCode, Compliancestatus, Platform
 
 
 
@@ -25,6 +26,7 @@ class User:
         else:
             load_dotenv(f"{self.environment}.env")
             self.domain = os.getenv("domain")
+            print(self.domain)
         self.email = email
         self.password="e10adc3949ba59abbe56e057f20f883e"
         self.uid = None
@@ -97,6 +99,7 @@ class User:
         res = conn.getresponse()
         data = res.read()
         response = json.loads(data.decode("utf-8"))
+        
 
 
         #base64解码msg和data字段
@@ -114,10 +117,18 @@ class User:
         if isinstance(response.get("data"), dict):
             self.uid = response["data"]["user"]["id"]
             self.token = response["data"].get("token")
-            
+            print("token:",self.token)
+
+        
         elif res_data:
             self.uid = res_data["data"]["user"]["id"]
             self.token = res_data["data"]["token"]
+
+        decoded = jwt.decode(
+            self.token,
+            options={"verify_signature": False}
+            )
+        print("decoded:",decoded)
     #登录用于获取所有用户信息
     def login(self):
         email = self.email
@@ -153,7 +164,7 @@ class User:
 
 if __name__ == "__main__":
     user = User(environment="dev")
-    user.register(platform=1)
+    user.register(platform=Platform.web.value)
     print('===================', "注册成功!", '\n',
           "环境:", User.map_translate_dic(user.environment), '\n',
           "uid:", getattr(user, 'uid', None), '\n',
