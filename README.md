@@ -6,10 +6,30 @@
 - api
     前后端API等存放目录
 - base
-    user等基类存放目录
+    user、枚举等基类存放目录
 - test
     测试用例存放目录
 - main.py
     入口函数
+- cache
+    缓存目录，用于存储token等临时数据
 - README.md
     食用说明
+- requirements.txt
+    项目依赖文件
+    项目依赖：
+- .env
+    环境变量文件配置
+## 使用方法
+1.下载安装python环境
+```
+pip install -r requirements.txt
+```
+
+
+2.创建填写.env文件，并配置环境变量
+
+3.运行main.py
+```
+python main.py
+```
