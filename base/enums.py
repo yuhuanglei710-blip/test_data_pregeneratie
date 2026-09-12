@@ -1,5 +1,7 @@
 from enum import Enum
-
+'''
+基类不鸡肋，我是枚举类
+'''
 
 
 class Platform(Enum):
