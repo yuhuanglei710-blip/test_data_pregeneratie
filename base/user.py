@@ -158,10 +158,7 @@ if __name__ == "__main__":
           "环境:", User.map_translate_dic(user.environment), '\n',
           "uid:", getattr(user, 'uid', None), '\n',
           "邮箱:", user.email, '\n', 
-<<<<<<< HEAD
           "密码:", '123456','\n',  
           )
-=======
-          "密码:", user.password,'\n',  
-          "uid:", getattr(user, 'uid', None))
->>>>>>> origin/config
+
+
