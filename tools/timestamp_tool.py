@@ -1,41 +1,43 @@
+"""Timestamp calculation utilities."""
+
 import time
+from typing import Optional
+
+
+SECONDS_PER_MINUTE = 60
+SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE
+SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR
+
 
 class TimestampTool:
-    '''
-    时间戳工具类：提供时间戳生成、计算、获取、换算功能
-    '''
-    
-    #获取当前时间戳
-    @staticmethod
-    def get_timestamp():
-        return int(time.time() )
-    
-    #换算时间戳
-    @staticmethod
-    def modify_timestamp(timestamp=get_timestamp(), days=0, hours=0, minutes=0, seconds=0,method=1):
-        """
-        修改时间戳，增加或减少指定的天数、小时数、分钟数和秒数
-        :param timestamp: 原始时间戳
-        :param days: 增加或减少的天数
-        :param hours: 增加或减少的小时数
-        :param minutes: 增加或减少的分钟数
-        :param seconds: 增加或减少的秒数
-        :param method: 1为增加，2为减少
-        :return: 修改后的时间戳
-        """
-        if method == 1:
-            total_seconds = (days * 24 * 60 * 60) + (hours * 60 * 60) + (minutes * 60) + seconds
-            result = timestamp + total_seconds
-            return result
-        total_seconds = (days * 24 * 60 * 60) + (hours * 60 * 60) + (minutes * 60) + seconds
-        result = timestamp - total_seconds
-        return result
+    """Generate and adjust Unix timestamps."""
 
-    
+    @staticmethod
+    def get_timestamp() -> int:
+        return int(time.time())
 
-    
+    @staticmethod
+    def modify_timestamp(
+        timestamp: Optional[int] = None,
+        days: int = 0,
+        hours: int = 0,
+        minutes: int = 0,
+        seconds: int = 0,
+        method: int = 1,
+    ) -> int:
+        """Add a duration when ``method`` is 1; otherwise subtract it."""
+        base_timestamp = (
+            TimestampTool.get_timestamp() if timestamp is None else timestamp
+        )
+        total_seconds = (
+            days * SECONDS_PER_DAY
+            + hours * SECONDS_PER_HOUR
+            + minutes * SECONDS_PER_MINUTE
+            + seconds
+        )
+        direction = 1 if method == 1 else -1
+        return base_timestamp + direction * total_seconds
+
 
 if __name__ == "__main__":
-    timestamp_tool = TimestampTool()
-    timestamp = timestamp_tool.get_timestamp()
-    print("当前时间戳:", timestamp)
+    print("当前时间戳:", TimestampTool.get_timestamp())

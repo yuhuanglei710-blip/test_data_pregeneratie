@@ -1,4 +1,7 @@
 *.env
 .env
+__pycache__/
+*.py[cod]
+accounts*.txt
 
 cache/bgtoken.json

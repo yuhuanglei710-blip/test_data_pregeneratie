@@ -1,7 +1,6 @@
+"""Shared enumerations used by API helpers."""
+
 from enum import Enum
-'''
-基类不鸡肋，我是枚举类
-'''
 
 
 class Platform(Enum):
@@ -9,15 +8,22 @@ class Platform(Enum):
     android = 2
     ios = 3
 
-class Compliancestatus(Enum):
+
+class ComplianceStatus(Enum):
+    """KYC compliance status."""
+
     compliance = 1
     noncompliance = 0
 
 
+# Keep the original misspelled name so existing imports continue to work.
+Compliancestatus = ComplianceStatus
+
+
 class ChannelCode(Enum):
-    pass
+    """Reserved for channel-code values."""
+
 
 class TimestampMethod(Enum):
     add = 1
     sub = 0
-    

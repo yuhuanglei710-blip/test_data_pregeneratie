@@ -1,74 +1,75 @@
+"""Admin API client skeleton."""
+
 import http.client
 import json
-from dotenv import load_dotenv
 import os
-import jwt
+from pathlib import Path
+from typing import Any, Dict
+
+from dotenv import load_dotenv
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+API_BLUEPRINT = "/api/operationManage"
+
 
 class Background:
-    '''
-    后台管理接口的复用，仅挑选最常用部分接口
-    '''
+    """Expose commonly used admin operations."""
+
     def __init__(self, environment: str = "dev"):
-        '''
-        加载环境文件，获取环境变量。
-        初始化蓝图，域名，token为None。
-        '''
-        load_dotenv(f"{environment}.env")
         self.environment = environment
-        self.blueprint = "/api/operationManage"
+        load_dotenv(PROJECT_ROOT / f"{environment}.env", override=True)
+
+        self.blueprint = API_BLUEPRINT
         self.domain = os.getenv("background_domain")
-        self.token = None
+        self.token: str | None = None
+        if not self.domain:
+            raise RuntimeError(f"未在 {environment}.env 中配置 background_domain")
 
-    def pass_kyc(self, user_id: int):
-        '''
-        通过用户KYC审核
-        '''
-        pass
+    def pass_kyc(self, user_id: int) -> None:
+        """Approve a user's KYC review (not implemented yet)."""
+        raise NotImplementedError("KYC 审核接口尚未实现")
 
-    def reset_kyc(self, user_id: int):
-        '''
-        重置用户KYC审核
-        '''
-        pass
+    def reset_kyc(self, user_id: int) -> None:
+        """Reset a user's KYC review (not implemented yet)."""
+        raise NotImplementedError("KYC 重置接口尚未实现")
 
-    def get_user_info(self, user_id: int):
-        conn = http.client.HTTPSConnection(self.domain)
-        headers = {
-            "Authorization": f"Bearer {self.token}"
-        }
-        payload = json.dumps({
-            "user_id": user_id,
-            "timezone": 0
-        })
-        conn.request(
-            "POST",
-            f"{self.blueprint}/user/GetUserList",
-            headers=headers,
-            body=payload
-        )
-        response = conn.getresponse()
-        data = response.read().decode("utf-8")
-        print(data)
-        return json.loads(data)
+    def get_user_info(self, user_id: int) -> Dict[str, Any]:
+        """Fetch one user's information from the admin API."""
+        if not self.token:
+            raise RuntimeError("请先通过 check_token 设置后台 token")
 
-    def check_token(self, token: str):
-        """
-        检查token是否缓存token以及有效性
-        """
+        connection = http.client.HTTPSConnection(self.domain)
+        try:
+            connection.request(
+                "POST",
+                f"{self.blueprint}/user/GetUserList",
+                body=json.dumps({"user_id": user_id, "timezone": 0}),
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Content-Type": "application/json",
+                },
+            )
+            response = connection.getresponse()
+            response_data = response.read().decode("utf-8")
+        finally:
+            connection.close()
+
+        print(response_data)
+        result = json.loads(response_data)
+        if not isinstance(result, dict):
+            raise RuntimeError(f"后台接口返回格式异常: {result!r}")
+        return result
+
+    def check_token(self, token: str) -> None:
+        """Set the admin token used by subsequent requests."""
+        if not token:
+            raise ValueError("token 不能为空")
         self.token = token
-        
 
-    def get_token(self):
-        """
-        通过接口伪造登录获取后台最新token
-        """
-        payload = {
-            "username": "admin",
-            "password": "us.1us.1",
-            "captcha": "",
-            "captchaId": "2AFQVrvGnQMTrGYtno0e",
-            "openCaptcha": "false"
-        }
+    def get_token(self) -> str:
+        """Log in and fetch an admin token (not implemented yet)."""
+        raise NotImplementedError("后台登录接口尚未实现")
 
 
 if __name__ == "__main__":
