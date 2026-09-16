@@ -1,8 +1,8 @@
 """Batch-create test accounts, add funds, and place initial bets."""
 
+import json
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Union
 
@@ -20,10 +20,13 @@ except ImportError:  # Support ``python base/tournment_test.py``.
     from user import DEFAULT_PASSWORD, User
 
 
-DEFAULT_ACCOUNT_COUNT = 26
+DEFAULT_ACCOUNT_COUNT = 30
 INITIAL_BALANCE = 1_000_000
 INITIAL_SPIN_COUNT = 30
-SPIN_CONCURRENCY = 3
+
+
+class SpinWorkflowError(RuntimeError):
+    """Stop the batch when the game service rejects a spin."""
 
 
 def _print_account(account: User, index: int, count: int) -> None:
@@ -36,37 +39,17 @@ def _print_account(account: User, index: int, count: int) -> None:
 def _place_initial_spins(
     user_token: str,
     spin_count: int,
-    concurrency: int = SPIN_CONCURRENCY,
+    bet_amount: int = spin.DEFAULT_BET_CENTS,
     *,
     verbose: bool = False,
 ) -> None:
-    if spin_count <= 0:
-        return
-
-    # Prime the cache before creating workers to avoid duplicate token requests.
-    if not spin.get_valid_game_token(user_token, verbose=verbose):
-        raise RuntimeError("无法获取有效的游戏 token")
-
-    worker_count = max(1, min(concurrency, spin_count))
-    failed_spins = []
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        futures = {
-            executor.submit(spin.dev_spin, user_token, verbose=verbose): spin_index
-            for spin_index in range(1, spin_count + 1)
-        }
-        for future in as_completed(futures):
-            spin_index = futures[future]
-            try:
-                if future.result() is None:
-                    failed_spins.append(spin_index)
-            except Exception as error:
-                failed_spins.append(spin_index)
-                if verbose:
-                    print(f"[spin:debug] 第 {spin_index} 次下注异常：{error}")
-
-    if failed_spins:
-        failed_text = ", ".join(map(str, sorted(failed_spins)))
-        raise RuntimeError(f"下注失败 {len(failed_spins)}/{spin_count} 次：{failed_text}")
+    for spin_index in range(1, spin_count + 1):
+        if spin.dev_spin(
+            user_token,
+            bet_amount=bet_amount,
+            verbose=verbose,
+        ) is None:
+            raise SpinWorkflowError(f"第 {spin_index}/{spin_count} 次下注失败")
 
 
 def create_accounts_and_bet(
@@ -74,7 +57,7 @@ def create_accounts_and_bet(
     output_file: Union[str, Path] = "accounts.txt",
     initial_balance: int = INITIAL_BALANCE,
     spin_count: int = INITIAL_SPIN_COUNT,
-    spin_concurrency: int = SPIN_CONCURRENCY,
+    bet_amount: int = spin.DEFAULT_BET_CENTS,
     *,
     verbose: bool = False,
 ) -> int:
@@ -94,15 +77,26 @@ def create_accounts_and_bet(
                 if not account.uid or not account.token:
                     raise RuntimeError("注册成功但未获取到 uid 或 token")
 
-                add_money.add_money(
+                money_result = add_money.add_money(
                     user_id=account.uid,
                     amount=initial_balance,
                     remark="测试加钱",
                 )
+                print(
+                    "[money] 加钱响应："
+                    + json.dumps(
+                        money_result,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
+                if not add_money.operation_succeeded(money_result):
+                    raise RuntimeError(f"加钱业务失败：{money_result}")
+
                 _place_initial_spins(
                     account.token,
                     spin_count,
-                    concurrency=spin_concurrency,
+                    bet_amount=bet_amount,
                     verbose=verbose,
                 )
 
@@ -116,8 +110,12 @@ def create_accounts_and_bet(
                 print(
                     f"[{index}/{count}] 数据生成完成："
                     f"加钱={initial_balance}，下注={spin_count} 次，"
-                    f"并发={spin_concurrency}"
+                    f"单次金额={bet_amount} 美分"
                 )
+            except SpinWorkflowError as error:
+                print(f"[{index}/{count}] 创建账号失败: {error}")
+                print("检测到下注业务错误，已停止剩余批量任务")
+                break
             except Exception as error:
                 print(f"[{index}/{count}] 创建账号失败: {error}")
                 time.sleep(2)

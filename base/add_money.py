@@ -97,3 +97,8 @@ def add_money(user_id: int, amount: int, remark: str = "") -> Dict[str, Any]:
     )
     response.raise_for_status()
     return response.json()
+
+
+def operation_succeeded(result: Dict[str, Any]) -> bool:
+    """Admin operations use ``code == 0`` for business success."""
+    return result.get("code") == 0

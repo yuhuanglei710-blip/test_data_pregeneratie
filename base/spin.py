@@ -1,9 +1,9 @@
 """Helpers for obtaining a game token and placing a test spin."""
 
 import base64
+import binascii
 import json
 import time
-from threading import Lock
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -18,10 +18,10 @@ SPIN_ORIGIN = "https://h5gz.szhdev.top"
 REQUEST_TIMEOUT = 30
 ERROR_BODY_LIMIT = 300
 TOKEN_EXPIRY_LEEWAY = 5
+DEFAULT_BET_CENTS = 1_000
 
-# Tokens are cached only for the lifetime of the current Python process.
 _game_token_cache: Dict[str, str] = {}
-_game_token_lock = Lock()
+_game_session_cache: Dict[str, str] = {}
 
 
 def _game_url_headers(user_token: str) -> Dict[str, str]:
@@ -51,8 +51,32 @@ def _extract_game_token(result: Dict[str, Any]) -> str:
     return query_params["sign"][0]
 
 
+def _decode_base64_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    try:
+        decoded_text = base64.b64decode(value, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return value
+
+    try:
+        return json.loads(decoded_text)
+    except json.JSONDecodeError:
+        return decoded_text
+
+
+def _decode_api_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Decode Base64-wrapped ``data`` and ``msg`` fields for readable output."""
+    decoded_result = result.copy()
+    for field in ("data", "msg"):
+        if field in decoded_result:
+            decoded_result[field] = _decode_base64_value(decoded_result[field])
+    return decoded_result
+
+
 def _is_token_expired(token: str, *, now: Optional[float] = None) -> bool:
-    """Check only the JWT expiry; signature validation is intentionally skipped."""
+    """Check the JWT ``exp`` locally without verifying its signature."""
     try:
         claims = jwt.decode(
             token,
@@ -64,6 +88,15 @@ def _is_token_expired(token: str, *, now: Optional[float] = None) -> bool:
 
     current_time = time.time() if now is None else now
     return expires_at <= current_time + TOKEN_EXPIRY_LEEWAY
+
+
+def _spin_failed(result: Dict[str, Any]) -> bool:
+    message = result.get("msg")
+    if isinstance(message, str):
+        normalized_message = message.casefold()
+        if any(word in normalized_message for word in ("error", "fail", "失败", "错误")):
+            return True
+    return result.get("data") == {} and bool(message)
 
 
 def _response_summary(response: requests.Response) -> str:
@@ -124,46 +157,43 @@ def get_valid_game_token(
     *,
     verbose: bool = False,
 ) -> Optional[str]:
-    """Reuse the cached game token until its JWT ``exp`` time is reached."""
+    """Reuse a game token until its JWT expiry time is reached."""
     cached_token = _game_token_cache.get(user_token)
     if cached_token and not _is_token_expired(cached_token):
         return cached_token
 
-    # Recheck inside the lock so concurrent workers do not refresh it together.
-    with _game_token_lock:
-        cached_token = _game_token_cache.get(user_token)
-        if cached_token and not _is_token_expired(cached_token):
-            return cached_token
+    game_token = get_game_token(user_token, verbose=verbose)
+    if not game_token or _is_token_expired(game_token):
+        _game_token_cache.pop(user_token, None)
+        _game_session_cache.pop(user_token, None)
+        return None
 
-        game_token = get_game_token(user_token, verbose=verbose)
-        if not game_token:
-            _game_token_cache.pop(user_token, None)
-            return None
-        if _is_token_expired(game_token):
-            _game_token_cache.pop(user_token, None)
-            print("[spin] 新获取的游戏 token 已过期或不包含有效的 exp")
-            return None
-
-        _game_token_cache[user_token] = game_token
-        return game_token
+    _game_token_cache[user_token] = game_token
+    _game_session_cache.pop(user_token, None)
+    return game_token
 
 
 def dev_spin(
     user_token: str,
     *,
+    bet_amount: int = DEFAULT_BET_CENTS,
     verbose: bool = False,
+    print_result: bool = True,
 ) -> Optional[requests.Response]:
-    """Obtain a game token and place one development-environment spin."""
+    """Place one spin while preserving the token and ordered game session."""
+    if bet_amount <= 0:
+        raise ValueError("下注金额必须大于 0")
+
     game_token = get_valid_game_token(user_token, verbose=verbose)
     if not game_token:
         return None
 
     payload = {
         "token": game_token,
-        "bet": 10000,
+        "bet": bet_amount,
         "money_type": "SC",
         "game_id": 100001,
-        "session_id": "",
+        "session_id": _game_session_cache.get(user_token, ""),
     }
     headers = {
         "Accept": "application/json, text/plain, */*",
@@ -182,7 +212,8 @@ def dev_spin(
             headers=headers,
             timeout=REQUEST_TIMEOUT,
         )
-        _print_debug("下注", response, verbose)
+        if verbose:
+            print(f"[spin:debug] 下注 HTTP {response.status_code}")
         if response.status_code != 200:
             print(
                 f"[spin] 下注失败（HTTP {response.status_code}）："
@@ -190,7 +221,26 @@ def dev_spin(
             )
             return None
 
-        response.json()
+        result = _decode_api_result(response.json())
+        if print_result:
+            indent = 2 if verbose else None
+            separators = None if verbose else (",", ":")
+            formatted_result = json.dumps(
+                result,
+                ensure_ascii=False,
+                indent=indent,
+                separators=separators,
+            )
+            print(f"[spin] 下注响应：{formatted_result}")
+        if _spin_failed(result):
+            print(f"[spin] 下注业务失败：{result.get('msg', '未知错误')}")
+            return None
+
+        result_data = result.get("data")
+        if isinstance(result_data, dict):
+            session_id = result_data.get("session_id")
+            if isinstance(session_id, str) and session_id:
+                _game_session_cache[user_token] = session_id
         return response
     except (TypeError, ValueError) as error:
         print(f"[spin] 下注响应解析失败：{error}")

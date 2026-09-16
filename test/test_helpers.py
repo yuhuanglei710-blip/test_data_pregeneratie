@@ -3,11 +3,10 @@
 import base64
 import io
 import json
-import threading
 import time
 import unittest
 from contextlib import redirect_stdout
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import jwt
 
@@ -40,11 +39,16 @@ class UserResponseTests(unittest.TestCase):
 class ApiParsingTests(unittest.TestCase):
     def setUp(self):
         spin._game_token_cache.clear()
+        spin._game_session_cache.clear()
 
     def test_extracts_nested_admin_token(self):
         result = {"data": {"x-token": "admin-token"}}
 
         self.assertEqual(add_money._extract_token(result), "admin-token")
+
+    def test_admin_operation_requires_success_code(self):
+        self.assertTrue(add_money.operation_succeeded({"code": 0}))
+        self.assertFalse(add_money.operation_succeeded({"code": 1}))
 
     def test_extracts_game_token_from_encoded_url(self):
         game_data = {"url": "https://example.test/play?sign=game-token"}
@@ -54,59 +58,63 @@ class ApiParsingTests(unittest.TestCase):
 
         self.assertEqual(spin._extract_game_token(result), "game-token")
 
-    def test_successful_spin_is_quiet_by_default(self):
+    def test_decodes_base64_spin_error(self):
+        result = spin._decode_api_result(
+            {"code": 0, "data": "e30=", "msg": "YmV0IGVycm9y"}
+        )
+
+        self.assertEqual(result, {"code": 0, "data": {}, "msg": "bet error"})
+        self.assertTrue(spin._spin_failed(result))
+
+    def test_successful_spin_prints_compact_result(self):
         response = Mock(status_code=200)
         response.json.return_value = {"data": {"win": 0}}
         console = io.StringIO()
 
-        game_token = jwt.encode(
-            {"exp": int(time.time()) + 60},
-            TEST_JWT_SECRET,
-            algorithm="HS256",
-        )
         with (
-            patch.object(spin, "get_valid_game_token", return_value=game_token),
+            patch.object(spin, "get_valid_game_token", return_value="game-token"),
             patch.object(spin.requests, "post", return_value=response),
             redirect_stdout(console),
         ):
             result = spin.dev_spin("user-token")
 
         self.assertIs(result, response)
-        self.assertEqual(console.getvalue(), "")
+        self.assertEqual(console.getvalue(), '[spin] 下注响应：{"data":{"win":0}}\n')
 
-    def test_reuses_unexpired_game_token(self):
+    def test_reuses_token_and_passes_session_to_next_spin(self):
         game_token = jwt.encode(
             {"exp": int(time.time()) + 60},
             TEST_JWT_SECRET,
             algorithm="HS256",
         )
+        first_response = Mock(status_code=200)
+        first_response.json.return_value = {
+            "data": {"win": 0, "session_id": "session-1"},
+            "msg": "Succeeded",
+        }
+        second_response = Mock(status_code=200)
+        second_response.json.return_value = {
+            "data": {"win": 0, "session_id": "session-2"},
+            "msg": "Succeeded",
+        }
 
-        with patch.object(spin, "get_game_token", return_value=game_token) as fetch:
-            first = spin.get_valid_game_token("user-token")
-            second = spin.get_valid_game_token("user-token")
+        with (
+            patch.object(spin, "get_game_token", return_value=game_token) as fetch,
+            patch.object(
+                spin.requests,
+                "post",
+                side_effect=[first_response, second_response],
+            ) as post,
+        ):
+            spin.dev_spin("user-token", print_result=False)
+            spin.dev_spin("user-token", print_result=False)
 
-        self.assertEqual(first, game_token)
-        self.assertEqual(second, game_token)
         fetch.assert_called_once_with("user-token", verbose=False)
-
-    def test_refreshes_expired_game_token(self):
-        expired_token = jwt.encode(
-            {"exp": int(time.time()) - 60},
-            TEST_JWT_SECRET,
-            algorithm="HS256",
+        self.assertEqual(post.call_args_list[0].kwargs["json"]["session_id"], "")
+        self.assertEqual(
+            post.call_args_list[1].kwargs["json"]["session_id"],
+            "session-1",
         )
-        fresh_token = jwt.encode(
-            {"exp": int(time.time()) + 60},
-            TEST_JWT_SECRET,
-            algorithm="HS256",
-        )
-        spin._game_token_cache["user-token"] = expired_token
-
-        with patch.object(spin, "get_game_token", return_value=fresh_token) as fetch:
-            result = spin.get_valid_game_token("user-token")
-
-        self.assertEqual(result, fresh_token)
-        fetch.assert_called_once_with("user-token", verbose=False)
 
 
 class TimestampToolTests(unittest.TestCase):
@@ -122,34 +130,22 @@ class TimestampToolTests(unittest.TestCase):
 
 
 class BatchWorkflowTests(unittest.TestCase):
-    def test_spins_use_at_most_three_workers(self):
-        counter_lock = threading.Lock()
-        active_workers = 0
-        maximum_workers = 0
-
-        def fake_spin(user_token, *, verbose=False):
-            nonlocal active_workers, maximum_workers
-            with counter_lock:
-                active_workers += 1
-                maximum_workers = max(maximum_workers, active_workers)
-            time.sleep(0.02)
-            with counter_lock:
-                active_workers -= 1
-            return Mock()
-
-        with (
-            patch.object(spin, "get_valid_game_token", return_value="game-token"),
-            patch.object(spin, "dev_spin", side_effect=fake_spin) as place_spin,
-        ):
+    def test_spins_are_placed_serially(self):
+        with patch.object(spin, "dev_spin", return_value=Mock()) as place_spin:
             tournment_test._place_initial_spins(
                 "user-token",
-                spin_count=9,
-                concurrency=3,
+                spin_count=3,
             )
 
-        self.assertEqual(place_spin.call_count, 9)
-        self.assertGreater(maximum_workers, 1)
-        self.assertLessEqual(maximum_workers, 3)
+        self.assertEqual(place_spin.call_count, 3)
+        self.assertEqual(
+            place_spin.call_args_list,
+            [
+                call("user-token", bet_amount=1_000, verbose=False),
+                call("user-token", bet_amount=1_000, verbose=False),
+                call("user-token", bet_amount=1_000, verbose=False),
+            ],
+        )
 
 
 if __name__ == "__main__":

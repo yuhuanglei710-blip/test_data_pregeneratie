@@ -244,7 +244,7 @@ class User:
 
 if __name__ == "__main__":
     user = User(environment="dev")
-    user.register(platform=Platform.web.value, verbose=True)
+    user.register(platform=Platform.ios.value, verbose=True)
     print(
         "=================== 注册成功!",
         f"\n环境: {User.map_translate_dic(user.environment)}",
