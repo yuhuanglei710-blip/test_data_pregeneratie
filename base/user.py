@@ -3,15 +3,15 @@
 import base64
 import http.client
 import json
-import os
 import random
 import string
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import jwt
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 try:  # Support ``python -m base.user``.
     from .enums import Platform
@@ -33,6 +33,9 @@ DEFAULT_PASSWORD = "123456"
 DEFAULT_PASSWORD_HASH = "e10adc3949ba59abbe56e057f20f883e"
 DEFAULT_CHANNEL_CODE = "com.hotspin777.hotspin|testtest|"
 DEFAULT_DOWN_ORIGIN = "gpa17drop"
+
+_oaid_lock = threading.Lock()
+_last_oaid = 0
 
 
 class User:
@@ -57,8 +60,7 @@ class User:
             raise ValueError(f"不支持的环境 {environment!r}，可选值：{supported}")
 
         env_file = PROJECT_ROOT / f"{environment}.env"
-        load_dotenv(env_file, override=True)
-        domain = os.getenv("domain")
+        domain = dotenv_values(env_file).get("domain")
         if not domain:
             raise RuntimeError(f"未在 {env_file.name} 中配置 domain")
         return domain
@@ -69,6 +71,15 @@ class User:
         letters = "".join(random.choices(string.ascii_lowercase, k=4))
         digits = "".join(random.choices(string.digits, k=2))
         return f"{letters}{digits}@cc.cc"
+
+    @staticmethod
+    def _generate_oaid() -> str:
+        """Create a unique millisecond-style id across parallel workers."""
+        global _last_oaid
+        with _oaid_lock:
+            current = int(time.time() * 1000)
+            _last_oaid = max(current, _last_oaid + 1)
+            return str(_last_oaid)
 
     def register(
         self,
@@ -83,7 +94,7 @@ class User:
         self.platform = platform
         self.channel_code = channel_code
 
-        oaid = str(int(time.time() * 1000))
+        oaid = self._generate_oaid()
         response = self._post_registration(self._build_registration_payload(oaid))
         decoded_response = self._decode_registration_response(response)
 

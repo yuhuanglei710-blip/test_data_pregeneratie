@@ -1,1 +1,7 @@
-print("this is a test")
+"""Launch the desktop controller."""
+
+from gui import main
+
+
+if __name__ == "__main__":
+    main()
