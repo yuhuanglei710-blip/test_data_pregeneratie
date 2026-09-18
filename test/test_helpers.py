@@ -12,8 +12,15 @@ from unittest.mock import Mock, call, patch
 
 import jwt
 
-from base import account_batch, add_money, spin, tournment_test
-from base.user import User
+from base import account_batch, add_money, database_config, spin, tournment_test
+from base.app_config import load_channel_codes, save_channel_codes
+from base.database_config import (
+    DatabaseConnectionConfig,
+    load_database_connections,
+    save_database_connection,
+)
+from base.enums import Platform
+from base.user import DEFAULT_CHANNEL_CODE, User
 from tools.timestamp_tool import TimestampTool
 
 
@@ -42,6 +49,149 @@ class UserResponseTests(unittest.TestCase):
 
         self.assertEqual(user_data, {"id": 42})
         self.assertEqual(token, "token-value")
+
+
+class AppConfigTests(unittest.TestCase):
+    def test_missing_channel_code_config_uses_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            codes = load_channel_codes("dev", f"{temp_dir}/missing.json")
+
+        self.assertEqual(codes, [DEFAULT_CHANNEL_CODE])
+
+    def test_channel_codes_are_normalized_and_persisted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = f"{temp_dir}/channel_codes.json"
+            saved = save_channel_codes(
+                "dev",
+                [" first ", "first", "second"],
+                config_file,
+            )
+            loaded = load_channel_codes("dev", config_file)
+
+        self.assertEqual(saved, ["first", "second"])
+        self.assertEqual(loaded, ["first", "second"])
+
+    def test_channel_codes_are_isolated_by_environment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = f"{temp_dir}/channel_codes.json"
+            save_channel_codes("dev", ["dev-code"], config_file)
+            save_channel_codes("prod", ["prod-code"], config_file)
+
+            dev_codes = load_channel_codes("dev", config_file)
+            prod_codes = load_channel_codes("prod", config_file)
+            huidu_codes = load_channel_codes("huidu", config_file)
+
+        self.assertEqual(dev_codes, ["dev-code"])
+        self.assertEqual(prod_codes, ["prod-code"])
+        self.assertEqual(huidu_codes, [DEFAULT_CHANNEL_CODE])
+
+
+class DatabaseConfigTests(unittest.TestCase):
+    @staticmethod
+    def _connection(private_key: str, ssh_host: str) -> DatabaseConnectionConfig:
+        return DatabaseConnectionConfig(
+            ssh_host=ssh_host,
+            ssh_username="deploy",
+            ssh_private_key=private_key,
+            database_name="automation",
+            database_username="tester",
+            database_password="secret",
+        )
+
+    def test_connections_are_isolated_by_environment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            key_file = f"{temp_dir}/id_test"
+            with open(key_file, "w", encoding="utf-8") as private_key:
+                private_key.write("test key")
+            config_file = f"{temp_dir}/database_connections.json"
+            save_database_connection(
+                "dev",
+                self._connection(key_file, "dev-ssh.example.test"),
+                config_file,
+            )
+            save_database_connection(
+                "prod",
+                self._connection(key_file, "prod-ssh.example.test"),
+                config_file,
+            )
+
+            connections = load_database_connections(config_file)
+
+        self.assertEqual(connections["dev"].ssh_host, "dev-ssh.example.test")
+        self.assertEqual(connections["prod"].ssh_host, "prod-ssh.example.test")
+        self.assertEqual(connections["huidu"].ssh_host, "")
+
+    def test_missing_private_key_is_rejected(self):
+        connection = self._connection("missing-private-key", "ssh.example.test")
+
+        with self.assertRaisesRegex(ValueError, "私钥文件不存在"):
+            database_config.validate_database_connection(connection)
+        self.assertFalse(
+            database_config.is_database_connection_configured(connection)
+        )
+
+    def test_complete_connection_is_detected_as_configured(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            key_file = f"{temp_dir}/id_test"
+            with open(key_file, "w", encoding="utf-8") as private_key:
+                private_key.write("test key")
+            connection = self._connection(key_file, "ssh.example.test")
+
+            configured = database_config.is_database_connection_configured(
+                connection
+            )
+
+        self.assertTrue(configured)
+
+    def test_private_key_is_imported_once_and_can_be_removed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            key_file = f"{temp_dir}/id_ed25519"
+            library_file = f"{temp_dir}/ssh_private_keys.json"
+            with open(key_file, "w", encoding="utf-8") as private_key:
+                private_key.write("test key")
+
+            first = database_config.import_ssh_private_key(
+                key_file,
+                library_file,
+            )
+            second = database_config.import_ssh_private_key(
+                key_file,
+                library_file,
+            )
+            loaded = database_config.load_ssh_private_keys(library_file)
+
+            self.assertEqual(first.key_id, second.key_id)
+            self.assertEqual(list(loaded), [first.key_id])
+            self.assertEqual(loaded[first.key_id].path, first.path)
+
+            database_config.remove_ssh_private_key(
+                first.key_id,
+                library_file,
+            )
+            remaining = database_config.load_ssh_private_keys(library_file)
+
+        self.assertEqual(remaining, {})
+
+    def test_ssh_uses_only_selected_private_key(self):
+        connection = self._connection("selected-private-key", "ssh.example.test")
+        client = Mock()
+
+        with patch("paramiko.SSHClient", return_value=client):
+            result = database_config._connect_ssh_client(connection)
+
+        self.assertIs(result, client)
+        client.connect.assert_called_once_with(
+            hostname="ssh.example.test",
+            port=22,
+            username="deploy",
+            key_filename="selected-private-key",
+            password=None,
+            allow_agent=False,
+            look_for_keys=False,
+            timeout=10,
+            banner_timeout=10,
+            auth_timeout=10,
+        )
 
 
 class ApiParsingTests(unittest.TestCase):
@@ -73,6 +223,43 @@ class ApiParsingTests(unittest.TestCase):
 
         self.assertEqual(result, {"code": 0, "data": {}, "msg": "bet error"})
         self.assertTrue(spin._spin_failed(result))
+
+    def test_huidu_game_token_uses_gray_environment_endpoints(self):
+        game_info = {
+            "url": "https://game.example.test/play?sign=huidu-game-token"
+        }
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "data": base64.b64encode(
+                json.dumps(game_info).encode("utf-8")
+            ).decode("ascii")
+        }
+
+        with patch.object(spin.requests, "post", return_value=response) as post:
+            token = spin.get_game_token(
+                "huidu-user-token",
+                environment="huidu",
+            )
+
+        self.assertEqual(token, "huidu-game-token")
+        request = post.call_args
+        self.assertEqual(
+            request.args[0],
+            "https://hdapi.ushdev.top/v1/gamehall/self_game_url",
+        )
+        self.assertEqual(
+            request.kwargs["headers"]["Origin"],
+            "https://newhdweb.ushdev.top",
+        )
+        self.assertNotIn("version", request.kwargs["headers"])
+        self.assertEqual(
+            request.kwargs["json"]["exit_event"],
+            "https://newhdweb.ushdev.top/home",
+        )
+        self.assertEqual(
+            request.kwargs["json"]["cash_event"],
+            "https://newhdweb.ushdev.top/backshop",
+        )
 
     def test_successful_spin_prints_compact_result(self):
         response = Mock(status_code=200)
@@ -117,7 +304,11 @@ class ApiParsingTests(unittest.TestCase):
             spin.dev_spin("user-token", print_result=False)
             spin.dev_spin("user-token", print_result=False)
 
-        fetch.assert_called_once_with("user-token", verbose=False)
+        fetch.assert_called_once_with(
+            "user-token",
+            environment="dev",
+            verbose=False,
+        )
         self.assertEqual(post.call_args_list[0].kwargs["json"]["session_id"], "")
         self.assertEqual(
             post.call_args_list[1].kwargs["json"]["session_id"],
@@ -138,6 +329,38 @@ class TimestampToolTests(unittest.TestCase):
 
 
 class BatchWorkflowTests(unittest.TestCase):
+    def test_tournament_registration_uses_selected_channel_code(self):
+        account = Mock(uid=42, token="user-token", email="tournament@cc.cc")
+        with (
+            patch.object(tournment_test, "User", return_value=account),
+            patch.object(
+                tournment_test.add_money,
+                "add_money",
+                return_value={"code": 0},
+            ),
+            patch.object(tournment_test, "_place_initial_spins"),
+        ):
+            tournment_test._create_account_and_bet(
+                1,
+                1,
+                environment="dev",
+                platform=Platform.ios.value,
+                channel_code="tournament-channel",
+                admin_base_url="https://admin.example.test",
+                initial_balance=1_000,
+                spin_count=3,
+                spin_count_range=None,
+                bet_amount=100,
+                verbose=False,
+                stop_requested=lambda: False,
+            )
+
+        account.register.assert_called_once_with(
+            channel_code="tournament-channel",
+            platform=Platform.ios.value,
+            verbose=False,
+        )
+
     def test_random_spin_count_uses_given_range(self):
         with patch.object(tournment_test.random, "randint", return_value=23) as randint:
             result = tournment_test._resolve_spin_count(30, (20, 30))
@@ -160,9 +383,50 @@ class BatchWorkflowTests(unittest.TestCase):
         self.assertEqual(
             place_spin.call_args_list,
             [
-                call("user-token", bet_amount=1_000, verbose=False),
-                call("user-token", bet_amount=1_000, verbose=False),
-                call("user-token", bet_amount=1_000, verbose=False),
+                call(
+                    "user-token",
+                    environment="dev",
+                    bet_amount=1_000,
+                    verbose=False,
+                ),
+                call(
+                    "user-token",
+                    environment="dev",
+                    bet_amount=1_000,
+                    verbose=False,
+                ),
+                call(
+                    "user-token",
+                    environment="dev",
+                    bet_amount=1_000,
+                    verbose=False,
+                ),
+            ],
+        )
+
+    def test_huidu_environment_is_forwarded_to_every_spin(self):
+        with patch.object(spin, "dev_spin", return_value=Mock()) as place_spin:
+            tournment_test._place_initial_spins(
+                "huidu-user-token",
+                spin_count=2,
+                environment="huidu",
+            )
+
+        self.assertEqual(
+            place_spin.call_args_list,
+            [
+                call(
+                    "huidu-user-token",
+                    environment="huidu",
+                    bet_amount=1_000,
+                    verbose=False,
+                ),
+                call(
+                    "huidu-user-token",
+                    environment="huidu",
+                    bet_amount=1_000,
+                    verbose=False,
+                ),
             ],
         )
 
@@ -231,8 +495,35 @@ class BatchWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "并行账号数"):
             tournment_test.create_accounts_and_bet(count=1, max_workers=0)
 
+    def test_tournament_web_platform_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Android 或 iOS"):
+            tournment_test.create_accounts_and_bet(
+                count=1,
+                platform=Platform.web.value,
+            )
+
 
 class AccountCreationTests(unittest.TestCase):
+    def test_selected_platform_is_used_for_registration(self):
+        account = Mock(uid=42, token="user-token", email="android@cc.cc")
+        with patch.object(account_batch, "User", return_value=account):
+            result = account_batch._register_account(
+                1,
+                1,
+                environment="dev",
+                platform=Platform.android.value,
+                channel_code="android-channel",
+                verbose=False,
+                stop_requested=lambda: False,
+            )
+
+        account.register.assert_called_once_with(
+            channel_code="android-channel",
+            platform=Platform.android.value,
+            verbose=False,
+        )
+        self.assertEqual(result.index, 1)
+
     def test_account_only_workflow_exports_registered_accounts(self):
         progress = []
 
@@ -261,6 +552,14 @@ class AccountCreationTests(unittest.TestCase):
         self.assertEqual(successful, 3)
         self.assertEqual(progress[-1], (3, 3, 3))
         self.assertEqual(lines, {"account 1\n", "account 2\n", "account 3\n"})
+
+    def test_web_platform_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Android 或 iOS"):
+            account_batch.create_accounts(count=1, platform=Platform.web.value)
+
+    def test_empty_channel_code_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Channel Code"):
+            account_batch.create_accounts(count=1, channel_code="  ")
 
 
 if __name__ == "__main__":

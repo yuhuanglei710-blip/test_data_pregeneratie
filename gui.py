@@ -5,33 +5,51 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QFontDatabase, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
-    QTabWidget,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from base import spin
 from base.account_batch import create_accounts
+from base.app_config import load_channel_code_config, save_channel_codes
+from base.database_config import (
+    DatabaseConnectionConfig,
+    SshPrivateKey,
+    import_ssh_private_key,
+    is_database_connection_configured,
+    load_database_connections,
+    load_ssh_private_keys,
+    remove_ssh_private_key,
+    save_database_connection,
+    test_database_connection,
+    validate_database_connection,
+)
+from base.enums import Platform
 from base.tournment_test import (
     DEFAULT_ACCOUNT_COUNT,
     DEFAULT_MAX_WORKERS,
@@ -82,28 +100,58 @@ QFrame#settingsPanel, QFrame#terminalPanel {
     border: 1px solid #292c33;
     border-radius: 10px;
 }
+QFrame#configCard {
+    background: #121418;
+    border: 1px solid #292c33;
+    border-radius: 9px;
+}
 QFrame#terminalPanel {
     background: #121316;
 }
-QTabWidget#modeTabs::pane {
-    background: transparent;
-    border: 0;
+QFrame#navigation {
+    background: #15171b;
+    border: 1px solid #292c33;
+    border-radius: 10px;
 }
-QTabWidget#modeTabs QTabBar::tab {
-    min-width: 118px;
-    color: #737882;
+QLabel#navigationBrand {
+    color: #f4f5f7;
+    font-family: "Cascadia Mono", "Consolas";
+    font-size: 15px;
+    font-weight: 700;
+}
+QLabel#navigationMeta {
+    color: #626771;
+    font-family: "Cascadia Mono", "Consolas";
+    font-size: 10px;
+}
+QPushButton#navigationButton {
+    min-height: 42px;
+    color: #888d97;
     background: transparent;
     border: 0;
-    border-bottom: 2px solid #292c33;
-    padding: 10px 4px;
+    border-radius: 7px;
+    padding: 0 14px;
+    text-align: left;
     font-weight: 600;
 }
-QTabWidget#modeTabs QTabBar::tab:hover {
-    color: #cdd0d6;
+QPushButton#navigationButton:hover {
+    color: #e2e4e8;
+    background: #202329;
 }
-QTabWidget#modeTabs QTabBar::tab:selected {
-    color: #f4f5f7;
-    border-bottom-color: #f0f2f4;
+QPushButton#navigationButton:checked {
+    color: #ffffff;
+    background: #2a2e35;
+}
+QPushButton#navigationButton:disabled {
+    color: #50545c;
+    background: transparent;
+}
+QScrollArea#settingsScroll {
+    background: transparent;
+    border: 0;
+}
+QWidget#settingsPage {
+    background: transparent;
 }
 QLabel#sectionTitle {
     color: #f1f2f4;
@@ -133,6 +181,36 @@ QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {
     color: #5f646d;
     background: #1d2025;
     border-color: #292c32;
+}
+QListWidget#channelCodeList {
+    color: #d7dae0;
+    background: #0f1013;
+    border: 1px solid #30343b;
+    border-radius: 7px;
+    padding: 5px;
+    outline: 0;
+}
+QLabel#connectionStatus {
+    color: #8f949e;
+    background: #0f1013;
+    border: 1px solid #30343b;
+    border-radius: 7px;
+    padding: 10px;
+}
+QDialog {
+    background: #17191d;
+}
+QListWidget#channelCodeList::item {
+    min-height: 32px;
+    padding: 0 8px;
+    border-radius: 5px;
+}
+QListWidget#channelCodeList::item:hover {
+    background: #20242a;
+}
+QListWidget#channelCodeList::item:selected {
+    color: #ffffff;
+    background: #30353d;
 }
 QComboBox::drop-down {
     width: 28px;
@@ -323,6 +401,257 @@ class WorkflowWorker(QObject):
             self.done.emit()
 
 
+class DatabaseTestWorker(QObject):
+    """Test a database connection without blocking the Qt event loop."""
+
+    succeeded = Signal(str)
+    failed = Signal(str)
+    done = Signal()
+
+    def __init__(self, connection: DatabaseConnectionConfig):
+        super().__init__()
+        self.connection = connection
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.succeeded.emit(test_database_connection(self.connection))
+        except Exception as error:
+            self.failed.emit(str(error))
+        finally:
+            self.done.emit()
+
+
+class DatabaseConnectionDialog(QDialog):
+    """Modal editor for one environment's private-key database connection."""
+
+    def __init__(
+        self,
+        environment: str,
+        connection: DatabaseConnectionConfig,
+        private_keys: Dict[str, SshPrivateKey],
+        parent: QWidget,
+    ):
+        super().__init__(parent)
+        self.environment = environment
+        self.private_keys = private_keys
+        self.legacy_private_key_path = connection.ssh_private_key
+        self.saved_connection: Optional[DatabaseConnectionConfig] = None
+        self.test_thread: Optional[QThread] = None
+        self.test_worker: Optional[DatabaseTestWorker] = None
+        self.setWindowTitle(f"数据库连接 · {environment}")
+        self.setModal(True)
+        self.resize(640, 650)
+        self.setMinimumSize(560, 600)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(14)
+
+        title = QLabel(f"{environment} · SSH 数据库连接")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        description = QLabel(
+            "SSH 仅使用导入的私钥文件；不使用 SSH 密码、Agent 或自动密钥搜索。"
+        )
+        description.setObjectName("fieldHint")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(11)
+        form.setColumnStretch(1, 1)
+
+        self.ssh_host = QLineEdit(connection.ssh_host)
+        self.ssh_host.setPlaceholderText("SSH 跳板机地址")
+        self._add_row(form, 0, "SSH 主机", self.ssh_host)
+
+        self.ssh_port = self._port_spin(connection.ssh_port)
+        self._add_row(form, 1, "SSH 端口", self.ssh_port)
+
+        self.ssh_username = QLineEdit(connection.ssh_username)
+        self.ssh_username.setPlaceholderText("SSH 用户名")
+        self._add_row(form, 2, "SSH 用户", self.ssh_username)
+
+        self.ssh_private_key = QComboBox()
+        for key in private_keys.values():
+            self.ssh_private_key.addItem(key.name, key.key_id)
+        if connection.ssh_private_key and not connection.ssh_private_key_id:
+            self.ssh_private_key.addItem(
+                f"{Path(connection.ssh_private_key).name}（旧配置）",
+                "__legacy__",
+            )
+        if self.ssh_private_key.count() == 0:
+            self.ssh_private_key.addItem("请先在参数配置中导入私钥", None)
+            self.ssh_private_key.setEnabled(False)
+        selected_key = self.ssh_private_key.findData(
+            connection.ssh_private_key_id or "__legacy__"
+        )
+        if selected_key >= 0:
+            self.ssh_private_key.setCurrentIndex(selected_key)
+        self._add_row(form, 3, "SSH 私钥", self.ssh_private_key)
+
+        self.database_host = QLineEdit(connection.database_host)
+        self.database_host.setPlaceholderText("SSH 服务器可访问的数据库地址")
+        self._add_row(form, 4, "数据库主机", self.database_host)
+
+        self.database_port = self._port_spin(connection.database_port)
+        self._add_row(form, 5, "数据库端口", self.database_port)
+
+        self.database_name = QLineEdit(connection.database_name)
+        self._add_row(form, 6, "数据库名称", self.database_name)
+
+        self.database_username = QLineEdit(connection.database_username)
+        self._add_row(form, 7, "数据库用户", self.database_username)
+
+        self.database_password = QLineEdit(connection.database_password)
+        self.database_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self._add_row(form, 8, "数据库密码", self.database_password)
+        layout.addLayout(form)
+
+        self.connection_status = QLabel("可先测试连接，确认无误后保存。")
+        self.connection_status.setObjectName("connectionStatus")
+        self.connection_status.setWordWrap(True)
+        layout.addWidget(self.connection_status)
+        layout.addStretch()
+
+        buttons = QHBoxLayout()
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.setObjectName("secondaryButton")
+        self.cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(self.cancel_button)
+        buttons.addStretch()
+        self.test_button = QPushButton("测试连接")
+        self.test_button.setObjectName("secondaryButton")
+        self.test_button.clicked.connect(self._test_connection)
+        buttons.addWidget(self.test_button)
+        self.save_button = QPushButton("保存")
+        self.save_button.setObjectName("primaryButton")
+        self.save_button.clicked.connect(self._save)
+        buttons.addWidget(self.save_button)
+        layout.addLayout(buttons)
+
+        self.editable_widgets = [
+            self.ssh_host,
+            self.ssh_port,
+            self.ssh_username,
+            self.ssh_private_key,
+            self.database_host,
+            self.database_port,
+            self.database_name,
+            self.database_username,
+            self.database_password,
+            self.cancel_button,
+            self.test_button,
+            self.save_button,
+        ]
+
+    @staticmethod
+    def _port_spin(value: int) -> QSpinBox:
+        widget = QSpinBox()
+        widget.setRange(1, 65535)
+        widget.setValue(value)
+        widget.setGroupSeparatorShown(True)
+        widget.setAlignment(Qt.AlignmentFlag.AlignRight)
+        return widget
+
+    @staticmethod
+    def _add_row(
+        layout: QGridLayout,
+        row: int,
+        label_text: str,
+        widget: QWidget,
+    ) -> None:
+        label = QLabel(label_text)
+        label.setObjectName("fieldLabel")
+        layout.addWidget(label, row, 0)
+        layout.addWidget(widget, row, 1)
+
+    def connection(self) -> DatabaseConnectionConfig:
+        selected_key_id = self.ssh_private_key.currentData()
+        is_legacy_key = selected_key_id == "__legacy__"
+        return DatabaseConnectionConfig(
+            ssh_host=self.ssh_host.text().strip(),
+            ssh_port=self.ssh_port.value(),
+            ssh_username=self.ssh_username.text().strip(),
+            ssh_private_key_id=(
+                "" if is_legacy_key or selected_key_id is None else selected_key_id
+            ),
+            ssh_private_key=(self.legacy_private_key_path if is_legacy_key else ""),
+            database_host=self.database_host.text().strip(),
+            database_port=self.database_port.value(),
+            database_name=self.database_name.text().strip(),
+            database_username=self.database_username.text().strip(),
+            database_password=self.database_password.text(),
+        )
+
+    @Slot()
+    def _save(self) -> None:
+        connection = self.connection()
+        try:
+            self.saved_connection = save_database_connection(
+                self.environment,
+                connection,
+            )
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "保存失败", str(error))
+            return
+        self.accept()
+
+    @Slot()
+    def _test_connection(self) -> None:
+        if self.test_thread and self.test_thread.isRunning():
+            return
+        connection = self.connection()
+        try:
+            validate_database_connection(connection)
+        except ValueError as error:
+            QMessageBox.critical(self, "参数错误", str(error))
+            return
+
+        self._set_testing(True)
+        self.connection_status.setText("正在通过 SSH 私钥建立连接…")
+        self.test_thread = QThread(self)
+        self.test_worker = DatabaseTestWorker(connection)
+        self.test_worker.moveToThread(self.test_thread)
+        self.test_thread.started.connect(self.test_worker.run)
+        self.test_worker.succeeded.connect(self.connection_status.setText)
+        self.test_worker.failed.connect(
+            lambda message: self.connection_status.setText(
+                f"连接失败：{message or '请检查 SSH 与数据库配置'}"
+            )
+        )
+        self.test_worker.done.connect(self.test_thread.quit)
+        self.test_worker.done.connect(self.test_worker.deleteLater)
+        self.test_thread.finished.connect(self._test_finished)
+        self.test_thread.finished.connect(self.test_thread.deleteLater)
+        self.test_thread.start()
+
+    @Slot()
+    def _test_finished(self) -> None:
+        self.test_worker = None
+        self.test_thread = None
+        self._set_testing(False)
+
+    def _set_testing(self, testing: bool) -> None:
+        for widget in self.editable_widgets:
+            widget.setEnabled(not testing)
+
+    def reject(self) -> None:
+        if self.test_thread and self.test_thread.isRunning():
+            QMessageBox.information(self, "正在测试连接", "连接测试结束后才能关闭。")
+            return
+        super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self.test_thread and self.test_thread.isRunning():
+            QMessageBox.information(self, "正在测试连接", "连接测试结束后才能关闭。")
+            event.ignore()
+            return
+        event.accept()
+
+
 class WorkflowWindow(QMainWindow):
     """Termius-inspired controller window backed by a Qt worker thread."""
 
@@ -335,7 +664,15 @@ class WorkflowWindow(QMainWindow):
         self.worker_thread: Optional[QThread] = None
         self.worker: Optional[WorkflowWorker] = None
         self.close_after_stop = False
+        self.current_section = 0
         self.config_widgets: list[QWidget] = []
+        self.navigation_buttons: list[QPushButton] = []
+        self.database_status_controls: list[tuple[QComboBox, QPushButton]] = []
+        self.database_breath_bright = True
+        self.channel_codes_by_environment = load_channel_code_config()
+        self.database_connections_by_environment = load_database_connections()
+        self.ssh_private_keys = load_ssh_private_keys()
+        self._migrate_legacy_database_private_keys()
 
         root = QWidget()
         root.setObjectName("root")
@@ -349,12 +686,19 @@ class WorkflowWindow(QMainWindow):
 
         workspace = QHBoxLayout()
         workspace.setSpacing(14)
-        workspace.addWidget(self._build_settings_panel())
-        workspace.addWidget(self._build_terminal_panel(), 1)
+        workspace.addWidget(self._build_navigation())
+        self.content_stack = QStackedWidget()
+        self.content_stack.addWidget(self._build_task_workspace())
+        self.content_stack.addWidget(self._build_config_workspace())
+        workspace.addWidget(self.content_stack, 1)
         page.addLayout(workspace, 1)
 
         self._set_status("●  READY", "#79d59a")
         self._append_log("runner@local:~$ ready\n")
+        self.database_breath_timer = QTimer(self)
+        self.database_breath_timer.timeout.connect(self._animate_database_status)
+        self.database_breath_timer.start(850)
+        self._refresh_database_status_buttons()
 
     def _build_top_bar(self) -> QFrame:
         bar = QFrame()
@@ -367,10 +711,10 @@ class WorkflowWindow(QMainWindow):
         titles.setSpacing(3)
         title = QLabel("自动化控制台")
         title.setObjectName("title")
-        eyebrow = QLabel("$ test-data / parallel-runner")
-        eyebrow.setObjectName("eyebrow")
+        self.eyebrow = QLabel("$ account / create")
+        self.eyebrow.setObjectName("eyebrow")
         titles.addWidget(title)
-        titles.addWidget(eyebrow)
+        titles.addWidget(self.eyebrow)
         layout.addLayout(titles)
         layout.addStretch()
 
@@ -378,6 +722,87 @@ class WorkflowWindow(QMainWindow):
         self.status_label.setObjectName("statusPill")
         layout.addWidget(self.status_label, 0, Qt.AlignmentFlag.AlignVCenter)
         return bar
+
+    def _migrate_legacy_database_private_keys(self) -> None:
+        """Move older per-connection key paths into the reusable key library."""
+        changed = False
+        for environment, connection in self.database_connections_by_environment.items():
+            if connection.ssh_private_key_id or not connection.ssh_private_key:
+                continue
+            try:
+                imported = import_ssh_private_key(connection.ssh_private_key)
+                connection.ssh_private_key_id = imported.key_id
+                connection.ssh_private_key = ""
+                save_database_connection(environment, connection)
+            except (OSError, ValueError):
+                continue
+            changed = True
+        if changed:
+            self.ssh_private_keys = load_ssh_private_keys()
+
+    def _build_navigation(self) -> QFrame:
+        navigation = QFrame()
+        navigation.setObjectName("navigation")
+        navigation.setFixedWidth(190)
+        layout = QVBoxLayout(navigation)
+        layout.setContentsMargins(12, 20, 12, 14)
+        layout.setSpacing(6)
+
+        brand = QLabel("AUTOMATION")
+        brand.setObjectName("navigationBrand")
+        layout.addWidget(brand)
+        meta = QLabel("CONTROL PANEL")
+        meta.setObjectName("navigationMeta")
+        layout.addWidget(meta)
+        layout.addSpacing(22)
+
+        group = QButtonGroup(navigation)
+        group.setExclusive(True)
+        for index, label in enumerate(("创建账号", "锦标赛数据", "参数配置")):
+            button = QPushButton(label)
+            button.setObjectName("navigationButton")
+            button.setCheckable(True)
+            button.setChecked(index == 0)
+            button.clicked.connect(
+                lambda checked, selected=index: (
+                    self._switch_section(selected) if checked else None
+                )
+            )
+            group.addButton(button)
+            self.navigation_buttons.append(button)
+            layout.addWidget(button)
+        layout.addStretch()
+
+        version = QLabel("LOCAL  ·  v2.1")
+        version.setObjectName("navigationMeta")
+        layout.addWidget(version)
+        return navigation
+
+    def _build_task_workspace(self) -> QWidget:
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        layout.addWidget(self._build_settings_panel())
+        layout.addWidget(self._build_terminal_panel(), 1)
+        return page
+
+    def _build_config_workspace(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        panel = QFrame()
+        panel.setObjectName("settingsPanel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(26, 24, 26, 24)
+        panel_layout.setSpacing(14)
+        title = QLabel("参数配置")
+        title.setObjectName("sectionTitle")
+        panel_layout.addWidget(title)
+        panel_layout.addWidget(self._build_config_tab(), 1)
+        layout.addWidget(panel)
+        return page
 
     def _build_settings_panel(self) -> QFrame:
         panel = QFrame()
@@ -387,23 +812,23 @@ class WorkflowWindow(QMainWindow):
         layout.setContentsMargins(22, 22, 22, 20)
         layout.setSpacing(16)
 
-        title = QLabel("任务配置")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
+        self.settings_title = QLabel("创建账号")
+        self.settings_title.setObjectName("sectionTitle")
+        layout.addWidget(self.settings_title)
 
-        self.mode_tabs = QTabWidget()
-        self.mode_tabs.setObjectName("modeTabs")
-        self.mode_tabs.addTab(self._build_account_tab(), "创建账号")
-        self.mode_tabs.addTab(self._build_tournament_tab(), "锦标赛数据")
-        self.mode_tabs.currentChanged.connect(self._on_mode_changed)
-        layout.addWidget(self.mode_tabs, 1)
+        self.settings_stack = QStackedWidget()
+        self.settings_stack.addWidget(self._build_account_tab())
+        self.settings_stack.addWidget(self._build_tournament_tab())
+        layout.addWidget(self.settings_stack, 1)
 
         self.mode_hint = QLabel("只注册账号并导出账号信息，不执行加钱或下注。")
         self.mode_hint.setObjectName("fieldHint")
         self.mode_hint.setWordWrap(True)
         layout.addWidget(self.mode_hint)
 
-        buttons = QHBoxLayout()
+        self.action_bar = QWidget()
+        buttons = QHBoxLayout(self.action_bar)
+        buttons.setContentsMargins(0, 0, 0, 0)
         buttons.setSpacing(8)
         self.start_button = QPushButton("创建账号")
         self.start_button.setObjectName("primaryButton")
@@ -414,15 +839,16 @@ class WorkflowWindow(QMainWindow):
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self._stop)
         buttons.addWidget(self.stop_button, 1)
-        layout.addLayout(buttons)
+        layout.addWidget(self.action_bar)
 
-        self.config_widgets.append(self.mode_tabs)
+        self.config_widgets.append(self.settings_stack)
         return panel
 
     def _build_account_tab(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("settingsPage")
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setContentsMargins(0, 14, 8, 12)
         layout.setSpacing(14)
         form = self._form_layout()
 
@@ -430,8 +856,22 @@ class WorkflowWindow(QMainWindow):
         self.account_environment.addItems(list(SUPPORTED_ENVIRONMENTS))
         self._add_form_row(form, 0, "运行环境", self.account_environment)
 
+        self.account_platform = self._platform_combo()
+        self._add_form_row(form, 1, "注册平台", self.account_platform)
+
+        self.account_channel_code = self._channel_code_combo(
+            self.account_environment.currentText()
+        )
+        self.account_environment.currentTextChanged.connect(
+            lambda environment: self._refresh_channel_code_combo(
+                self.account_channel_code,
+                environment,
+            )
+        )
+        self._add_form_row(form, 2, "Channel Code", self.account_channel_code)
+
         self.account_count = self._spin_box(DEFAULT_ACCOUNT_COUNT, maximum=100_000)
-        self._add_form_row(form, 1, "账号数量", self.account_count)
+        self._add_form_row(form, 3, "账号数量", self.account_count)
 
         self.account_max_workers = self._spin_box(DEFAULT_MAX_WORKERS, maximum=100)
         (
@@ -439,8 +879,8 @@ class WorkflowWindow(QMainWindow):
             self.account_serial_button,
             self.account_parallel_button,
         ) = self._execution_mode_control(self.account_max_workers)
-        self._add_form_row(form, 2, "执行方式", account_execution_mode)
-        self._add_form_row(form, 3, "并行账号", self.account_max_workers)
+        self._add_form_row(form, 4, "执行方式", account_execution_mode)
+        self._add_form_row(form, 5, "并行账号", self.account_max_workers)
 
         self.account_output_file = QLineEdit(
             str(PROJECT_ROOT / "accounts_created.txt")
@@ -448,7 +888,7 @@ class WorkflowWindow(QMainWindow):
         account_output, self.account_browse_button = self._output_field(
             self.account_output_file
         )
-        self._add_form_row(form, 4, "输出文件", account_output)
+        self._add_form_row(form, 6, "输出文件", account_output)
         layout.addLayout(form)
 
         self.account_verbose = QCheckBox("显示调试日志")
@@ -458,6 +898,8 @@ class WorkflowWindow(QMainWindow):
         self.config_widgets.extend(
             [
                 self.account_environment,
+                self.account_platform,
+                self.account_channel_code,
                 self.account_count,
                 self.account_max_workers,
                 self.account_serial_button,
@@ -467,12 +909,146 @@ class WorkflowWindow(QMainWindow):
                 self.account_verbose,
             ]
         )
-        return page
+        return self._scrollable_settings_page(page)
+
+    def _build_config_tab(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("settingsPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 10, 8, 12)
+        layout.setSpacing(14)
+
+        environment_row = QHBoxLayout()
+        environment_label = QLabel("配置环境")
+        environment_label.setObjectName("fieldLabel")
+        environment_row.addWidget(environment_label)
+        self.config_environment = QComboBox()
+        self.config_environment.addItems(list(SUPPORTED_ENVIRONMENTS))
+        self.config_environment.currentTextChanged.connect(
+            self._on_config_environment_changed
+        )
+        environment_row.addWidget(
+            self._environment_control(self.config_environment),
+            1,
+        )
+        environment_row.addStretch(2)
+        layout.addLayout(environment_row)
+
+        cards = QHBoxLayout()
+        cards.setSpacing(14)
+        cards.addWidget(self._build_channel_code_card(), 1)
+        cards.addWidget(self._build_ssh_private_key_card(), 1)
+        layout.addLayout(cards)
+        layout.addStretch()
+
+        return self._scrollable_settings_page(page)
+
+    def _build_channel_code_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("configCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("Channel Code")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        description = QLabel("各环境独立维护，保存后立即同步到任务页。")
+        description.setObjectName("fieldHint")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        add_row = QHBoxLayout()
+        add_row.setSpacing(7)
+        self.channel_code_input = QLineEdit()
+        self.channel_code_input.setPlaceholderText("输入新的 Channel Code")
+        self.channel_code_input.returnPressed.connect(self._add_channel_code)
+        add_row.addWidget(self.channel_code_input, 1)
+        self.add_channel_code_button = QPushButton("添加")
+        self.add_channel_code_button.setObjectName("secondaryButton")
+        self.add_channel_code_button.clicked.connect(self._add_channel_code)
+        add_row.addWidget(self.add_channel_code_button)
+        layout.addLayout(add_row)
+
+        self.channel_code_list = QListWidget()
+        self.channel_code_list.setObjectName("channelCodeList")
+        self.channel_code_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.channel_code_list.addItems(
+            self.channel_codes_by_environment[self.config_environment.currentText()]
+        )
+        layout.addWidget(self.channel_code_list, 1)
+
+        self.delete_channel_code_button = QPushButton("删除选中项")
+        self.delete_channel_code_button.setObjectName("stopButton")
+        self.delete_channel_code_button.clicked.connect(self._delete_channel_code)
+        layout.addWidget(self.delete_channel_code_button)
+        self.config_widgets.extend(
+            [
+                self.config_environment,
+                self.channel_code_input,
+                self.add_channel_code_button,
+                self.channel_code_list,
+                self.delete_channel_code_button,
+            ]
+        )
+        return card
+
+    def _build_ssh_private_key_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("configCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("SSH 私钥库")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        description = QLabel(
+            "私钥只需导入一次；数据库连接从私钥库选择，不保存或复制私钥内容。"
+        )
+        description.setObjectName("fieldHint")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        self.ssh_private_key_list = QListWidget()
+        self.ssh_private_key_list.setObjectName("channelCodeList")
+        self.ssh_private_key_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        layout.addWidget(self.ssh_private_key_list, 1)
+
+        buttons = QHBoxLayout()
+        self.import_ssh_private_key_button = QPushButton("导入私钥")
+        self.import_ssh_private_key_button.setObjectName("secondaryButton")
+        self.import_ssh_private_key_button.clicked.connect(
+            self._import_ssh_private_key
+        )
+        buttons.addWidget(self.import_ssh_private_key_button)
+        self.delete_ssh_private_key_button = QPushButton("删除选中项")
+        self.delete_ssh_private_key_button.setObjectName("stopButton")
+        self.delete_ssh_private_key_button.clicked.connect(
+            self._delete_ssh_private_key
+        )
+        buttons.addWidget(self.delete_ssh_private_key_button)
+        layout.addLayout(buttons)
+
+        self.config_widgets.extend(
+            [
+                self.ssh_private_key_list,
+                self.import_ssh_private_key_button,
+                self.delete_ssh_private_key_button,
+            ]
+        )
+        self._refresh_ssh_private_key_list()
+        return card
 
     def _build_tournament_tab(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("settingsPage")
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setContentsMargins(0, 14, 8, 12)
         layout.setSpacing(14)
         form = self._form_layout()
 
@@ -480,8 +1056,20 @@ class WorkflowWindow(QMainWindow):
         self.environment.addItems(list(SUPPORTED_ENVIRONMENTS))
         self._add_form_row(form, 0, "运行环境", self.environment)
 
+        self.platform = self._platform_combo()
+        self._add_form_row(form, 1, "注册平台", self.platform)
+
+        self.channel_code = self._channel_code_combo(self.environment.currentText())
+        self.environment.currentTextChanged.connect(
+            lambda environment: self._refresh_channel_code_combo(
+                self.channel_code,
+                environment,
+            )
+        )
+        self._add_form_row(form, 2, "Channel Code", self.channel_code)
+
         self.count = self._spin_box(DEFAULT_ACCOUNT_COUNT, maximum=100_000)
-        self._add_form_row(form, 1, "账号数量", self.count)
+        self._add_form_row(form, 3, "账号数量", self.count)
 
         self.max_workers = self._spin_box(DEFAULT_MAX_WORKERS, maximum=100)
         (
@@ -489,21 +1077,21 @@ class WorkflowWindow(QMainWindow):
             self.serial_button,
             self.parallel_button,
         ) = self._execution_mode_control(self.max_workers)
-        self._add_form_row(form, 2, "执行方式", tournament_execution_mode)
-        self._add_form_row(form, 3, "并行账号", self.max_workers)
+        self._add_form_row(form, 4, "执行方式", tournament_execution_mode)
+        self._add_form_row(form, 5, "并行账号", self.max_workers)
 
         self.balance = self._spin_box(INITIAL_BALANCE)
-        self._add_form_row(form, 4, "加钱金额", self.balance)
+        self._add_form_row(form, 6, "加钱金额", self.balance)
 
         self.spin_count = self._spin_box(INITIAL_SPIN_COUNT, maximum=100_000)
-        self._add_form_row(form, 5, "下注次数", self.spin_count)
+        self._add_form_row(form, 7, "下注次数", self.spin_count)
 
         self.bet_amount = self._spin_box(spin.DEFAULT_BET_CENTS)
-        self._add_form_row(form, 6, "下注金额", self.bet_amount, "美分")
+        self._add_form_row(form, 8, "下注金额", self.bet_amount, "美分")
 
         self.output_file = QLineEdit(str(PROJECT_ROOT / "accounts.txt"))
         tournament_output, self.browse_button = self._output_field(self.output_file)
-        self._add_form_row(form, 7, "输出文件", tournament_output)
+        self._add_form_row(form, 9, "输出文件", tournament_output)
         layout.addLayout(form)
 
         self.random_spins = QCheckBox("每个账号随机下注次数")
@@ -533,6 +1121,8 @@ class WorkflowWindow(QMainWindow):
         self.config_widgets.extend(
             [
                 self.environment,
+                self.platform,
+                self.channel_code,
                 self.count,
                 self.max_workers,
                 self.serial_button,
@@ -548,7 +1138,20 @@ class WorkflowWindow(QMainWindow):
                 self.verbose,
             ]
         )
-        return page
+        return self._scrollable_settings_page(page)
+
+    @staticmethod
+    def _scrollable_settings_page(page: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setObjectName("settingsScroll")
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(page)
+        return scroll
 
     @staticmethod
     def _form_layout() -> QGridLayout:
@@ -557,6 +1160,87 @@ class WorkflowWindow(QMainWindow):
         form.setVerticalSpacing(11)
         form.setColumnStretch(1, 1)
         return form
+
+    def _environment_control(self, combo: QComboBox) -> QWidget:
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(7)
+        row.addWidget(combo, 1)
+
+        status_button = QPushButton()
+        status_button.setFixedWidth(132)
+        status_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        status_button.clicked.connect(
+            lambda _checked=False, environment_combo=combo: (
+                self._open_database_connection_dialog(environment_combo)
+            )
+        )
+        combo.currentTextChanged.connect(
+            lambda _environment, environment_combo=combo, button=status_button: (
+                self._update_database_status_button(environment_combo, button)
+            )
+        )
+        row.addWidget(status_button)
+        self.database_status_controls.append((combo, status_button))
+        self.config_widgets.append(status_button)
+        self._update_database_status_button(combo, status_button)
+        return holder
+
+    def _update_database_status_button(
+        self,
+        combo: QComboBox,
+        button: QPushButton,
+    ) -> None:
+        connection = self.database_connections_by_environment[combo.currentText()]
+        configured = is_database_connection_configured(connection)
+        if configured:
+            button.setText("●  已配置 · 编辑")
+            color = "#79d59a" if self.database_breath_bright else "#4f9568"
+            background = "#17251d"
+            border = "#315f40"
+        else:
+            button.setText("●  未配置 · 配置")
+            color = "#e27d84" if self.database_breath_bright else "#954f55"
+            background = "#27191b"
+            border = "#65373b"
+        button.setStyleSheet(
+            "QPushButton {"
+            f"color: {color}; background: {background}; border: 1px solid {border};"
+            "border-radius: 7px; padding: 0 10px; font-weight: 650;"
+            "} QPushButton:hover { color: #ffffff; border-color: #7b828e; }"
+            "QPushButton:disabled { color: #555a63; background: #191b20; "
+            "border-color: #292c32; }"
+        )
+
+    def _refresh_database_status_buttons(self) -> None:
+        for combo, button in self.database_status_controls:
+            self._update_database_status_button(combo, button)
+
+    @Slot()
+    def _animate_database_status(self) -> None:
+        self.database_breath_bright = not self.database_breath_bright
+        self._refresh_database_status_buttons()
+
+    def _open_database_connection_dialog(self, combo: QComboBox) -> None:
+        environment = combo.currentText()
+        dialog = DatabaseConnectionDialog(
+            environment,
+            self.database_connections_by_environment[environment],
+            self.ssh_private_keys,
+            self,
+        )
+        if (
+            dialog.exec() == QDialog.DialogCode.Accepted
+            and dialog.saved_connection is not None
+        ):
+            self.database_connections_by_environment[environment] = (
+                dialog.saved_connection
+            )
+            self._refresh_database_status_buttons()
+            self._append_log(
+                f"[config:{environment}] database connection saved\n"
+            )
 
     def _execution_mode_control(
         self,
@@ -664,6 +1348,30 @@ class WorkflowWindow(QMainWindow):
         return widget
 
     @staticmethod
+    def _platform_combo() -> QComboBox:
+        widget = QComboBox()
+        widget.addItem("Android", Platform.android.value)
+        widget.addItem("iOS", Platform.ios.value)
+        widget.setCurrentIndex(1)
+        return widget
+
+    def _channel_code_combo(self, environment: str) -> QComboBox:
+        widget = QComboBox()
+        widget.addItems(self.channel_codes_by_environment[environment])
+        return widget
+
+    def _refresh_channel_code_combo(
+        self,
+        combo: QComboBox,
+        environment: str,
+    ) -> None:
+        selected = combo.currentText()
+        combo.clear()
+        combo.addItems(self.channel_codes_by_environment[environment])
+        selected_index = combo.findText(selected)
+        combo.setCurrentIndex(max(0, selected_index))
+
+    @staticmethod
     def _add_form_row(
         layout: QGridLayout,
         row: int,
@@ -696,19 +1404,175 @@ class WorkflowWindow(QMainWindow):
                 not self._is_running() and self.parallel_button.isChecked()
             )
 
-    @Slot(int)
-    def _on_mode_changed(self, index: int) -> None:
+    def _switch_section(self, index: int) -> None:
+        self.current_section = index
+        if index < len(self.navigation_buttons):
+            self.navigation_buttons[index].setChecked(True)
         if index == 0:
+            self.content_stack.setCurrentIndex(0)
+            self.settings_stack.setCurrentIndex(0)
+            self.settings_title.setText("创建账号")
             self.mode_hint.setText("只注册账号并导出账号信息，不执行加钱或下注。")
             self.start_button.setText("创建账号")
             self.session_title.setText("ACCOUNT CREATE")
-        else:
+            self.eyebrow.setText("$ account / create")
+        elif index == 1:
+            self.content_stack.setCurrentIndex(0)
+            self.settings_stack.setCurrentIndex(1)
+            self.settings_title.setText("锦标赛数据")
             self.mode_hint.setText("注册账号、加钱并连续下注，生成锦标赛测试数据。")
             self.start_button.setText("生成锦标赛数据")
             self.session_title.setText("TOURNAMENT DATA")
+            self.eyebrow.setText("$ tournament / generate")
+        else:
+            self.content_stack.setCurrentIndex(1)
+            self.eyebrow.setText("$ settings / parameters")
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.progress_text.setText("0 / 0")
+
+    def _refresh_ssh_private_key_list(self) -> None:
+        self.ssh_private_key_list.clear()
+        for key in self.ssh_private_keys.values():
+            item = QListWidgetItem(f"{key.name}\n{key.path}")
+            item.setData(Qt.ItemDataRole.UserRole, key.key_id)
+            item.setToolTip(key.path)
+            self.ssh_private_key_list.addItem(item)
+
+    @Slot()
+    def _import_ssh_private_key(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "导入 SSH 私钥到私钥库",
+            "",
+            "私钥文件 (*.pem *.key id_*);;所有文件 (*)",
+        )
+        if not selected:
+            return
+        try:
+            imported = import_ssh_private_key(selected)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "导入失败", str(error))
+            return
+        self.ssh_private_keys = load_ssh_private_keys()
+        self._refresh_ssh_private_key_list()
+        for row in range(self.ssh_private_key_list.count()):
+            item = self.ssh_private_key_list.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == imported.key_id:
+                self.ssh_private_key_list.setCurrentRow(row)
+                break
+        self._append_log(f"[config] SSH private key registered: {imported.name}\n")
+
+    @Slot()
+    def _delete_ssh_private_key(self) -> None:
+        item = self.ssh_private_key_list.currentItem()
+        if item is None:
+            QMessageBox.information(self, "选择私钥", "请先选择要删除的 SSH 私钥")
+            return
+        key_id = item.data(Qt.ItemDataRole.UserRole)
+        key = self.ssh_private_keys.get(key_id)
+        if key is None:
+            return
+        referenced_environments = [
+            environment
+            for environment, connection in self.database_connections_by_environment.items()
+            if connection.ssh_private_key_id == key_id
+            or (
+                not connection.ssh_private_key_id
+                and connection.ssh_private_key
+                and Path(connection.ssh_private_key) == Path(key.path)
+            )
+        ]
+        if referenced_environments:
+            QMessageBox.warning(
+                self,
+                "私钥正在使用",
+                "该私钥仍被以下环境引用："
+                + "、".join(referenced_environments)
+                + "。请先编辑这些数据库连接。",
+            )
+            return
+        try:
+            remove_ssh_private_key(key_id)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "删除失败", str(error))
+            return
+        self.ssh_private_keys = load_ssh_private_keys()
+        self._refresh_ssh_private_key_list()
+        self._refresh_database_status_buttons()
+        self._append_log(f"[config] SSH private key removed: {key.name}\n")
+
+    @Slot()
+    def _add_channel_code(self) -> None:
+        environment = self.config_environment.currentText()
+        configured_codes = self.channel_codes_by_environment[environment]
+        channel_code = self.channel_code_input.text().strip()
+        if not channel_code:
+            QMessageBox.warning(self, "参数错误", "Channel Code 不能为空")
+            return
+        if channel_code in configured_codes:
+            QMessageBox.information(self, "无需添加", "该 Channel Code 已存在")
+            return
+        if self._persist_channel_codes(
+            environment,
+            [*configured_codes, channel_code],
+        ):
+            self.channel_code_input.clear()
+            self.channel_code_list.setCurrentRow(len(configured_codes))
+            self._append_log(
+                f"[config:{environment}] channel code added: {channel_code}\n"
+            )
+
+    @Slot()
+    def _delete_channel_code(self) -> None:
+        environment = self.config_environment.currentText()
+        configured_codes = self.channel_codes_by_environment[environment]
+        selected_row = self.channel_code_list.currentRow()
+        if selected_row < 0:
+            QMessageBox.information(self, "选择配置", "请先选择要删除的 Channel Code")
+            return
+        if len(configured_codes) <= 1:
+            QMessageBox.warning(self, "无法删除", "至少保留一个 Channel Code")
+            return
+
+        removed = configured_codes[selected_row]
+        remaining = [
+            code for index, code in enumerate(configured_codes) if index != selected_row
+        ]
+        if self._persist_channel_codes(environment, remaining):
+            self._append_log(
+                f"[config:{environment}] channel code removed: {removed}\n"
+            )
+
+    @Slot(str)
+    def _on_config_environment_changed(self, environment: str) -> None:
+        self.channel_code_list.clear()
+        self.channel_code_list.addItems(
+            self.channel_codes_by_environment[environment]
+        )
+
+    def _persist_channel_codes(
+        self,
+        environment: str,
+        channel_codes: list[str],
+    ) -> bool:
+        try:
+            saved_codes = save_channel_codes(environment, channel_codes)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "保存失败", str(error))
+            return False
+
+        self.channel_codes_by_environment[environment] = saved_codes
+        self.channel_code_list.clear()
+        self.channel_code_list.addItems(saved_codes)
+        if self.account_environment.currentText() == environment:
+            self._refresh_channel_code_combo(
+                self.account_channel_code,
+                environment,
+            )
+        if self.environment.currentText() == environment:
+            self._refresh_channel_code_combo(self.channel_code, environment)
+        return True
 
     def _browse_output(self, line_edit: QLineEdit) -> None:
         selected, _ = QFileDialog.getSaveFileName(
@@ -721,7 +1585,7 @@ class WorkflowWindow(QMainWindow):
             line_edit.setText(selected)
 
     def _parameters(self) -> tuple[Callable[..., int], dict, str]:
-        if self.mode_tabs.currentIndex() == 0:
+        if self.current_section == 0:
             output_path = Path(self.account_output_file.text()).expanduser()
             if not output_path.name:
                 raise ValueError("请选择输出文件")
@@ -735,11 +1599,16 @@ class WorkflowWindow(QMainWindow):
                         else 1
                     ),
                     "environment": self.account_environment.currentText(),
+                    "platform": self.account_platform.currentData(),
+                    "channel_code": self.account_channel_code.currentText(),
                     "output_file": output_path,
                     "verbose": self.account_verbose.isChecked(),
                 },
                 "create-accounts",
             )
+
+        if self.current_section != 1:
+            raise ValueError("参数配置页不能执行任务")
 
         output_path = Path(self.output_file.text()).expanduser()
         if not output_path.name:
@@ -753,6 +1622,8 @@ class WorkflowWindow(QMainWindow):
             "spin_count": self.spin_count.value(),
             "spin_count_range": None,
             "environment": self.environment.currentText(),
+            "platform": self.platform.currentData(),
+            "channel_code": self.channel_code.currentText(),
             "output_file": output_path,
             "verbose": self.verbose.isChecked(),
         }
@@ -863,6 +1734,8 @@ class WorkflowWindow(QMainWindow):
     def _set_running(self, running: bool) -> None:
         self.start_button.setEnabled(not running)
         self.stop_button.setEnabled(running)
+        for button in self.navigation_buttons:
+            button.setEnabled(not running)
         for widget in self.config_widgets:
             widget.setEnabled(not running)
         if not running:

@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -20,25 +21,66 @@ ERROR_BODY_LIMIT = 300
 TOKEN_EXPIRY_LEEWAY = 5
 DEFAULT_BET_CENTS = 1_000
 
-_game_token_cache: Dict[str, str] = {}
-_game_session_cache: Dict[str, str] = {}
+
+@dataclass(frozen=True)
+class SpinEnvironmentConfig:
+    game_url_api: str
+    web_origin: str
+    spin_api: str = SPIN_API
+    spin_origin: str = SPIN_ORIGIN
+    version: Optional[str] = "8b339f30eee82f3486f27a5d3e42d12fea8543f0"
+    user_agent: str = (
+        "Mozilla/5.0 (Linux; Android 14; SM-A556B) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/153.0.0.0 Mobile Safari/537.36"
+    )
 
 
-def _game_url_headers(user_token: str) -> Dict[str, str]:
-    return {
+SPIN_ENVIRONMENT_CONFIGS = {
+    "dev": SpinEnvironmentConfig(
+        game_url_api=GAME_URL_API,
+        web_origin=WEB_ORIGIN,
+    ),
+    "huidu": SpinEnvironmentConfig(
+        game_url_api="https://hdapi.ushdev.top/v1/gamehall/self_game_url",
+        web_origin="https://newhdweb.ushdev.top",
+        user_agent=(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 "
+            "Mobile/15E148 Safari/604.1"
+        ),
+        version=None,
+    ),
+}
+
+_game_token_cache: Dict[tuple[str, str], str] = {}
+_game_session_cache: Dict[tuple[str, str], str] = {}
+
+
+def _config_for_environment(environment: str) -> SpinEnvironmentConfig:
+    """Resolve endpoints while preserving the former defaults for other envs."""
+    return SPIN_ENVIRONMENT_CONFIGS.get(
+        environment,
+        SPIN_ENVIRONMENT_CONFIGS["dev"],
+    )
+
+
+def _game_url_headers(
+    user_token: str,
+    config: SpinEnvironmentConfig,
+) -> Dict[str, str]:
+    headers = {
         "Accept": "*/*",
         "Accept-Encoding": "identity",
         "Content-Type": "application/json",
-        "Origin": WEB_ORIGIN,
-        "Referer": f"{WEB_ORIGIN}/",
-        "User-Agent": (
-            "Mozilla/5.0 (Linux; Android 14; SM-A556B) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/153.0.0.0 Mobile Safari/537.36"
-        ),
+        "Origin": config.web_origin,
+        "Referer": f"{config.web_origin}/",
+        "User-Agent": config.user_agent,
         "token": user_token,
-        "version": "8b339f30eee82f3486f27a5d3e42d12fea8543f0",
     }
+    if config.version:
+        headers["version"] = config.version
+    return headers
 
 
 def _extract_game_token(result: Dict[str, Any]) -> str:
@@ -118,20 +160,26 @@ def _print_debug(label: str, response: requests.Response, verbose: bool) -> None
         print(_response_summary(response))
 
 
-def get_game_token(user_token: str, *, verbose: bool = False) -> Optional[str]:
+def get_game_token(
+    user_token: str,
+    *,
+    environment: str = "dev",
+    verbose: bool = False,
+) -> Optional[str]:
     """Exchange a registered user's token for a slot-game token."""
+    config = _config_for_environment(environment)
     payload = {
         "type": 1,
         "game_id": 200001,
         "game_channel": 4,
-        "exit_event": f"{WEB_ORIGIN}/home",
-        "cash_event": f"{WEB_ORIGIN}/backshop",
+        "exit_event": f"{config.web_origin}/home",
+        "cash_event": f"{config.web_origin}/backshop",
     }
 
     try:
         response = requests.post(
-            GAME_URL_API,
-            headers=_game_url_headers(user_token),
+            config.game_url_api,
+            headers=_game_url_headers(user_token, config),
             json=payload,
             timeout=REQUEST_TIMEOUT,
         )
@@ -155,27 +203,34 @@ def get_game_token(user_token: str, *, verbose: bool = False) -> Optional[str]:
 def get_valid_game_token(
     user_token: str,
     *,
+    environment: str = "dev",
     verbose: bool = False,
 ) -> Optional[str]:
     """Reuse a game token until its JWT expiry time is reached."""
-    cached_token = _game_token_cache.get(user_token)
+    cache_key = (environment, user_token)
+    cached_token = _game_token_cache.get(cache_key)
     if cached_token and not _is_token_expired(cached_token):
         return cached_token
 
-    game_token = get_game_token(user_token, verbose=verbose)
+    game_token = get_game_token(
+        user_token,
+        environment=environment,
+        verbose=verbose,
+    )
     if not game_token or _is_token_expired(game_token):
-        _game_token_cache.pop(user_token, None)
-        _game_session_cache.pop(user_token, None)
+        _game_token_cache.pop(cache_key, None)
+        _game_session_cache.pop(cache_key, None)
         return None
 
-    _game_token_cache[user_token] = game_token
-    _game_session_cache.pop(user_token, None)
+    _game_token_cache[cache_key] = game_token
+    _game_session_cache.pop(cache_key, None)
     return game_token
 
 
 def dev_spin(
     user_token: str,
     *,
+    environment: str = "dev",
     bet_amount: int = DEFAULT_BET_CENTS,
     verbose: bool = False,
     print_result: bool = True,
@@ -184,7 +239,13 @@ def dev_spin(
     if bet_amount <= 0:
         raise ValueError("下注金额必须大于 0")
 
-    game_token = get_valid_game_token(user_token, verbose=verbose)
+    config = _config_for_environment(environment)
+    cache_key = (environment, user_token)
+    game_token = get_valid_game_token(
+        user_token,
+        environment=environment,
+        verbose=verbose,
+    )
     if not game_token:
         return None
 
@@ -193,21 +254,21 @@ def dev_spin(
         "bet": bet_amount,
         "money_type": "SC",
         "game_id": 100001,
-        "session_id": _game_session_cache.get(user_token, ""),
+        "session_id": _game_session_cache.get(cache_key, ""),
     }
     headers = {
         "Accept": "application/json, text/plain, */*",
         "Accept-Encoding": "identity",
         "Content-Type": "application/json",
-        "Origin": SPIN_ORIGIN,
-        "Referer": f"{SPIN_ORIGIN}/",
+        "Origin": config.spin_origin,
+        "Referer": f"{config.spin_origin}/",
         "User-Agent": "Mozilla/5.0",
         "Authorization": f"Bearer {game_token}",
     }
 
     try:
         response = requests.post(
-            SPIN_API,
+            config.spin_api,
             json=payload,
             headers=headers,
             timeout=REQUEST_TIMEOUT,
@@ -240,7 +301,7 @@ def dev_spin(
         if isinstance(result_data, dict):
             session_id = result_data.get("session_id")
             if isinstance(session_id, str) and session_id:
-                _game_session_cache[user_token] = session_id
+                _game_session_cache[cache_key] = session_id
         return response
     except (TypeError, ValueError) as error:
         print(f"[spin] 下注响应解析失败：{error}")

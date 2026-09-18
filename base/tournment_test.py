@@ -12,7 +12,7 @@ from typing import Callable, Dict, Optional, Tuple, Union
 try:  # Support ``python -m base.tournment_test``.
     from . import add_money, spin
     from .enums import Platform
-    from .user import DEFAULT_PASSWORD, User
+    from .user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD, User
 except ImportError:  # Support ``python base/tournment_test.py``.
     script_dir = str(Path(__file__).resolve().parent)
     if script_dir not in sys.path:
@@ -20,7 +20,7 @@ except ImportError:  # Support ``python base/tournment_test.py``.
     import add_money
     import spin
     from enums import Platform
-    from user import DEFAULT_PASSWORD, User
+    from user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD, User
 
 
 DEFAULT_ACCOUNT_COUNT = 30
@@ -72,6 +72,7 @@ def _place_initial_spins(
     spin_count: int,
     bet_amount: int = spin.DEFAULT_BET_CENTS,
     *,
+    environment: str = "dev",
     verbose: bool = False,
     stop_requested: Optional[Callable[[], bool]] = None,
 ) -> None:
@@ -80,6 +81,7 @@ def _place_initial_spins(
             raise BatchCancelled("用户已停止任务")
         if spin.dev_spin(
             user_token,
+            environment=environment,
             bet_amount=bet_amount,
             verbose=verbose,
         ) is None:
@@ -91,6 +93,8 @@ def _create_account_and_bet(
     count: int,
     *,
     environment: str,
+    platform: int,
+    channel_code: str,
     admin_base_url: str,
     initial_balance: int,
     spin_count: int,
@@ -111,7 +115,11 @@ def _create_account_and_bet(
         )
 
     account = User(environment=environment)
-    account.register(platform=Platform.ios.value, verbose=verbose)
+    account.register(
+        channel_code=channel_code,
+        platform=platform,
+        verbose=verbose,
+    )
     _print_account(account, index, count)
 
     if not account.uid or not account.token:
@@ -133,6 +141,7 @@ def _create_account_and_bet(
     _place_initial_spins(
         account.token,
         account_spin_count,
+        environment=environment,
         bet_amount=bet_amount,
         verbose=verbose,
         stop_requested=stop_requested,
@@ -162,6 +171,8 @@ def create_accounts_and_bet(
     *,
     spin_count_range: Optional[Tuple[int, int]] = None,
     environment: str = "dev",
+    platform: int = Platform.ios.value,
+    channel_code: str = DEFAULT_CHANNEL_CODE,
     verbose: bool = False,
     max_workers: int = DEFAULT_MAX_WORKERS,
     stop_requested: Optional[Callable[[], bool]] = None,
@@ -177,6 +188,10 @@ def create_accounts_and_bet(
         raise ValueError("账号数量必须大于 0")
     if max_workers <= 0:
         raise ValueError("并行账号数必须大于 0")
+    if platform not in (Platform.android.value, Platform.ios.value):
+        raise ValueError("注册平台仅支持 Android 或 iOS")
+    if not channel_code.strip():
+        raise ValueError("Channel Code 不能为空")
 
     output_path = Path(output_file)
     success_count = 0
@@ -200,6 +215,8 @@ def create_accounts_and_bet(
                 index,
                 count,
                 environment=environment,
+                platform=platform,
+                channel_code=channel_code,
                 admin_base_url=admin_base_url,
                 initial_balance=initial_balance,
                 spin_count=spin_count,

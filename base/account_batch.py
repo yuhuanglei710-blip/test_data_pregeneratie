@@ -8,7 +8,7 @@ from typing import Callable, Dict, Optional, Union
 
 from .enums import Platform
 from .tournment_test import DEFAULT_ACCOUNT_COUNT, DEFAULT_MAX_WORKERS
-from .user import DEFAULT_PASSWORD, User
+from .user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD, User
 
 
 class AccountBatchCancelled(RuntimeError):
@@ -26,6 +26,8 @@ def _register_account(
     count: int,
     *,
     environment: str,
+    platform: int,
+    channel_code: str,
     verbose: bool,
     stop_requested: Callable[[], bool],
 ) -> RegisteredAccount:
@@ -33,7 +35,11 @@ def _register_account(
         raise AccountBatchCancelled("用户已停止任务")
 
     account = User(environment=environment)
-    account.register(platform=Platform.ios.value, verbose=verbose)
+    account.register(
+        channel_code=channel_code,
+        platform=platform,
+        verbose=verbose,
+    )
     if not account.uid or not account.token:
         raise RuntimeError("注册成功但未获取到 uid 或 token")
 
@@ -56,6 +62,8 @@ def create_accounts(
     output_file: Union[str, Path] = "accounts_created.txt",
     *,
     environment: str = "dev",
+    platform: int = Platform.ios.value,
+    channel_code: str = DEFAULT_CHANNEL_CODE,
     verbose: bool = False,
     max_workers: int = DEFAULT_MAX_WORKERS,
     stop_requested: Optional[Callable[[], bool]] = None,
@@ -66,6 +74,10 @@ def create_accounts(
         raise ValueError("账号数量必须大于 0")
     if max_workers <= 0:
         raise ValueError("并行账号数必须大于 0")
+    if platform not in (Platform.android.value, Platform.ios.value):
+        raise ValueError("注册平台仅支持 Android 或 iOS")
+    if not channel_code.strip():
+        raise ValueError("Channel Code 不能为空")
 
     output_path = Path(output_file)
     success_count = 0
@@ -88,6 +100,8 @@ def create_accounts(
                 index,
                 count,
                 environment=environment,
+                platform=platform,
+                channel_code=channel_code,
                 verbose=verbose,
                 stop_requested=should_stop,
             ): index
