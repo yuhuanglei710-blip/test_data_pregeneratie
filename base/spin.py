@@ -1,4 +1,4 @@
-"""Helpers for obtaining a game token and placing a test spin."""
+"""获取游戏 token 并执行测试下注。"""
 
 import base64
 import binascii
@@ -24,6 +24,8 @@ DEFAULT_BET_CENTS = 1_000
 
 @dataclass(frozen=True)
 class SpinEnvironmentConfig:
+    """单个下注环境的接口和浏览器参数。"""
+
     game_url_api: str
     web_origin: str
     spin_api: str = SPIN_API
@@ -58,7 +60,7 @@ _game_session_cache: Dict[tuple[str, str], str] = {}
 
 
 def _config_for_environment(environment: str) -> SpinEnvironmentConfig:
-    """Resolve endpoints while preserving the former defaults for other envs."""
+    """读取下注环境配置，未知环境沿用旧默认值。"""
     return SPIN_ENVIRONMENT_CONFIGS.get(
         environment,
         SPIN_ENVIRONMENT_CONFIGS["dev"],
@@ -69,6 +71,7 @@ def _game_url_headers(
     user_token: str,
     config: SpinEnvironmentConfig,
 ) -> Dict[str, str]:
+    """构建当前环境获取游戏地址的请求头。"""
     headers = {
         "Accept": "*/*",
         "Accept-Encoding": "identity",
@@ -84,6 +87,7 @@ def _game_url_headers(
 
 
 def _extract_game_token(result: Dict[str, Any]) -> str:
+    """解码游戏地址响应并提取 sign token。"""
     encoded_data = result["data"]
     decoded_data = base64.b64decode(encoded_data).decode("utf-8")
     game_info = json.loads(decoded_data)
@@ -94,6 +98,7 @@ def _extract_game_token(result: Dict[str, Any]) -> str:
 
 
 def _decode_base64_value(value: Any) -> Any:
+    """尝试把 Base64 值解码为 JSON 或文本。"""
     if not isinstance(value, str):
         return value
 
@@ -109,7 +114,7 @@ def _decode_base64_value(value: Any) -> Any:
 
 
 def _decode_api_result(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Decode Base64-wrapped ``data`` and ``msg`` fields for readable output."""
+    """解码响应中的 data 和 msg 字段。"""
     decoded_result = result.copy()
     for field in ("data", "msg"):
         if field in decoded_result:
@@ -118,7 +123,7 @@ def _decode_api_result(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _is_token_expired(token: str, *, now: Optional[float] = None) -> bool:
-    """Check the JWT ``exp`` locally without verifying its signature."""
+    """不验签，仅根据 exp 判断 JWT 是否过期。"""
     try:
         claims = jwt.decode(
             token,
@@ -133,6 +138,7 @@ def _is_token_expired(token: str, *, now: Optional[float] = None) -> bool:
 
 
 def _spin_failed(result: Dict[str, Any]) -> bool:
+    """判断下注响应是否业务失败。"""
     message = result.get("msg")
     if isinstance(message, str):
         normalized_message = message.casefold()
@@ -142,7 +148,7 @@ def _spin_failed(result: Dict[str, Any]) -> bool:
 
 
 def _response_summary(response: requests.Response) -> str:
-    """Keep an error response useful without flooding the console."""
+    """截断错误响应，避免刷满终端。"""
     body = response.text.strip().replace("\n", " ")
     if len(body) > ERROR_BODY_LIMIT:
         body = f"{body[:ERROR_BODY_LIMIT]}..."
@@ -150,6 +156,7 @@ def _response_summary(response: requests.Response) -> str:
 
 
 def _print_debug(label: str, response: requests.Response, verbose: bool) -> None:
+    """仅在调试模式下打印完整响应。"""
     if not verbose:
         return
 
@@ -166,7 +173,7 @@ def get_game_token(
     environment: str = "dev",
     verbose: bool = False,
 ) -> Optional[str]:
-    """Exchange a registered user's token for a slot-game token."""
+    """用用户 token 换取游戏 token。"""
     config = _config_for_environment(environment)
     payload = {
         "type": 1,
@@ -206,7 +213,7 @@ def get_valid_game_token(
     environment: str = "dev",
     verbose: bool = False,
 ) -> Optional[str]:
-    """Reuse a game token until its JWT expiry time is reached."""
+    """复用未过期的游戏 token。"""
     cache_key = (environment, user_token)
     cached_token = _game_token_cache.get(cache_key)
     if cached_token and not _is_token_expired(cached_token):
@@ -235,7 +242,7 @@ def dev_spin(
     verbose: bool = False,
     print_result: bool = True,
 ) -> Optional[requests.Response]:
-    """Place one spin while preserving the token and ordered game session."""
+    """执行一次下注并维护连续 session。"""
     if bet_amount <= 0:
         raise ValueError("下注金额必须大于 0")
 

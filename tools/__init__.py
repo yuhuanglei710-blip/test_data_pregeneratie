@@ -1,1 +1,1 @@
-"""Small, dependency-free utility helpers."""
+"""轻量且无额外依赖的工具。"""

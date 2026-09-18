@@ -1,4 +1,4 @@
-"""Persistent user-maintained application parameters."""
+"""保存用户维护的应用参数。"""
 
 import json
 from pathlib import Path
@@ -12,6 +12,7 @@ CHANNEL_CODES_FILE = PROJECT_ROOT / "cache" / "channel_codes.json"
 
 
 def _normalize_channel_codes(values: Iterable[object]) -> List[str]:
+    """清理 Channel Code，并移除空值和重复项。"""
     normalized: List[str] = []
     seen = set()
     for value in values:
@@ -26,6 +27,7 @@ def _normalize_channel_codes(values: Iterable[object]) -> List[str]:
 
 
 def _default_config() -> Dict[str, List[str]]:
+    """为每个环境生成默认 Channel Code 列表。"""
     return {
         environment: [DEFAULT_CHANNEL_CODE]
         for environment in SUPPORTED_ENVIRONMENTS
@@ -35,7 +37,7 @@ def _default_config() -> Dict[str, List[str]]:
 def load_channel_code_config(
     path: Union[str, Path] = CHANNEL_CODES_FILE,
 ) -> Dict[str, List[str]]:
-    """Load environment-isolated channel codes with legacy migration."""
+    """加载按环境隔离的 Channel Code，并兼容旧配置。"""
     config = _default_config()
     config_path = Path(path)
     if not config_path.exists():
@@ -68,7 +70,7 @@ def load_channel_codes(
     environment: str = "dev",
     path: Union[str, Path] = CHANNEL_CODES_FILE,
 ) -> List[str]:
-    """Load channel codes for one environment."""
+    """加载指定环境的 Channel Code。"""
     if environment not in SUPPORTED_ENVIRONMENTS:
         raise ValueError(f"不支持的环境：{environment}")
     return load_channel_code_config(path)[environment]
@@ -78,6 +80,7 @@ def _write_config(
     config: Dict[str, List[str]],
     path: Union[str, Path],
 ) -> None:
+    """原子写入所有环境的 Channel Code。"""
     config_path = Path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = config_path.with_suffix(f"{config_path.suffix}.tmp")
@@ -92,12 +95,13 @@ def _write_config(
     )
     temporary_path.replace(config_path)
 
+
 def save_channel_codes(
     environment: str,
     channel_codes: Iterable[str],
     path: Union[str, Path] = CHANNEL_CODES_FILE,
 ) -> List[str]:
-    """Persist one environment without modifying the others."""
+    """只保存指定环境，不影响其他环境。"""
     if environment not in SUPPORTED_ENVIRONMENTS:
         raise ValueError(f"不支持的环境：{environment}")
     codes = _normalize_channel_codes(channel_codes)

@@ -1,4 +1,4 @@
-"""Environment-scoped SSH and MySQL connection settings."""
+"""按环境隔离的 SSH 和 MySQL 连接配置。"""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ SSH_PRIVATE_KEYS_FILE = PROJECT_ROOT / "cache" / "ssh_private_keys.json"
 
 @dataclass(frozen=True)
 class SshPrivateKey:
-    """A private-key file registered once for reuse by many environments."""
+    """可被多个环境复用的 SSH 私钥记录。"""
 
     key_id: str
     name: str
@@ -32,13 +32,12 @@ class SshPrivateKey:
 
 @dataclass
 class DatabaseConnectionConfig:
-    """One environment's SSH tunnel and MySQL connection parameters."""
+    """单个环境的 SSH 隧道和 MySQL 参数。"""
 
     ssh_host: str = ""
     ssh_port: int = 22
     ssh_username: str = ""
     ssh_private_key_id: str = ""
-    ssh_private_key: str = ""
     database_host: str = "127.0.0.1"
     database_port: int = 3306
     database_name: str = ""
@@ -48,6 +47,7 @@ class DatabaseConnectionConfig:
 
     @classmethod
     def from_mapping(cls, values: object) -> "DatabaseConnectionConfig":
+        """从 JSON 数据创建配置，并补齐安全默认值。"""
         if not isinstance(values, dict):
             return cls()
         text_fields = {
@@ -56,7 +56,6 @@ class DatabaseConnectionConfig:
                 ("ssh_host", ""),
                 ("ssh_username", ""),
                 ("ssh_private_key_id", ""),
-                ("ssh_private_key", ""),
                 ("database_host", "127.0.0.1"),
                 ("database_name", ""),
                 ("database_username", ""),
@@ -74,6 +73,7 @@ class DatabaseConnectionConfig:
 
 
 def _safe_port(value: object, default: int) -> int:
+    """返回合法 TCP 端口，否则使用默认值。"""
     try:
         port = int(value)
     except (TypeError, ValueError):
@@ -82,6 +82,7 @@ def _safe_port(value: object, default: int) -> int:
 
 
 def _default_connections() -> Dict[str, DatabaseConnectionConfig]:
+    """为每个环境创建空数据库配置。"""
     return {
         environment: DatabaseConnectionConfig()
         for environment in SUPPORTED_ENVIRONMENTS
@@ -91,7 +92,7 @@ def _default_connections() -> Dict[str, DatabaseConnectionConfig]:
 def load_ssh_private_keys(
     path: Union[str, Path] = SSH_PRIVATE_KEYS_FILE,
 ) -> Dict[str, SshPrivateKey]:
-    """Load the reusable private-key library."""
+    """加载可复用的 SSH 私钥库。"""
     key_file = Path(path)
     if not key_file.exists():
         return {}
@@ -122,6 +123,7 @@ def _write_ssh_private_keys(
     keys: Dict[str, SshPrivateKey],
     path: Union[str, Path],
 ) -> None:
+    """原子写入 SSH 私钥库。"""
     key_file = Path(path)
     key_file.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = key_file.with_suffix(f"{key_file.suffix}.tmp")
@@ -141,7 +143,7 @@ def import_ssh_private_key(
     private_key_path: Union[str, Path],
     path: Union[str, Path] = SSH_PRIVATE_KEYS_FILE,
 ) -> SshPrivateKey:
-    """Register a selected key file without copying or reading its contents."""
+    """登记私钥路径，不复制或读取私钥内容。"""
     selected_path = Path(private_key_path).expanduser()
     if not selected_path.is_file():
         raise ValueError("SSH 私钥文件不存在")
@@ -164,7 +166,7 @@ def remove_ssh_private_key(
     key_id: str,
     path: Union[str, Path] = SSH_PRIVATE_KEYS_FILE,
 ) -> None:
-    """Remove one key registration; the original private-key file is untouched."""
+    """移除私钥记录，不删除原始文件。"""
     keys = load_ssh_private_keys(path)
     if key_id not in keys:
         raise ValueError("所选 SSH 私钥不存在")
@@ -176,20 +178,20 @@ def resolve_private_key_path(
     connection: DatabaseConnectionConfig,
     private_keys: Dict[str, SshPrivateKey] | None = None,
 ) -> str:
-    """Resolve a reusable key reference, with support for legacy direct paths."""
-    if connection.ssh_private_key_id:
-        keys = private_keys if private_keys is not None else load_ssh_private_keys()
-        key = keys.get(connection.ssh_private_key_id)
-        if key is None:
-            raise ValueError("当前环境引用的 SSH 私钥已不存在，请重新选择")
-        return key.path
-    return connection.ssh_private_key
+    """解析私钥库中的文件路径。"""
+    if not connection.ssh_private_key_id:
+        raise ValueError("请从 SSH 私钥库选择私钥")
+    keys = private_keys if private_keys is not None else load_ssh_private_keys()
+    key = keys.get(connection.ssh_private_key_id)
+    if key is None:
+        raise ValueError("当前环境引用的 SSH 私钥已不存在，请重新选择")
+    return key.path
 
 
 def load_database_connections(
     path: Union[str, Path] = DATABASE_CONNECTIONS_FILE,
 ) -> Dict[str, DatabaseConnectionConfig]:
-    """Load all environment configurations, falling back safely on bad data."""
+    """加载所有环境配置，损坏数据使用默认值。"""
     connections = _default_connections()
     config_path = Path(path)
     if not config_path.exists():
@@ -215,7 +217,7 @@ def save_database_connection(
     connection: DatabaseConnectionConfig,
     path: Union[str, Path] = DATABASE_CONNECTIONS_FILE,
 ) -> DatabaseConnectionConfig:
-    """Persist one environment without modifying the other environments."""
+    """保存单个环境，不修改其他环境。"""
     if environment not in SUPPORTED_ENVIRONMENTS:
         raise ValueError(f"不支持的环境：{environment}")
     validate_database_connection(connection)
@@ -244,10 +246,8 @@ def save_database_connection(
 
 def validate_database_connection(
     connection: DatabaseConnectionConfig,
-    *,
-    require_key_file: bool = True,
 ) -> None:
-    """Validate a complete SSH + MySQL configuration."""
+    """校验完整的 SSH 和 MySQL 配置。"""
     required = (
         (connection.ssh_host, "SSH 主机不能为空"),
         (connection.ssh_username, "SSH 用户名不能为空"),
@@ -265,16 +265,14 @@ def validate_database_connection(
         if not 1 <= int(port) <= 65535:
             raise ValueError(f"{label}必须在 1 到 65535 之间")
     private_key_path = resolve_private_key_path(connection)
-    if not private_key_path:
-        raise ValueError("请从 SSH 私钥库选择私钥")
-    if require_key_file and not Path(private_key_path).is_file():
+    if not Path(private_key_path).is_file():
         raise ValueError("SSH 私钥文件不存在，请重新导入")
 
 
 def is_database_connection_configured(
     connection: DatabaseConnectionConfig,
 ) -> bool:
-    """Return whether an environment has a complete, usable local config."""
+    """判断环境是否拥有完整可用的本地配置。"""
     try:
         validate_database_connection(connection)
     except (TypeError, ValueError):
@@ -283,7 +281,7 @@ def is_database_connection_configured(
 
 
 def _connect_ssh_client(connection: DatabaseConnectionConfig):
-    """Create an SSH session using exactly the selected private key."""
+    """仅使用选中的私钥建立 SSH 会话。"""
     try:
         import paramiko
     except ImportError as error:  # pragma: no cover - depends on installation
@@ -309,13 +307,20 @@ def _connect_ssh_client(connection: DatabaseConnectionConfig):
 
 
 class _ForwardServer(socketserver.ThreadingTCPServer):
+    """SSH 端口转发使用的本地线程服务器。"""
+
     allow_reuse_address = True
     daemon_threads = True
 
 
 def _forward_handler(transport, remote_address):
+    """创建经 SSH 转发流量的套接字处理器。"""
+
     class ForwardHandler(socketserver.BaseRequestHandler):
+        """通过 SSH 转发一个本地连接。"""
+
         def handle(self) -> None:
+            """在本地套接字和 SSH 通道间转发数据。"""
             channel = transport.open_channel(
                 "direct-tcpip",
                 remote_address,
@@ -344,6 +349,7 @@ def _forward_handler(transport, remote_address):
 
 @contextmanager
 def _ssh_tunnel(connection: DatabaseConnectionConfig) -> Iterator[int]:
+    """把远程数据库映射到临时本地端口。"""
     client = _connect_ssh_client(connection)
     server = None
     try:
@@ -371,7 +377,7 @@ def _ssh_tunnel(connection: DatabaseConnectionConfig) -> Iterator[int]:
 def open_database_connection(
     connection: DatabaseConnectionConfig,
 ):
-    """Open a PyMySQL connection through the private-key SSH tunnel."""
+    """通过私钥 SSH 隧道打开 MySQL 连接。"""
     validate_database_connection(connection)
     try:
         import pymysql
@@ -398,7 +404,7 @@ def open_database_connection(
 
 
 def test_database_connection(connection: DatabaseConnectionConfig) -> str:
-    """Open the tunnel, execute a harmless query, and return a concise result."""
+    """建立隧道并执行只读查询测试连接。"""
     started = time.perf_counter()
     with open_database_connection(connection) as database:
         with database.cursor() as cursor:

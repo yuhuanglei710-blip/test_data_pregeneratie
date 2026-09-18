@@ -1,1 +1,1 @@
-"""Reusable API clients."""
+"""可复用的接口客户端。"""

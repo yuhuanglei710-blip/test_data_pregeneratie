@@ -1,4 +1,4 @@
-"""User registration helpers."""
+"""用户注册相关工具。"""
 
 import base64
 import http.client
@@ -39,9 +39,10 @@ _last_oaid = 0
 
 
 class User:
-    """A test user that can be registered through the public API."""
+    """可通过前台接口注册的测试用户。"""
 
     def __init__(self, email: Optional[str] = None, environment: str = "dev"):
+        """创建绑定到指定环境的用户。"""
         self.environment = environment
         self.domain = self._load_domain(environment)
         self.email = email or self._generate_email()
@@ -55,6 +56,7 @@ class User:
 
     @staticmethod
     def _load_domain(environment: str) -> str:
+        """从环境文件读取前台接口域名。"""
         if environment not in SUPPORTED_ENVIRONMENTS:
             supported = ", ".join(SUPPORTED_ENVIRONMENTS)
             raise ValueError(f"不支持的环境 {environment!r}，可选值：{supported}")
@@ -67,14 +69,14 @@ class User:
 
     @staticmethod
     def _generate_email() -> str:
-        """Create a different email each time a ``User`` is instantiated."""
+        """生成不重复的随机邮箱。"""
         letters = "".join(random.choices(string.ascii_lowercase, k=4))
         digits = "".join(random.choices(string.digits, k=2))
         return f"{letters}{digits}@cc.cc"
 
     @staticmethod
     def _generate_oaid() -> str:
-        """Create a unique millisecond-style id across parallel workers."""
+        """生成线程安全的毫秒级设备 ID。"""
         global _last_oaid
         with _oaid_lock:
             current = int(time.time() * 1000)
@@ -89,7 +91,7 @@ class User:
         *,
         verbose: bool = False,
     ) -> None:
-        """Register the user and populate ``uid`` and ``token``."""
+        """注册用户并保存 uid 和 token。"""
         self.down_origin = down_origin
         self.platform = platform
         self.channel_code = channel_code
@@ -114,6 +116,7 @@ class User:
             self._print_token_claims(token)
 
     def _build_registration_payload(self, oaid: str) -> Dict[str, Any]:
+        """构建指定平台的注册请求体。"""
         return {
             "oaid": oaid,
             "email": self.email,
@@ -167,6 +170,7 @@ class User:
         }
 
     def _post_registration(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """提交注册请求并返回 JSON 对象。"""
         connection = http.client.HTTPSConnection(self.domain)
         try:
             connection.request(
@@ -188,7 +192,7 @@ class User:
     def _decode_registration_response(
         cls, response: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Decode API fields that may be Base64-encoded strings."""
+        """解码响应中可能经过 Base64 包装的字段。"""
         decoded_response = response.copy()
         for field in ("msg", "data"):
             value = response.get(field)
@@ -211,6 +215,7 @@ class User:
 
     @staticmethod
     def _try_base64_decode(value: str) -> Optional[str]:
+        """尝试解码 Base64 字符串，失败时返回空值。"""
         try:
             return base64.b64decode(value).decode("utf-8")
         except (ValueError, UnicodeDecodeError):
@@ -220,7 +225,7 @@ class User:
     def _find_registration_data(
         data: Any,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-        """Find user data and token, allowing nested ``data`` wrappers."""
+        """从嵌套 data 中查找用户信息和 token。"""
         if not isinstance(data, dict):
             return None, None
 
@@ -233,6 +238,7 @@ class User:
 
     @staticmethod
     def _print_token_claims(token: str) -> None:
+        """不验签打印 JWT 内容，仅用于本地调试。"""
         try:
             claims = jwt.decode(token, options={"verify_signature": False})
             print("decoded:", claims)
@@ -240,16 +246,17 @@ class User:
             print(f"token 解析失败: {error}")
 
     def login(self) -> None:
-        """Log in an existing user (not implemented yet)."""
+        """登录已有用户，功能尚未实现。"""
         raise NotImplementedError("用户登录接口尚未实现")
 
     @staticmethod
     def map_translate_dic(key: str) -> str:
-        """Map an environment key to a human-readable name."""
+        """把环境键转换为可读名称。"""
         return SUPPORTED_ENVIRONMENTS.get(key, "Unknown environment")
 
     @staticmethod
     def map_platform(value: int) -> str:
+        """把平台编号转换为可读名称。"""
         return PLATFORM_NAMES.get(value, "Unknown platform")
 
 

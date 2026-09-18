@@ -1,4 +1,4 @@
-"""Parallel account-registration workflow without funding or betting."""
+"""批量创建账号，不执行加钱或下注。"""
 
 import threading
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, as_completed
@@ -12,11 +12,13 @@ from .user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD, User
 
 
 class AccountBatchCancelled(RuntimeError):
-    """Raised when account registration is cancelled cooperatively."""
+    """账号创建被安全取消。"""
 
 
 @dataclass(frozen=True)
 class RegisteredAccount:
+    """一个待写入文件的注册结果。"""
+
     index: int
     output_line: str
 
@@ -31,6 +33,7 @@ def _register_account(
     verbose: bool,
     stop_requested: Callable[[], bool],
 ) -> RegisteredAccount:
+    """注册一个账号并生成导出内容。"""
     if stop_requested():
         raise AccountBatchCancelled("用户已停止任务")
 
@@ -69,7 +72,7 @@ def create_accounts(
     stop_requested: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
 ) -> int:
-    """Register accounts concurrently and export successful credentials."""
+    """并行注册账号并导出成功结果。"""
     if count <= 0:
         raise ValueError("账号数量必须大于 0")
     if max_workers <= 0:
@@ -85,6 +88,7 @@ def create_accounts(
     internal_stop = threading.Event()
 
     def should_stop() -> bool:
+        """合并内部取消和界面停止信号。"""
         return internal_stop.is_set() or bool(stop_requested and stop_requested())
 
     with output_path.open("w", encoding="utf-8") as account_file:

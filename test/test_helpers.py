@@ -88,11 +88,11 @@ class AppConfigTests(unittest.TestCase):
 
 class DatabaseConfigTests(unittest.TestCase):
     @staticmethod
-    def _connection(private_key: str, ssh_host: str) -> DatabaseConnectionConfig:
+    def _connection(key_id: str, ssh_host: str) -> DatabaseConnectionConfig:
         return DatabaseConnectionConfig(
             ssh_host=ssh_host,
             ssh_username="deploy",
-            ssh_private_key=private_key,
+            ssh_private_key_id=key_id,
             database_name="automation",
             database_username="tester",
             database_password="secret",
@@ -104,16 +104,21 @@ class DatabaseConfigTests(unittest.TestCase):
             with open(key_file, "w", encoding="utf-8") as private_key:
                 private_key.write("test key")
             config_file = f"{temp_dir}/database_connections.json"
-            save_database_connection(
-                "dev",
-                self._connection(key_file, "dev-ssh.example.test"),
-                config_file,
-            )
-            save_database_connection(
-                "prod",
-                self._connection(key_file, "prod-ssh.example.test"),
-                config_file,
-            )
+            with patch.object(
+                database_config,
+                "resolve_private_key_path",
+                return_value=key_file,
+            ):
+                save_database_connection(
+                    "dev",
+                    self._connection("key-id", "dev-ssh.example.test"),
+                    config_file,
+                )
+                save_database_connection(
+                    "prod",
+                    self._connection("key-id", "prod-ssh.example.test"),
+                    config_file,
+                )
 
             connections = load_database_connections(config_file)
 
@@ -122,9 +127,9 @@ class DatabaseConfigTests(unittest.TestCase):
         self.assertEqual(connections["huidu"].ssh_host, "")
 
     def test_missing_private_key_is_rejected(self):
-        connection = self._connection("missing-private-key", "ssh.example.test")
+        connection = self._connection("missing-key-id", "ssh.example.test")
 
-        with self.assertRaisesRegex(ValueError, "私钥文件不存在"):
+        with self.assertRaisesRegex(ValueError, "私钥已不存在"):
             database_config.validate_database_connection(connection)
         self.assertFalse(
             database_config.is_database_connection_configured(connection)
@@ -135,11 +140,17 @@ class DatabaseConfigTests(unittest.TestCase):
             key_file = f"{temp_dir}/id_test"
             with open(key_file, "w", encoding="utf-8") as private_key:
                 private_key.write("test key")
-            connection = self._connection(key_file, "ssh.example.test")
+            connection = self._connection("key-id", "ssh.example.test")
+            key = database_config.SshPrivateKey("key-id", "id_test", key_file)
 
-            configured = database_config.is_database_connection_configured(
-                connection
-            )
+            with patch.object(
+                database_config,
+                "load_ssh_private_keys",
+                return_value={"key-id": key},
+            ):
+                configured = database_config.is_database_connection_configured(
+                    connection
+                )
 
         self.assertTrue(configured)
 
@@ -173,10 +184,17 @@ class DatabaseConfigTests(unittest.TestCase):
         self.assertEqual(remaining, {})
 
     def test_ssh_uses_only_selected_private_key(self):
-        connection = self._connection("selected-private-key", "ssh.example.test")
+        connection = self._connection("key-id", "ssh.example.test")
         client = Mock()
 
-        with patch("paramiko.SSHClient", return_value=client):
+        with (
+            patch("paramiko.SSHClient", return_value=client),
+            patch.object(
+                database_config,
+                "resolve_private_key_path",
+                return_value="selected-private-key",
+            ),
+        ):
             result = database_config._connect_ssh_client(connection)
 
         self.assertIs(result, client)

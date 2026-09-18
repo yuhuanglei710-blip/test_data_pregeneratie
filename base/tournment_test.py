@@ -1,4 +1,4 @@
-"""Batch-create test accounts, add funds, and place initial bets."""
+"""批量创建账号、加钱并执行初始下注。"""
 
 import json
 import random
@@ -30,16 +30,16 @@ DEFAULT_MAX_WORKERS = 5
 
 
 class SpinWorkflowError(RuntimeError):
-    """Stop the batch when the game service rejects a spin."""
+    """游戏服务拒绝下注时终止批量任务。"""
 
 
 class BatchCancelled(RuntimeError):
-    """Raised when a caller requests a cooperative stop."""
+    """调用方请求安全停止。"""
 
 
 @dataclass(frozen=True)
 class AccountResult:
-    """Successful account data returned to the coordinator thread."""
+    """返回给调度线程的成功账号数据。"""
 
     index: int
     output_line: str
@@ -49,6 +49,7 @@ def _resolve_spin_count(
     fixed_count: int,
     spin_count_range: Optional[Tuple[int, int]],
 ) -> int:
+    """为单个账号确定固定或随机下注次数。"""
     if spin_count_range is None:
         if fixed_count <= 0:
             raise ValueError("下注次数必须大于 0")
@@ -61,6 +62,7 @@ def _resolve_spin_count(
 
 
 def _print_account(account: User, index: int, count: int) -> None:
+    """打印简短的注册成功信息。"""
     print(
         f"[{index}/{count}] 注册成功："
         f"uid={account.uid}，email={account.email}，密码={DEFAULT_PASSWORD}"
@@ -76,6 +78,7 @@ def _place_initial_spins(
     verbose: bool = False,
     stop_requested: Optional[Callable[[], bool]] = None,
 ) -> None:
+    """在指定环境中按顺序完成单个账号的下注。"""
     for spin_index in range(1, spin_count + 1):
         if stop_requested and stop_requested():
             raise BatchCancelled("用户已停止任务")
@@ -103,7 +106,7 @@ def _create_account_and_bet(
     verbose: bool,
     stop_requested: Callable[[], bool],
 ) -> AccountResult:
-    """Run one account pipeline; each account's spins remain ordered."""
+    """执行单个账号的注册、加钱和顺序下注流程。"""
     if stop_requested():
         raise BatchCancelled("用户已停止任务")
 
@@ -178,12 +181,7 @@ def create_accounts_and_bet(
     stop_requested: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
 ) -> int:
-    """Create accounts in parallel and export successful account records.
-
-    Accounts run concurrently, while spins for the same account remain serial so
-    that the game ``session_id`` chain is preserved. ``progress_callback`` gets
-    ``(completed, total, successful)`` after every finished account pipeline.
-    """
+    """并行生成账号数据，同一账号的下注保持串行。"""
     if count <= 0:
         raise ValueError("账号数量必须大于 0")
     if max_workers <= 0:
@@ -200,6 +198,7 @@ def create_accounts_and_bet(
     internal_stop = threading.Event()
 
     def should_stop() -> bool:
+        """合并流程错误和界面停止信号。"""
         return internal_stop.is_set() or bool(stop_requested and stop_requested())
 
     with output_path.open("w", encoding="utf-8") as account_file:

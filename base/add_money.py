@@ -1,4 +1,4 @@
-"""Helpers for adding test funds through the admin API."""
+"""通过后台接口给测试账号加钱。"""
 
 import os
 import threading
@@ -22,7 +22,7 @@ _token_lock = threading.Lock()
 
 
 def _normalize_base_url(value: str) -> str:
-    """Return an absolute admin URL without a trailing slash."""
+    """规范化后台地址并去掉末尾斜杠。"""
     url = value.strip().rstrip("/")
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
@@ -30,7 +30,7 @@ def _normalize_base_url(value: str) -> str:
 
 
 def base_url_for_environment(environment: str) -> str:
-    """Resolve the admin API URL from ``<environment>.env``."""
+    """从环境文件读取后台接口地址。"""
     env_file = PROJECT_ROOT / f"{environment}.env"
     domain = dotenv_values(env_file).get("background_domain")
     if domain:
@@ -41,6 +41,7 @@ def base_url_for_environment(environment: str) -> str:
 
 
 def _browser_headers(base_url: str = BASE_URL) -> Dict[str, str]:
+    """构建后台接口使用的浏览器请求头。"""
     return {
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json",
@@ -55,6 +56,7 @@ def _browser_headers(base_url: str = BASE_URL) -> Dict[str, str]:
 
 
 def _extract_token(result: Dict[str, Any]) -> Optional[str]:
+    """从不同登录响应结构中提取 token。"""
     data = result.get("data")
     nested_data = data if isinstance(data, dict) else {}
     return (
@@ -66,6 +68,7 @@ def _extract_token(result: Dict[str, Any]) -> Optional[str]:
 
 
 def _is_token_expired(token: Optional[str]) -> bool:
+    """判断后台 JWT 是否缺失、无效或过期。"""
     if not token:
         return True
 
@@ -81,7 +84,7 @@ def _is_token_expired(token: Optional[str]) -> bool:
 
 
 def login(base_url: str = BASE_URL) -> str:
-    """Log in to the admin API and cache its token."""
+    """登录后台接口并缓存 token。"""
     base_url = _normalize_base_url(base_url)
 
     response = requests.post(
@@ -113,7 +116,7 @@ def add_money(
     *,
     base_url: str = BASE_URL,
 ) -> Dict[str, Any]:
-    """Add funds to a user, refreshing the admin token when necessary."""
+    """给用户加钱，必要时自动刷新后台 token。"""
     base_url = _normalize_base_url(base_url)
     with _token_lock:
         token = _token_cache.get(base_url)
@@ -134,5 +137,5 @@ def add_money(
 
 
 def operation_succeeded(result: Dict[str, Any]) -> bool:
-    """Admin operations use ``code == 0`` for business success."""
+    """判断后台操作是否业务成功。"""
     return result.get("code") == 0

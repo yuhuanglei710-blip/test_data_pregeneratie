@@ -1,4 +1,4 @@
-"""Timestamp calculation utilities."""
+"""时间戳计算工具。"""
 
 import time
 from typing import Optional
@@ -10,10 +10,11 @@ SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR
 
 
 class TimestampTool:
-    """Generate and adjust Unix timestamps."""
+    """生成和调整 Unix 时间戳。"""
 
     @staticmethod
     def get_timestamp() -> int:
+        """返回当前秒级 Unix 时间戳。"""
         return int(time.time())
 
     @staticmethod
@@ -25,7 +26,7 @@ class TimestampTool:
         seconds: int = 0,
         method: int = 1,
     ) -> int:
-        """Add a duration when ``method`` is 1; otherwise subtract it."""
+        """method 为 1 时增加时间，否则减少时间。"""
         base_timestamp = (
             TimestampTool.get_timestamp() if timestamp is None else timestamp
         )

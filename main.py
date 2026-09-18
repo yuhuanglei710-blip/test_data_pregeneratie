@@ -1,4 +1,4 @@
-"""Launch the desktop controller."""
+"""启动桌面控制台。"""
 
 from gui import main
 

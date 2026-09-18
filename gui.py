@@ -1,11 +1,11 @@
-"""PySide6 desktop controller for the parallel test-data workflow."""
+"""自动化测试数据桌面控制台。"""
 
 import threading
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
-from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QSize, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QFontDatabase, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -66,102 +66,94 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 APP_STYLESHEET = """
 QWidget {
     color: #d6d9df;
-    font-family: "Segoe UI";
+    font-family: "Microsoft YaHei UI", "Segoe UI";
     font-size: 13px;
 }
-QWidget#root {
-    background: #0e0f12;
-}
-QFrame#topBar {
-    background: #0e0f12;
-    border-bottom: 1px solid #26292f;
-}
-QLabel#eyebrow, QLabel#terminalMeta, QLabel#fieldHint {
+QWidget#root, QFrame#topBar { background: #0e0f12; }
+QFrame#topBar { border-bottom: 1px solid #26292f; }
+
+QLabel#title { color: #f4f5f7; font-size: 24px; font-weight: 700; }
+QLabel#sectionTitle { color: #f1f2f4; font-size: 15px; font-weight: 650; }
+QLabel#fieldLabel { color: #aeb2ba; font-size: 12px; }
+QLabel#eyebrow, QLabel#terminalMeta, QLabel#fieldHint,
+QLabel#navigationMeta {
     color: #6f747e;
     font-family: "Cascadia Mono", "Consolas";
     font-size: 11px;
 }
-QLabel#title {
+QLabel#navigationBrand, QLabel#sessionTitle {
     color: #f4f5f7;
-    font-size: 24px;
+    font-family: "Cascadia Mono", "Consolas";
     font-weight: 700;
 }
-QLabel#statusPill {
+QLabel#navigationBrand { font-size: 15px; }
+QLabel#sessionTitle { font-size: 13px; }
+QLabel#online { color: #79d59a; font-weight: 700; }
+QLabel#statusPill, QLabel#connectionStatus {
     background: #1a1d22;
-    border: 1px solid #2d3138;
+    border: 1px solid #30343b;
+    border-radius: 7px;
+    padding: 8px 12px;
+}
+QLabel#statusPill {
     border-radius: 14px;
-    padding: 6px 12px;
     font-family: "Cascadia Mono", "Consolas";
     font-size: 11px;
     font-weight: 600;
 }
-QFrame#settingsPanel, QFrame#terminalPanel {
+
+QFrame#settingsPanel, QFrame#terminalPanel, QFrame#navigation,
+QFrame#configCard {
     background: #17191d;
     border: 1px solid #292c33;
     border-radius: 10px;
 }
-QFrame#configCard {
-    background: #121418;
-    border: 1px solid #292c33;
-    border-radius: 9px;
-}
-QFrame#terminalPanel {
-    background: #121316;
-}
-QFrame#navigation {
-    background: #15171b;
-    border: 1px solid #292c33;
-    border-radius: 10px;
-}
-QLabel#navigationBrand {
-    color: #f4f5f7;
-    font-family: "Cascadia Mono", "Consolas";
-    font-size: 15px;
-    font-weight: 700;
-}
-QLabel#navigationMeta {
-    color: #626771;
-    font-family: "Cascadia Mono", "Consolas";
-    font-size: 10px;
+QFrame#terminalPanel, QFrame#configCard { background: #121418; }
+QFrame#navigation { background: #15171b; }
+
+QPushButton {
+    min-height: 36px;
+    border-radius: 7px;
+    padding: 0 14px;
+    font-weight: 600;
 }
 QPushButton#navigationButton {
     min-height: 42px;
     color: #888d97;
     background: transparent;
     border: 0;
-    border-radius: 7px;
     padding: 0 14px;
     text-align: left;
-    font-weight: 600;
 }
-QPushButton#navigationButton:hover {
-    color: #e2e4e8;
-    background: #202329;
-}
-QPushButton#navigationButton:checked {
-    color: #ffffff;
+QPushButton#navigationButton:hover, QPushButton#navigationButton:checked {
+    color: #fff;
     background: #2a2e35;
 }
-QPushButton#navigationButton:disabled {
-    color: #50545c;
-    background: transparent;
+QPushButton#primaryButton, QPushButton#modeButton:checked {
+    color: #101114;
+    background: #f0f2f4;
+    border: 1px solid #f0f2f4;
 }
-QScrollArea#settingsScroll {
-    background: transparent;
-    border: 0;
+QPushButton#primaryButton:hover { background: #fff; border-color: #fff; }
+QPushButton#secondaryButton, QPushButton#stopButton,
+QPushButton#browseButton, QPushButton#modeButton {
+    color: #c7cad0;
+    background: #1b1e23;
+    border: 1px solid #383c44;
 }
-QWidget#settingsPage {
-    background: transparent;
+QPushButton#modeButton { color: #777c86; background: #101114; }
+QPushButton#secondaryButton:hover, QPushButton#stopButton:hover,
+QPushButton#browseButton:hover, QPushButton#modeButton:hover {
+    color: #fff;
+    background: #252930;
+    border-color: #555b66;
 }
-QLabel#sectionTitle {
-    color: #f1f2f4;
-    font-size: 15px;
-    font-weight: 650;
+QPushButton:disabled, QPushButton#navigationButton:disabled {
+    color: #555a63;
+    background: #191b20;
+    border-color: #292c32;
 }
-QLabel#fieldLabel {
-    color: #aeb2ba;
-    font-size: 12px;
-}
+
 QLineEdit, QSpinBox, QComboBox {
     min-height: 36px;
     color: #f0f1f3;
@@ -171,49 +163,15 @@ QLineEdit, QSpinBox, QComboBox {
     padding: 0 10px;
     selection-background-color: #4a515d;
 }
-QLineEdit:hover, QSpinBox:hover, QComboBox:hover {
-    border-color: #484d56;
-}
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
-    border-color: #7b828e;
-}
+QLineEdit:hover, QSpinBox:hover, QComboBox:hover { border-color: #484d56; }
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: #7b828e; }
 QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {
     color: #5f646d;
     background: #1d2025;
-    border-color: #292c32;
 }
-QListWidget#channelCodeList {
-    color: #d7dae0;
-    background: #0f1013;
-    border: 1px solid #30343b;
-    border-radius: 7px;
-    padding: 5px;
-    outline: 0;
-}
-QLabel#connectionStatus {
-    color: #8f949e;
-    background: #0f1013;
-    border: 1px solid #30343b;
-    border-radius: 7px;
-    padding: 10px;
-}
-QDialog {
-    background: #17191d;
-}
-QListWidget#channelCodeList::item {
-    min-height: 32px;
-    padding: 0 8px;
-    border-radius: 5px;
-}
-QListWidget#channelCodeList::item:hover {
-    background: #20242a;
-}
-QListWidget#channelCodeList::item:selected {
-    color: #ffffff;
-    background: #30353d;
-}
-QComboBox::drop-down {
-    width: 28px;
+QComboBox::drop-down, QSpinBox::up-button, QSpinBox::down-button {
+    width: 24px;
+    background: #181a1f;
     border: 0;
 }
 QComboBox QAbstractItemView {
@@ -221,17 +179,24 @@ QComboBox QAbstractItemView {
     background: #17191d;
     border: 1px solid #343840;
     selection-background-color: #2c3037;
-    outline: 0;
 }
-QSpinBox::up-button, QSpinBox::down-button {
-    width: 20px;
-    background: #181a1f;
-    border: 0;
+
+QListWidget#channelCodeList, QPlainTextEdit#terminal {
+    color: #d7dae0;
+    background: #090a0c;
+    border: 1px solid #30343b;
+    border-radius: 7px;
+    padding: 6px;
 }
-QCheckBox {
-    color: #b9bdc5;
-    spacing: 8px;
+QListWidget#channelCodeList::item { min-height: 32px; padding: 4px 8px; }
+QListWidget#channelCodeList::item:selected { color: #fff; background: #30353d; }
+QPlainTextEdit#terminal {
+    padding: 12px;
+    font-family: "Cascadia Mono", "Consolas";
+    font-size: 12px;
 }
+
+QCheckBox { color: #b9bdc5; spacing: 8px; }
 QCheckBox::indicator {
     width: 16px;
     height: 16px;
@@ -239,122 +204,32 @@ QCheckBox::indicator {
     border: 1px solid #3a3e46;
     border-radius: 4px;
 }
-QCheckBox::indicator:checked {
-    background: #7bd99d;
-    border-color: #7bd99d;
-}
-QPushButton#modeButton {
-    min-height: 34px;
-    color: #777c86;
-    background: #101114;
-    border: 1px solid #30343b;
-    border-radius: 6px;
-    padding: 0 12px;
-    font-weight: 600;
-}
-QPushButton#modeButton:hover {
-    color: #d7dae0;
-    border-color: #4b5059;
-}
-QPushButton#modeButton:checked {
-    color: #111216;
-    background: #f0f2f4;
-    border-color: #f0f2f4;
-}
-QPushButton#modeButton:disabled {
-    color: #555a63;
-    background: #191b20;
-    border-color: #292c32;
-}
-QPushButton {
-    min-height: 36px;
-    border-radius: 7px;
-    padding: 0 14px;
-    font-weight: 600;
-}
-QPushButton#primaryButton {
-    color: #101114;
-    background: #f0f2f4;
-    border: 1px solid #f0f2f4;
-}
-QPushButton#primaryButton:hover {
-    background: #ffffff;
-    border-color: #ffffff;
-}
-QPushButton#primaryButton:pressed {
-    background: #d9dce0;
-}
-QPushButton#secondaryButton, QPushButton#stopButton, QPushButton#browseButton {
-    color: #c7cad0;
-    background: #1b1e23;
-    border: 1px solid #383c44;
-}
-QPushButton#secondaryButton:hover, QPushButton#stopButton:hover,
-QPushButton#browseButton:hover {
-    color: #ffffff;
-    background: #252930;
-    border-color: #555b66;
-}
-QPushButton:disabled {
-    color: #5c616a;
-    background: #1a1c20;
-    border-color: #2b2e34;
-}
-QLabel#online {
-    color: #79d59a;
-    font-family: "Cascadia Mono", "Consolas";
-    font-size: 11px;
-    font-weight: 700;
-}
-QLabel#sessionTitle {
-    color: #eceef1;
-    font-family: "Cascadia Mono", "Consolas";
-    font-size: 13px;
-    font-weight: 700;
-}
+QCheckBox::indicator:checked { background: #7bd99d; border-color: #7bd99d; }
+
 QProgressBar {
     min-height: 5px;
     max-height: 5px;
     background: #292c32;
     border: 0;
     border-radius: 2px;
-    text-align: center;
 }
-QProgressBar::chunk {
-    background: #79d59a;
-    border-radius: 2px;
-}
-QPlainTextEdit#terminal {
-    color: #cfd3da;
-    background: #090a0c;
-    border: 1px solid #25282e;
-    border-radius: 8px;
-    padding: 12px;
-    font-family: "Cascadia Mono", "Consolas";
-    font-size: 12px;
-    selection-background-color: #343a43;
-}
-QScrollBar:vertical {
-    width: 9px;
-    margin: 4px 2px;
-    background: transparent;
-}
+QProgressBar::chunk { background: #79d59a; border-radius: 2px; }
+
+QScrollArea#settingsScroll, QWidget#settingsPage { background: transparent; border: 0; }
+QScrollBar:vertical { width: 9px; margin: 4px 2px; background: transparent; }
 QScrollBar::handle:vertical {
     min-height: 28px;
     background: #353941;
     border-radius: 4px;
 }
-QScrollBar::handle:vertical:hover {
-    background: #4a4f59;
-}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-    height: 0;
-}
+QScrollBar::handle:vertical:hover { background: #4a4f59; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 """
 
 
+# 后台线程与输出转发
 class QueueWriter:
-    """Forward stdout fragments to a Qt signal from any worker thread."""
+    """把工作线程的标准输出转发给 Qt 信号。"""
 
     def __init__(self, emit: Callable[[str], None]):
         self.emit = emit
@@ -369,6 +244,8 @@ class QueueWriter:
 
 
 class WorkflowWorker(QObject):
+    """在 Qt 工作线程中执行账号任务。"""
+
     log = Signal(str)
     progress = Signal(int, int, int)
     completed = Signal(int, bool)
@@ -386,6 +263,7 @@ class WorkflowWorker(QObject):
 
     @Slot()
     def run(self) -> None:
+        """执行任务并发送日志、进度和结果。"""
         writer = QueueWriter(self.log.emit)
         try:
             with redirect_stdout(writer), redirect_stderr(writer):
@@ -402,7 +280,7 @@ class WorkflowWorker(QObject):
 
 
 class DatabaseTestWorker(QObject):
-    """Test a database connection without blocking the Qt event loop."""
+    """在线程中测试数据库连接，避免阻塞界面。"""
 
     succeeded = Signal(str)
     failed = Signal(str)
@@ -414,6 +292,7 @@ class DatabaseTestWorker(QObject):
 
     @Slot()
     def run(self) -> None:
+        """测试连接并发送简短结果。"""
         try:
             self.succeeded.emit(test_database_connection(self.connection))
         except Exception as error:
@@ -422,8 +301,9 @@ class DatabaseTestWorker(QObject):
             self.done.emit()
 
 
+# 数据库连接弹窗
 class DatabaseConnectionDialog(QDialog):
-    """Modal editor for one environment's private-key database connection."""
+    """编辑单个环境的 SSH 数据库连接。"""
 
     def __init__(
         self,
@@ -434,8 +314,6 @@ class DatabaseConnectionDialog(QDialog):
     ):
         super().__init__(parent)
         self.environment = environment
-        self.private_keys = private_keys
-        self.legacy_private_key_path = connection.ssh_private_key
         self.saved_connection: Optional[DatabaseConnectionConfig] = None
         self.test_thread: Optional[QThread] = None
         self.test_worker: Optional[DatabaseTestWorker] = None
@@ -477,16 +355,11 @@ class DatabaseConnectionDialog(QDialog):
         self.ssh_private_key = QComboBox()
         for key in private_keys.values():
             self.ssh_private_key.addItem(key.name, key.key_id)
-        if connection.ssh_private_key and not connection.ssh_private_key_id:
-            self.ssh_private_key.addItem(
-                f"{Path(connection.ssh_private_key).name}（旧配置）",
-                "__legacy__",
-            )
         if self.ssh_private_key.count() == 0:
             self.ssh_private_key.addItem("请先在参数配置中导入私钥", None)
             self.ssh_private_key.setEnabled(False)
         selected_key = self.ssh_private_key.findData(
-            connection.ssh_private_key_id or "__legacy__"
+            connection.ssh_private_key_id
         )
         if selected_key >= 0:
             self.ssh_private_key.setCurrentIndex(selected_key)
@@ -565,20 +438,21 @@ class DatabaseConnectionDialog(QDialog):
     ) -> None:
         label = QLabel(label_text)
         label.setObjectName("fieldLabel")
+        label.setFixedWidth(96)
+        label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         layout.addWidget(label, row, 0)
         layout.addWidget(widget, row, 1)
 
     def connection(self) -> DatabaseConnectionConfig:
+        """把当前表单整理为连接配置。"""
         selected_key_id = self.ssh_private_key.currentData()
-        is_legacy_key = selected_key_id == "__legacy__"
         return DatabaseConnectionConfig(
             ssh_host=self.ssh_host.text().strip(),
             ssh_port=self.ssh_port.value(),
             ssh_username=self.ssh_username.text().strip(),
-            ssh_private_key_id=(
-                "" if is_legacy_key or selected_key_id is None else selected_key_id
-            ),
-            ssh_private_key=(self.legacy_private_key_path if is_legacy_key else ""),
+            ssh_private_key_id=selected_key_id or "",
             database_host=self.database_host.text().strip(),
             database_port=self.database_port.value(),
             database_name=self.database_name.text().strip(),
@@ -588,6 +462,7 @@ class DatabaseConnectionDialog(QDialog):
 
     @Slot()
     def _save(self) -> None:
+        """校验并保存当前环境连接。"""
         connection = self.connection()
         try:
             self.saved_connection = save_database_connection(
@@ -601,6 +476,7 @@ class DatabaseConnectionDialog(QDialog):
 
     @Slot()
     def _test_connection(self) -> None:
+        """异步测试当前表单中的连接。"""
         if self.test_thread and self.test_thread.isRunning():
             return
         connection = self.connection()
@@ -652,14 +528,16 @@ class DatabaseConnectionDialog(QDialog):
         event.accept()
 
 
+# 主窗口
 class WorkflowWindow(QMainWindow):
-    """Termius-inspired controller window backed by a Qt worker thread."""
+    """Termius 风格的自动化控制台主窗口。"""
 
     def __init__(self):
+        """加载本地配置并构建主窗口。"""
         super().__init__()
         self.setWindowTitle("Automation Console")
-        self.resize(1220, 800)
-        self.setMinimumSize(1000, 680)
+        self.resize(1280, 820)
+        self.setMinimumSize(1040, 700)
 
         self.worker_thread: Optional[QThread] = None
         self.worker: Optional[WorkflowWorker] = None
@@ -667,12 +545,11 @@ class WorkflowWindow(QMainWindow):
         self.current_section = 0
         self.config_widgets: list[QWidget] = []
         self.navigation_buttons: list[QPushButton] = []
-        self.database_status_controls: list[tuple[QComboBox, QPushButton]] = []
+        self.database_status_button: Optional[QPushButton] = None
         self.database_breath_bright = True
         self.channel_codes_by_environment = load_channel_code_config()
         self.database_connections_by_environment = load_database_connections()
         self.ssh_private_keys = load_ssh_private_keys()
-        self._migrate_legacy_database_private_keys()
 
         root = QWidget()
         root.setObjectName("root")
@@ -698,8 +575,9 @@ class WorkflowWindow(QMainWindow):
         self.database_breath_timer = QTimer(self)
         self.database_breath_timer.timeout.connect(self._animate_database_status)
         self.database_breath_timer.start(850)
-        self._refresh_database_status_buttons()
+        self._update_database_status_button()
 
+    # 页面结构
     def _build_top_bar(self) -> QFrame:
         bar = QFrame()
         bar.setObjectName("topBar")
@@ -723,27 +601,10 @@ class WorkflowWindow(QMainWindow):
         layout.addWidget(self.status_label, 0, Qt.AlignmentFlag.AlignVCenter)
         return bar
 
-    def _migrate_legacy_database_private_keys(self) -> None:
-        """Move older per-connection key paths into the reusable key library."""
-        changed = False
-        for environment, connection in self.database_connections_by_environment.items():
-            if connection.ssh_private_key_id or not connection.ssh_private_key:
-                continue
-            try:
-                imported = import_ssh_private_key(connection.ssh_private_key)
-                connection.ssh_private_key_id = imported.key_id
-                connection.ssh_private_key = ""
-                save_database_connection(environment, connection)
-            except (OSError, ValueError):
-                continue
-            changed = True
-        if changed:
-            self.ssh_private_keys = load_ssh_private_keys()
-
     def _build_navigation(self) -> QFrame:
         navigation = QFrame()
         navigation.setObjectName("navigation")
-        navigation.setFixedWidth(190)
+        navigation.setFixedWidth(180)
         layout = QVBoxLayout(navigation)
         layout.setContentsMargins(12, 20, 12, 14)
         layout.setSpacing(6)
@@ -807,7 +668,7 @@ class WorkflowWindow(QMainWindow):
     def _build_settings_panel(self) -> QFrame:
         panel = QFrame()
         panel.setObjectName("settingsPanel")
-        panel.setFixedWidth(370)
+        panel.setFixedWidth(420)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(22, 22, 22, 20)
         layout.setSpacing(16)
@@ -848,8 +709,8 @@ class WorkflowWindow(QMainWindow):
         page = QWidget()
         page.setObjectName("settingsPage")
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 14, 8, 12)
-        layout.setSpacing(14)
+        layout.setContentsMargins(0, 8, 8, 8)
+        layout.setSpacing(10)
         form = self._form_layout()
 
         self.account_environment = QComboBox()
@@ -921,6 +782,10 @@ class WorkflowWindow(QMainWindow):
         environment_row = QHBoxLayout()
         environment_label = QLabel("配置环境")
         environment_label.setObjectName("fieldLabel")
+        environment_label.setFixedWidth(52)
+        environment_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         environment_row.addWidget(environment_label)
         self.config_environment = QComboBox()
         self.config_environment.addItems(list(SUPPORTED_ENVIRONMENTS))
@@ -972,6 +837,8 @@ class WorkflowWindow(QMainWindow):
 
         self.channel_code_list = QListWidget()
         self.channel_code_list.setObjectName("channelCodeList")
+        self.channel_code_list.setWordWrap(True)
+        self.channel_code_list.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.channel_code_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
@@ -1014,6 +881,10 @@ class WorkflowWindow(QMainWindow):
 
         self.ssh_private_key_list = QListWidget()
         self.ssh_private_key_list.setObjectName("channelCodeList")
+        self.ssh_private_key_list.setWordWrap(True)
+        self.ssh_private_key_list.setTextElideMode(
+            Qt.TextElideMode.ElideNone
+        )
         self.ssh_private_key_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
@@ -1048,8 +919,8 @@ class WorkflowWindow(QMainWindow):
         page = QWidget()
         page.setObjectName("settingsPage")
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 14, 8, 12)
-        layout.setSpacing(14)
+        layout.setContentsMargins(0, 8, 8, 8)
+        layout.setSpacing(10)
         form = self._form_layout()
 
         self.environment = QComboBox()
@@ -1104,12 +975,20 @@ class WorkflowWindow(QMainWindow):
         min_label.setObjectName("fieldHint")
         random_row.addWidget(min_label)
         self.spin_min = self._spin_box(20, maximum=100_000)
+        self.spin_min.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Fixed,
+        )
         self.spin_min.setEnabled(False)
         random_row.addWidget(self.spin_min)
         max_label = QLabel("MAX")
         max_label.setObjectName("fieldHint")
         random_row.addWidget(max_label)
         self.spin_max = self._spin_box(INITIAL_SPIN_COUNT, maximum=100_000)
+        self.spin_max.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Fixed,
+        )
         self.spin_max.setEnabled(False)
         random_row.addWidget(self.spin_max)
         layout.addLayout(random_row)
@@ -1140,6 +1019,7 @@ class WorkflowWindow(QMainWindow):
         )
         return self._scrollable_settings_page(page)
 
+    # 通用表单组件
     @staticmethod
     def _scrollable_settings_page(page: QWidget) -> QScrollArea:
         scroll = QScrollArea()
@@ -1157,7 +1037,8 @@ class WorkflowWindow(QMainWindow):
     def _form_layout() -> QGridLayout:
         form = QGridLayout()
         form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(11)
+        form.setVerticalSpacing(9)
+        form.setColumnMinimumWidth(0, 100)
         form.setColumnStretch(1, 1)
         return form
 
@@ -1172,27 +1053,25 @@ class WorkflowWindow(QMainWindow):
         status_button.setFixedWidth(132)
         status_button.setCursor(Qt.CursorShape.PointingHandCursor)
         status_button.clicked.connect(
-            lambda _checked=False, environment_combo=combo: (
-                self._open_database_connection_dialog(environment_combo)
-            )
+            lambda: self._open_database_connection_dialog(combo)
         )
-        combo.currentTextChanged.connect(
-            lambda _environment, environment_combo=combo, button=status_button: (
-                self._update_database_status_button(environment_combo, button)
-            )
-        )
+        combo.currentTextChanged.connect(self._update_database_status_button)
         row.addWidget(status_button)
-        self.database_status_controls.append((combo, status_button))
+        self.database_status_button = status_button
         self.config_widgets.append(status_button)
-        self._update_database_status_button(combo, status_button)
+        self._update_database_status_button()
         return holder
 
     def _update_database_status_button(
         self,
-        combo: QComboBox,
-        button: QPushButton,
+        _environment: str = "",
     ) -> None:
-        connection = self.database_connections_by_environment[combo.currentText()]
+        button = self.database_status_button
+        if button is None:
+            return
+        connection = self.database_connections_by_environment[
+            self.config_environment.currentText()
+        ]
         configured = is_database_connection_configured(connection)
         if configured:
             button.setText("●  已配置 · 编辑")
@@ -1213,14 +1092,10 @@ class WorkflowWindow(QMainWindow):
             "border-color: #292c32; }"
         )
 
-    def _refresh_database_status_buttons(self) -> None:
-        for combo, button in self.database_status_controls:
-            self._update_database_status_button(combo, button)
-
     @Slot()
     def _animate_database_status(self) -> None:
         self.database_breath_bright = not self.database_breath_bright
-        self._refresh_database_status_buttons()
+        self._update_database_status_button()
 
     def _open_database_connection_dialog(self, combo: QComboBox) -> None:
         environment = combo.currentText()
@@ -1237,7 +1112,7 @@ class WorkflowWindow(QMainWindow):
             self.database_connections_by_environment[environment] = (
                 dialog.saved_connection
             )
-            self._refresh_database_status_buttons()
+            self._update_database_status_button()
             self._append_log(
                 f"[config:{environment}] database connection saved\n"
             )
@@ -1341,6 +1216,10 @@ class WorkflowWindow(QMainWindow):
     @staticmethod
     def _spin_box(value: int, *, maximum: int = 2_000_000_000) -> QSpinBox:
         widget = QSpinBox()
+        widget.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Fixed,
+        )
         widget.setRange(1, maximum)
         widget.setValue(value)
         widget.setGroupSeparatorShown(True)
@@ -1357,6 +1236,11 @@ class WorkflowWindow(QMainWindow):
 
     def _channel_code_combo(self, environment: str) -> QComboBox:
         widget = QComboBox()
+        widget.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        widget.setMinimumContentsLength(10)
+        widget.setMinimumWidth(0)
         widget.addItems(self.channel_codes_by_environment[environment])
         return widget
 
@@ -1381,6 +1265,10 @@ class WorkflowWindow(QMainWindow):
     ) -> None:
         label = QLabel(label_text)
         label.setObjectName("fieldLabel")
+        label.setFixedWidth(100)
+        label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         layout.addWidget(label, row, 0)
         layout.addWidget(widget, row, 1)
         if suffix:
@@ -1404,6 +1292,7 @@ class WorkflowWindow(QMainWindow):
                 not self._is_running() and self.parallel_button.isChecked()
             )
 
+    # 参数维护
     def _switch_section(self, index: int) -> None:
         self.current_section = index
         if index < len(self.navigation_buttons):
@@ -1437,10 +1326,12 @@ class WorkflowWindow(QMainWindow):
             item = QListWidgetItem(f"{key.name}\n{key.path}")
             item.setData(Qt.ItemDataRole.UserRole, key.key_id)
             item.setToolTip(key.path)
+            item.setSizeHint(QSize(0, 52))
             self.ssh_private_key_list.addItem(item)
 
     @Slot()
     def _import_ssh_private_key(self) -> None:
+        """导入一个可复用的 SSH 私钥文件。"""
         selected, _ = QFileDialog.getOpenFileName(
             self,
             "导入 SSH 私钥到私钥库",
@@ -1465,6 +1356,7 @@ class WorkflowWindow(QMainWindow):
 
     @Slot()
     def _delete_ssh_private_key(self) -> None:
+        """移除未使用的私钥记录，不删除原文件。"""
         item = self.ssh_private_key_list.currentItem()
         if item is None:
             QMessageBox.information(self, "选择私钥", "请先选择要删除的 SSH 私钥")
@@ -1477,11 +1369,6 @@ class WorkflowWindow(QMainWindow):
             environment
             for environment, connection in self.database_connections_by_environment.items()
             if connection.ssh_private_key_id == key_id
-            or (
-                not connection.ssh_private_key_id
-                and connection.ssh_private_key
-                and Path(connection.ssh_private_key) == Path(key.path)
-            )
         ]
         if referenced_environments:
             QMessageBox.warning(
@@ -1499,7 +1386,7 @@ class WorkflowWindow(QMainWindow):
             return
         self.ssh_private_keys = load_ssh_private_keys()
         self._refresh_ssh_private_key_list()
-        self._refresh_database_status_buttons()
+        self._update_database_status_button()
         self._append_log(f"[config] SSH private key removed: {key.name}\n")
 
     @Slot()
@@ -1556,6 +1443,7 @@ class WorkflowWindow(QMainWindow):
         environment: str,
         channel_codes: list[str],
     ) -> bool:
+        """保存 Channel Code 并同步两个任务页。"""
         try:
             saved_codes = save_channel_codes(environment, channel_codes)
         except (OSError, ValueError) as error:
@@ -1584,7 +1472,9 @@ class WorkflowWindow(QMainWindow):
         if selected:
             line_edit.setText(selected)
 
+    # 任务生命周期
     def _parameters(self) -> tuple[Callable[..., int], dict, str]:
+        """校验当前页面并生成任务参数。"""
         if self.current_section == 0:
             output_path = Path(self.account_output_file.text()).expanduser()
             if not output_path.name:
@@ -1638,6 +1528,7 @@ class WorkflowWindow(QMainWindow):
 
     @Slot()
     def _start(self) -> None:
+        """在工作线程中启动当前任务。"""
         try:
             workflow, parameters, command = self._parameters()
         except ValueError as error:
@@ -1679,6 +1570,7 @@ class WorkflowWindow(QMainWindow):
 
     @Slot()
     def _stop(self) -> None:
+        """请求安全停止当前任务。"""
         if self.worker:
             self.worker.request_stop()
         self.stop_button.setEnabled(False)
@@ -1750,6 +1642,7 @@ class WorkflowWindow(QMainWindow):
         self.status_label.setStyleSheet(f"color: {color};")
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        """任务运行时确认停止后再关闭窗口。"""
         if self._is_running():
             answer = QMessageBox.question(
                 self,
@@ -1769,6 +1662,7 @@ class WorkflowWindow(QMainWindow):
 
 
 def main() -> None:
+    """创建并运行 Qt 桌面应用。"""
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("Automation Console")
     app.setStyle("Fusion")
