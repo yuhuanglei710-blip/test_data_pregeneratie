@@ -333,6 +333,25 @@ class ApiParsingTests(unittest.TestCase):
             "session-1",
         )
 
+    def test_parallel_spin_does_not_reuse_or_store_session(self):
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "data": {"win": 0, "session_id": "parallel-session"}
+        }
+
+        with (
+            patch.object(spin, "get_valid_game_token", return_value="game-token"),
+            patch.object(spin.requests, "post", return_value=response) as post,
+        ):
+            spin.dev_spin(
+                "user-token",
+                preserve_session=False,
+                print_result=False,
+            )
+
+        self.assertEqual(post.call_args.kwargs["json"]["session_id"], "")
+        self.assertNotIn(("dev", "user-token"), spin._game_session_cache)
+
 
 class TimestampToolTests(unittest.TestCase):
     def test_adds_and_subtracts_duration(self):
@@ -448,6 +467,44 @@ class BatchWorkflowTests(unittest.TestCase):
             ],
         )
 
+    def test_spins_can_be_placed_in_parallel(self):
+        active = 0
+        max_active = 0
+        active_lock = threading.Lock()
+
+        def place_spin(*args, **kwargs):
+            nonlocal active, max_active
+            with active_lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.03)
+            with active_lock:
+                active -= 1
+            return Mock()
+
+        with (
+            patch.object(
+                spin,
+                "get_valid_game_token",
+                return_value="game-token",
+            ) as token,
+            patch.object(spin, "dev_spin", side_effect=place_spin) as request,
+        ):
+            tournment_test._place_initial_spins(
+                "user-token",
+                spin_count=4,
+                spin_workers=3,
+                environment="huidu",
+            )
+
+        token.assert_called_once_with("user-token", environment="huidu")
+        self.assertEqual(request.call_count, 4)
+        self.assertGreaterEqual(max_active, 2)
+        for request_call in request.call_args_list:
+            self.assertEqual(request_call.args, ("user-token",))
+            self.assertEqual(request_call.kwargs["environment"], "huidu")
+            self.assertFalse(request_call.kwargs["preserve_session"])
+
     def test_stop_request_cancels_before_next_spin(self):
         with patch.object(spin, "dev_spin") as place_spin:
             with self.assertRaises(tournment_test.BatchCancelled):
@@ -512,6 +569,10 @@ class BatchWorkflowTests(unittest.TestCase):
     def test_parallel_account_count_must_be_positive(self):
         with self.assertRaisesRegex(ValueError, "并行账号数"):
             tournment_test.create_accounts_and_bet(count=1, max_workers=0)
+
+    def test_spin_worker_count_must_be_positive(self):
+        with self.assertRaisesRegex(ValueError, "下注并发数"):
+            tournment_test.create_accounts_and_bet(count=1, spin_workers=0)
 
     def test_tournament_web_platform_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Android 或 iOS"):

@@ -239,10 +239,11 @@ def dev_spin(
     *,
     environment: str = "dev",
     bet_amount: int = DEFAULT_BET_CENTS,
+    preserve_session: bool = True,
     verbose: bool = False,
     print_result: bool = True,
 ) -> Optional[requests.Response]:
-    """执行一次下注并维护连续 session。"""
+    """执行一次下注，可选择是否维护连续 session。"""
     if bet_amount <= 0:
         raise ValueError("下注金额必须大于 0")
 
@@ -261,7 +262,9 @@ def dev_spin(
         "bet": bet_amount,
         "money_type": "SC",
         "game_id": 100001,
-        "session_id": _game_session_cache.get(cache_key, ""),
+        "session_id": (
+            _game_session_cache.get(cache_key, "") if preserve_session else ""
+        ),
     }
     headers = {
         "Accept": "application/json, text/plain, */*",
@@ -307,7 +310,7 @@ def dev_spin(
         result_data = result.get("data")
         if isinstance(result_data, dict):
             session_id = result_data.get("session_id")
-            if isinstance(session_id, str) and session_id:
+            if preserve_session and isinstance(session_id, str) and session_id:
                 _game_session_cache[cache_key] = session_id
         return response
     except (TypeError, ValueError) as error:

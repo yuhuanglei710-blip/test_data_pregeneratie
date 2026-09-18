@@ -53,6 +53,7 @@ from base.enums import Platform
 from base.tournment_test import (
     DEFAULT_ACCOUNT_COUNT,
     DEFAULT_MAX_WORKERS,
+    DEFAULT_SPIN_WORKERS,
     INITIAL_BALANCE,
     INITIAL_SPIN_COUNT,
     create_accounts_and_bet,
@@ -951,18 +952,27 @@ class WorkflowWindow(QMainWindow):
         self._add_form_row(form, 4, "执行方式", tournament_execution_mode)
         self._add_form_row(form, 5, "并行账号", self.max_workers)
 
+        self.spin_workers = self._spin_box(DEFAULT_SPIN_WORKERS, maximum=100)
+        (
+            spin_execution_mode,
+            self.spin_serial_button,
+            self.spin_parallel_button,
+        ) = self._execution_mode_control(self.spin_workers)
+        self._add_form_row(form, 6, "下注方式", spin_execution_mode)
+        self._add_form_row(form, 7, "下注并发", self.spin_workers)
+
         self.balance = self._spin_box(INITIAL_BALANCE)
-        self._add_form_row(form, 6, "加钱金额", self.balance)
+        self._add_form_row(form, 8, "加钱金额", self.balance)
 
         self.spin_count = self._spin_box(INITIAL_SPIN_COUNT, maximum=100_000)
-        self._add_form_row(form, 7, "下注次数", self.spin_count)
+        self._add_form_row(form, 9, "下注次数", self.spin_count)
 
         self.bet_amount = self._spin_box(spin.DEFAULT_BET_CENTS)
-        self._add_form_row(form, 8, "下注金额", self.bet_amount, "美分")
+        self._add_form_row(form, 10, "下注金额", self.bet_amount, "美分")
 
         self.output_file = QLineEdit(str(PROJECT_ROOT / "accounts.txt"))
         tournament_output, self.browse_button = self._output_field(self.output_file)
-        self._add_form_row(form, 9, "输出文件", tournament_output)
+        self._add_form_row(form, 11, "输出文件", tournament_output)
         layout.addLayout(form)
 
         self.random_spins = QCheckBox("每个账号随机下注次数")
@@ -1006,6 +1016,9 @@ class WorkflowWindow(QMainWindow):
                 self.max_workers,
                 self.serial_button,
                 self.parallel_button,
+                self.spin_workers,
+                self.spin_serial_button,
+                self.spin_parallel_button,
                 self.balance,
                 self.spin_count,
                 self.bet_amount,
@@ -1291,6 +1304,10 @@ class WorkflowWindow(QMainWindow):
             self.max_workers.setEnabled(
                 not self._is_running() and self.parallel_button.isChecked()
             )
+        if hasattr(self, "spin_workers"):
+            self.spin_workers.setEnabled(
+                not self._is_running() and self.spin_parallel_button.isChecked()
+            )
 
     # 参数维护
     def _switch_section(self, index: int) -> None:
@@ -1309,7 +1326,9 @@ class WorkflowWindow(QMainWindow):
             self.content_stack.setCurrentIndex(0)
             self.settings_stack.setCurrentIndex(1)
             self.settings_title.setText("锦标赛数据")
-            self.mode_hint.setText("注册账号、加钱并连续下注，生成锦标赛测试数据。")
+            self.mode_hint.setText(
+                "账号和下注可分别设置串行或并行；并行下注使用独立 session。"
+            )
             self.start_button.setText("生成锦标赛数据")
             self.session_title.setText("TOURNAMENT DATA")
             self.eyebrow.setText("$ tournament / generate")
@@ -1508,7 +1527,14 @@ class WorkflowWindow(QMainWindow):
             "count": self.count.value(),
             "initial_balance": self.balance.value(),
             "bet_amount": self.bet_amount.value(),
-            "max_workers": self.max_workers.value() if self.parallel_button.isChecked() else 1,
+            "max_workers": (
+                self.max_workers.value() if self.parallel_button.isChecked() else 1
+            ),
+            "spin_workers": (
+                self.spin_workers.value()
+                if self.spin_parallel_button.isChecked()
+                else 1
+            ),
             "spin_count": self.spin_count.value(),
             "spin_count_range": None,
             "environment": self.environment.currentText(),

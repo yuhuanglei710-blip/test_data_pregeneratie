@@ -27,6 +27,7 @@ DEFAULT_ACCOUNT_COUNT = 30
 INITIAL_BALANCE = 1_000_000
 INITIAL_SPIN_COUNT = 30
 DEFAULT_MAX_WORKERS = 5
+DEFAULT_SPIN_WORKERS = 5
 
 
 class SpinWorkflowError(RuntimeError):
@@ -75,10 +76,42 @@ def _place_initial_spins(
     bet_amount: int = spin.DEFAULT_BET_CENTS,
     *,
     environment: str = "dev",
+    spin_workers: int = 1,
     verbose: bool = False,
     stop_requested: Optional[Callable[[], bool]] = None,
 ) -> None:
-    """在指定环境中按顺序完成单个账号的下注。"""
+    """按所选并发数完成单个账号的初始下注。"""
+    if spin_workers <= 0:
+        raise ValueError("下注并发数必须大于 0")
+
+    if spin_workers > 1:
+        if not spin.get_valid_game_token(user_token, environment=environment):
+            raise SpinWorkflowError("获取游戏 token 失败")
+
+        def place_parallel_spin(spin_index: int) -> None:
+            if stop_requested and stop_requested():
+                raise BatchCancelled("用户已停止任务")
+            if spin.dev_spin(
+                user_token,
+                environment=environment,
+                bet_amount=bet_amount,
+                preserve_session=False,
+                verbose=verbose,
+            ) is None:
+                raise SpinWorkflowError(f"第 {spin_index}/{spin_count} 次下注失败")
+
+        with ThreadPoolExecutor(
+            max_workers=min(spin_workers, spin_count),
+            thread_name_prefix="spin",
+        ) as executor:
+            futures = [
+                executor.submit(place_parallel_spin, spin_index)
+                for spin_index in range(1, spin_count + 1)
+            ]
+            for future in as_completed(futures):
+                future.result()
+        return
+
     for spin_index in range(1, spin_count + 1):
         if stop_requested and stop_requested():
             raise BatchCancelled("用户已停止任务")
@@ -103,10 +136,11 @@ def _create_account_and_bet(
     spin_count: int,
     spin_count_range: Optional[Tuple[int, int]],
     bet_amount: int,
+    spin_workers: int = 1,
     verbose: bool,
     stop_requested: Callable[[], bool],
 ) -> AccountResult:
-    """执行单个账号的注册、加钱和顺序下注流程。"""
+    """执行单个账号的注册、加钱和初始下注流程。"""
     if stop_requested():
         raise BatchCancelled("用户已停止任务")
 
@@ -145,6 +179,7 @@ def _create_account_and_bet(
         account.token,
         account_spin_count,
         environment=environment,
+        spin_workers=spin_workers,
         bet_amount=bet_amount,
         verbose=verbose,
         stop_requested=stop_requested,
@@ -178,14 +213,17 @@ def create_accounts_and_bet(
     channel_code: str = DEFAULT_CHANNEL_CODE,
     verbose: bool = False,
     max_workers: int = DEFAULT_MAX_WORKERS,
+    spin_workers: int = DEFAULT_SPIN_WORKERS,
     stop_requested: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
 ) -> int:
-    """并行生成账号数据，同一账号的下注保持串行。"""
+    """按账号并发和下注并发配置批量生成测试数据。"""
     if count <= 0:
         raise ValueError("账号数量必须大于 0")
     if max_workers <= 0:
         raise ValueError("并行账号数必须大于 0")
+    if spin_workers <= 0:
+        raise ValueError("下注并发数必须大于 0")
     if platform not in (Platform.android.value, Platform.ios.value):
         raise ValueError("注册平台仅支持 Android 或 iOS")
     if not channel_code.strip():
@@ -221,6 +259,7 @@ def create_accounts_and_bet(
                 spin_count=spin_count,
                 spin_count_range=spin_count_range,
                 bet_amount=bet_amount,
+                spin_workers=spin_workers,
                 verbose=verbose,
                 stop_requested=should_stop,
             ): index
