@@ -8,6 +8,7 @@ from typing import Callable, Dict, Optional
 from PySide6.QtCore import QObject, QSize, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QFontDatabase, QTextCursor
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QApplication,
     QButtonGroup,
     QCheckBox,
@@ -66,33 +67,37 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 
 APP_STYLESHEET = """
 QWidget {
-    color: #d6d9df;
+    color: #20242a;
     font-family: "Microsoft YaHei UI", "Segoe UI";
     font-size: 13px;
 }
-QWidget#root, QFrame#topBar { background: #0e0f12; }
-QFrame#topBar { border-bottom: 1px solid #26292f; }
+QWidget#root { background: #f4f5f7; }
+QDialog, QMessageBox { background: #ffffff; }
+QFrame#topBar {
+    background: #f4f5f7;
+    border-bottom: 1px solid #dfe3e8;
+}
 
-QLabel#title { color: #f4f5f7; font-size: 24px; font-weight: 700; }
-QLabel#sectionTitle { color: #f1f2f4; font-size: 15px; font-weight: 650; }
-QLabel#fieldLabel { color: #aeb2ba; font-size: 12px; }
+QLabel#title { color: #17191d; font-size: 24px; font-weight: 700; }
+QLabel#sectionTitle { color: #20242a; font-size: 15px; font-weight: 650; }
+QLabel#fieldLabel { color: #5d6470; font-size: 12px; }
 QLabel#eyebrow, QLabel#terminalMeta, QLabel#fieldHint,
 QLabel#navigationMeta {
-    color: #6f747e;
+    color: #808792;
     font-family: "Cascadia Mono", "Consolas";
     font-size: 11px;
 }
 QLabel#navigationBrand, QLabel#sessionTitle {
-    color: #f4f5f7;
+    color: #17191d;
     font-family: "Cascadia Mono", "Consolas";
     font-weight: 700;
 }
 QLabel#navigationBrand { font-size: 15px; }
 QLabel#sessionTitle { font-size: 13px; }
-QLabel#online { color: #79d59a; font-weight: 700; }
+QLabel#online { color: #228653; font-weight: 700; }
 QLabel#statusPill, QLabel#connectionStatus {
-    background: #1a1d22;
-    border: 1px solid #30343b;
+    background: #ffffff;
+    border: 1px solid #d9dde3;
     border-radius: 7px;
     padding: 8px 12px;
 }
@@ -105,12 +110,11 @@ QLabel#statusPill {
 
 QFrame#settingsPanel, QFrame#terminalPanel, QFrame#navigation,
 QFrame#configCard {
-    background: #17191d;
-    border: 1px solid #292c33;
+    background: #ffffff;
+    border: 1px solid #dfe3e8;
     border-radius: 10px;
 }
-QFrame#terminalPanel, QFrame#configCard { background: #121418; }
-QFrame#navigation { background: #15171b; }
+QFrame#terminalPanel, QFrame#configCard, QFrame#navigation { background: #ffffff; }
 
 QPushButton {
     min-height: 36px;
@@ -120,112 +124,129 @@ QPushButton {
 }
 QPushButton#navigationButton {
     min-height: 42px;
-    color: #888d97;
+    color: #656c76;
     background: transparent;
     border: 0;
     padding: 0 14px;
     text-align: left;
 }
 QPushButton#navigationButton:hover, QPushButton#navigationButton:checked {
-    color: #fff;
-    background: #2a2e35;
+    color: #17191d;
+    background: #eceff2;
 }
 QPushButton#primaryButton, QPushButton#modeButton:checked {
-    color: #101114;
-    background: #f0f2f4;
-    border: 1px solid #f0f2f4;
+    color: #ffffff;
+    background: #20242a;
+    border: 1px solid #20242a;
 }
-QPushButton#primaryButton:hover { background: #fff; border-color: #fff; }
+QPushButton#primaryButton:hover, QPushButton#modeButton:checked:hover {
+    background: #000000;
+    border-color: #000000;
+}
 QPushButton#secondaryButton, QPushButton#stopButton,
 QPushButton#browseButton, QPushButton#modeButton {
-    color: #c7cad0;
-    background: #1b1e23;
-    border: 1px solid #383c44;
+    color: #3f4650;
+    background: #ffffff;
+    border: 1px solid #cfd4db;
 }
-QPushButton#modeButton { color: #777c86; background: #101114; }
+QPushButton#modeButton { color: #737b86; background: #f7f8f9; }
 QPushButton#secondaryButton:hover, QPushButton#stopButton:hover,
 QPushButton#browseButton:hover, QPushButton#modeButton:hover {
-    color: #fff;
-    background: #252930;
-    border-color: #555b66;
+    color: #17191d;
+    background: #f0f2f4;
+    border-color: #aeb5bf;
 }
 QPushButton:disabled, QPushButton#navigationButton:disabled {
-    color: #555a63;
-    background: #191b20;
-    border-color: #292c32;
+    color: #abb1ba;
+    background: #f1f3f5;
+    border-color: #e2e5e9;
 }
 
 QLineEdit, QSpinBox, QComboBox {
     min-height: 36px;
-    color: #f0f1f3;
-    background: #0f1013;
-    border: 1px solid #30343b;
+    color: #20242a;
+    background: #ffffff;
+    border: 1px solid #cfd4db;
     border-radius: 7px;
     padding: 0 10px;
-    selection-background-color: #4a515d;
+    selection-color: #ffffff;
+    selection-background-color: #343a42;
 }
-QLineEdit:hover, QSpinBox:hover, QComboBox:hover { border-color: #484d56; }
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: #7b828e; }
+QLineEdit:hover, QSpinBox:hover, QComboBox:hover { border-color: #9fa7b2; }
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: #343a42; }
 QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {
-    color: #5f646d;
-    background: #1d2025;
+    color: #a2a8b1;
+    background: #f0f2f4;
+    border-color: #e2e5e9;
 }
-QComboBox::drop-down, QSpinBox::up-button, QSpinBox::down-button {
+QComboBox::drop-down {
     width: 24px;
-    background: #181a1f;
+    background: #f3f5f7;
     border: 0;
 }
 QComboBox QAbstractItemView {
-    color: #e7e9ec;
-    background: #17191d;
-    border: 1px solid #343840;
-    selection-background-color: #2c3037;
+    color: #20242a;
+    background: #ffffff;
+    border: 1px solid #cfd4db;
+    selection-color: #17191d;
+    selection-background-color: #e9edf1;
 }
 
 QListWidget#channelCodeList, QPlainTextEdit#terminal {
-    color: #d7dae0;
-    background: #090a0c;
-    border: 1px solid #30343b;
+    color: #30363d;
+    background: #fbfcfd;
+    border: 1px solid #d6dbe1;
     border-radius: 7px;
     padding: 6px;
 }
 QListWidget#channelCodeList::item { min-height: 32px; padding: 4px 8px; }
-QListWidget#channelCodeList::item:selected { color: #fff; background: #30353d; }
+QListWidget#channelCodeList::item:selected { color: #17191d; background: #e8ebef; }
 QPlainTextEdit#terminal {
     padding: 12px;
     font-family: "Cascadia Mono", "Consolas";
     font-size: 12px;
 }
 
-QCheckBox { color: #b9bdc5; spacing: 8px; }
+QCheckBox { color: #4d545e; spacing: 8px; }
 QCheckBox::indicator {
     width: 16px;
     height: 16px;
-    background: #0f1013;
-    border: 1px solid #3a3e46;
+    background: #ffffff;
+    border: 1px solid #b9c0c9;
     border-radius: 4px;
 }
-QCheckBox::indicator:checked { background: #7bd99d; border-color: #7bd99d; }
+QCheckBox::indicator:checked { background: #20242a; border-color: #20242a; }
 
 QProgressBar {
     min-height: 5px;
     max-height: 5px;
-    background: #292c32;
+    background: #e4e7eb;
     border: 0;
     border-radius: 2px;
 }
-QProgressBar::chunk { background: #79d59a; border-radius: 2px; }
+QProgressBar::chunk { background: #20242a; border-radius: 2px; }
 
 QScrollArea#settingsScroll, QWidget#settingsPage { background: transparent; border: 0; }
 QScrollBar:vertical { width: 9px; margin: 4px 2px; background: transparent; }
 QScrollBar::handle:vertical {
     min-height: 28px;
-    background: #353941;
+    background: #c7ccd3;
     border-radius: 4px;
 }
-QScrollBar::handle:vertical:hover { background: #4a4f59; }
+QScrollBar::handle:vertical:hover { background: #9da5af; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 """
+
+
+class NumberInput(QSpinBox):
+    """仅允许直接输入数字，不提供步进按钮或滚轮调节。"""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+
+    def wheelEvent(self, event) -> None:
+        event.ignore()
 
 
 # 后台线程与输出转发
@@ -423,7 +444,7 @@ class DatabaseConnectionDialog(QDialog):
 
     @staticmethod
     def _port_spin(value: int) -> QSpinBox:
-        widget = QSpinBox()
+        widget = NumberInput()
         widget.setRange(1, 65535)
         widget.setValue(value)
         widget.setGroupSeparatorShown(True)
@@ -571,7 +592,7 @@ class WorkflowWindow(QMainWindow):
         workspace.addWidget(self.content_stack, 1)
         page.addLayout(workspace, 1)
 
-        self._set_status("●  READY", "#79d59a")
+        self._set_status("●  READY", "#228653")
         self._append_log("runner@local:~$ ready\n")
         self.database_breath_timer = QTimer(self)
         self.database_breath_timer.timeout.connect(self._animate_database_status)
@@ -1088,21 +1109,21 @@ class WorkflowWindow(QMainWindow):
         configured = is_database_connection_configured(connection)
         if configured:
             button.setText("●  已配置 · 编辑")
-            color = "#79d59a" if self.database_breath_bright else "#4f9568"
-            background = "#17251d"
-            border = "#315f40"
+            color = "#208653" if self.database_breath_bright else "#5b9b76"
+            background = "#f0faf4"
+            border = "#a9d8ba"
         else:
             button.setText("●  未配置 · 配置")
-            color = "#e27d84" if self.database_breath_bright else "#954f55"
-            background = "#27191b"
-            border = "#65373b"
+            color = "#c43d47" if self.database_breath_bright else "#b06b71"
+            background = "#fff4f4"
+            border = "#e7b8bc"
         button.setStyleSheet(
             "QPushButton {"
             f"color: {color}; background: {background}; border: 1px solid {border};"
             "border-radius: 7px; padding: 0 10px; font-weight: 650;"
-            "} QPushButton:hover { color: #ffffff; border-color: #7b828e; }"
-            "QPushButton:disabled { color: #555a63; background: #191b20; "
-            "border-color: #292c32; }"
+            "} QPushButton:hover { color: #17191d; border-color: #8f98a4; }"
+            "QPushButton:disabled { color: #abb1ba; background: #f1f3f5; "
+            "border-color: #e2e5e9; }"
         )
 
     @Slot()
@@ -1228,7 +1249,7 @@ class WorkflowWindow(QMainWindow):
 
     @staticmethod
     def _spin_box(value: int, *, maximum: int = 2_000_000_000) -> QSpinBox:
-        widget = QSpinBox()
+        widget = NumberInput()
         widget.setSizePolicy(
             QSizePolicy.Policy.Ignored,
             QSizePolicy.Policy.Fixed,
@@ -1574,7 +1595,7 @@ class WorkflowWindow(QMainWindow):
                 return
 
         self._set_running(True)
-        self._set_status("●  RUNNING", "#79d59a")
+        self._set_status("●  RUNNING", "#228653")
         self.progress.setRange(0, parameters["count"])
         self.progress.setValue(0)
         self.progress_text.setText(f"0 / {parameters['count']}  ·  OK 0")
@@ -1600,7 +1621,7 @@ class WorkflowWindow(QMainWindow):
         if self.worker:
             self.worker.request_stop()
         self.stop_button.setEnabled(False)
-        self._set_status("●  STOPPING", "#d7b56d")
+        self._set_status("●  STOPPING", "#a66b13")
         self._append_log("\n[signal] stop requested; waiting for active requests\n")
 
     @Slot(int, int, int)
@@ -1610,21 +1631,21 @@ class WorkflowWindow(QMainWindow):
         self.progress_text.setText(f"{completed} / {total}  ·  OK {successful}")
         self._set_status(
             f"●  RUNNING  {completed}/{total}  OK {successful}",
-            "#79d59a",
+            "#228653",
         )
 
     @Slot(int, bool)
     def _on_completed(self, successful: int, cancelled: bool) -> None:
         if cancelled:
-            self._set_status(f"●  STOPPED  OK {successful}", "#d7b56d")
+            self._set_status(f"●  STOPPED  OK {successful}", "#a66b13")
             self._append_log("[stopped] workflow cancelled\n")
         else:
-            self._set_status(f"●  DONE  OK {successful}", "#79d59a")
+            self._set_status(f"●  DONE  OK {successful}", "#228653")
             self._append_log("[done] workflow completed\n")
 
     @Slot(str)
     def _on_failed(self, message: str) -> None:
-        self._set_status("●  FAILED", "#e27d84")
+        self._set_status("●  FAILED", "#c43d47")
         self._append_log(f"\n[error] {message}\n")
         QMessageBox.critical(self, "任务失败", message)
 
