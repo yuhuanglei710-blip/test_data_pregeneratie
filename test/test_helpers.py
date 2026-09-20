@@ -12,7 +12,14 @@ from unittest.mock import Mock, call, patch
 
 import jwt
 
-from base import account_batch, add_money, database_config, spin, tournment_test
+from base import (
+    account_batch,
+    add_money,
+    channel_source,
+    database_config,
+    spin,
+    tournment_test,
+)
 from base.app_config import load_channel_codes, save_channel_codes
 from base.database_config import (
     DatabaseConnectionConfig,
@@ -84,6 +91,61 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(dev_codes, ["dev-code"])
         self.assertEqual(prod_codes, ["prod-code"])
         self.assertEqual(huidu_codes, [DEFAULT_CHANNEL_CODE])
+
+
+class ChannelSourceTests(unittest.TestCase):
+    def test_not_entering_b_always_uses_organic(self):
+        resolved = channel_source.resolve_channel_source(
+            [],
+            can_enter_b=False,
+            has_new_user_offer=True,
+        )
+
+        self.assertEqual(resolved, "Organic")
+
+    def test_new_user_offer_and_preference_are_used_for_matching(self):
+        sources = [
+            channel_source.ChannelSource("normal", "", 1),
+            channel_source.ChannelSource(
+                "new-user-default",
+                channel_source.NEW_USER_CHANNEL_GROUP,
+                1,
+            ),
+            channel_source.ChannelSource(
+                "new-user-preferred",
+                channel_source.NEW_USER_CHANNEL_GROUP,
+                1,
+            ),
+        ]
+
+        resolved = channel_source.resolve_channel_source(
+            sources,
+            can_enter_b=True,
+            has_new_user_offer=True,
+            preferred_sources=["new-user-preferred"],
+        )
+
+        self.assertEqual(resolved, "new-user-preferred")
+
+    def test_channel_sources_are_cached_by_environment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_file = f"{temp_dir}/channel_sources.json"
+            channel_source.save_channel_sources(
+                "dev",
+                [channel_source.ChannelSource("dev-source", "", 1)],
+                cache_file,
+            )
+            channel_source.save_channel_sources(
+                "prod",
+                [channel_source.ChannelSource("prod-source", "group", 0)],
+                cache_file,
+            )
+
+            cached = channel_source.load_channel_source_config(cache_file)
+
+        self.assertEqual(cached["dev"][0].user_source, "dev-source")
+        self.assertEqual(cached["prod"][0].user_source, "prod-source")
+        self.assertEqual(cached["huidu"], [])
 
 
 class DatabaseConfigTests(unittest.TestCase):
@@ -602,6 +664,57 @@ class AccountCreationTests(unittest.TestCase):
             verbose=False,
         )
         self.assertEqual(result.index, 1)
+
+    def test_custom_email_is_used_for_registration(self):
+        account = Mock(uid=42, token="user-token", email="named@example.com")
+        with patch.object(account_batch, "User", return_value=account) as user_factory:
+            account_batch._register_account(
+                1,
+                1,
+                environment="dev",
+                platform=Platform.ios.value,
+                channel_code="ios-channel",
+                verbose=False,
+                stop_requested=lambda: False,
+                email="named@example.com",
+            )
+
+        user_factory.assert_called_once_with(
+            email="named@example.com",
+            environment="dev",
+        )
+
+    def test_custom_account_creates_exactly_one_account(self):
+        with patch.object(account_batch, "create_accounts", return_value=1) as create:
+            successful = account_batch.create_custom_account(
+                " named@example.com ",
+                output_file="custom.txt",
+                environment="huidu",
+                platform=Platform.android.value,
+                channel_code="custom-channel",
+            )
+
+        self.assertEqual(successful, 1)
+        create.assert_called_once_with(
+            count=1,
+            output_file="custom.txt",
+            environment="huidu",
+            platform=Platform.android.value,
+            channel_code="custom-channel",
+            verbose=False,
+            max_workers=1,
+            stop_requested=None,
+            progress_callback=None,
+            email="named@example.com",
+        )
+
+    def test_invalid_custom_email_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "邮箱格式"):
+            account_batch.create_accounts(count=1, email="not-an-email")
+
+    def test_custom_email_cannot_be_used_for_a_batch(self):
+        with self.assertRaisesRegex(ValueError, "仅支持创建一个账号"):
+            account_batch.create_accounts(count=2, email="named@example.com")
 
     def test_account_only_workflow_exports_registered_accounts(self):
         progress = []

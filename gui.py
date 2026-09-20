@@ -36,8 +36,19 @@ from PySide6.QtWidgets import (
 )
 
 from base import spin
-from base.account_batch import create_accounts
+from base.account_batch import (
+    create_accounts,
+    create_custom_account,
+    validate_custom_email,
+)
 from base.app_config import load_channel_code_config, save_channel_codes
+from base.channel_source import (
+    ChannelSource,
+    fetch_channel_sources,
+    load_channel_source_config,
+    resolve_channel_source,
+    save_channel_sources,
+)
 from base.database_config import (
     DatabaseConnectionConfig,
     SshPrivateKey,
@@ -244,6 +255,7 @@ class NumberInput(QSpinBox):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
     def wheelEvent(self, event) -> None:
         event.ignore()
@@ -319,6 +331,34 @@ class DatabaseTestWorker(QObject):
             self.succeeded.emit(test_database_connection(self.connection))
         except Exception as error:
             self.failed.emit(str(error))
+        finally:
+            self.done.emit()
+
+
+class ChannelSourceUpdateWorker(QObject):
+    """在后台从日志库更新账号渠道参数缓存。"""
+
+    succeeded = Signal(str, object)
+    failed = Signal(str, str)
+    done = Signal()
+
+    def __init__(
+        self,
+        environment: str,
+        connection: DatabaseConnectionConfig,
+    ) -> None:
+        super().__init__()
+        self.environment = environment
+        self.connection = connection
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            sources = fetch_channel_sources(self.environment, self.connection)
+            saved_sources = save_channel_sources(self.environment, sources)
+            self.succeeded.emit(self.environment, saved_sources)
+        except Exception as error:
+            self.failed.emit(self.environment, str(error))
         finally:
             self.done.emit()
 
@@ -448,7 +488,6 @@ class DatabaseConnectionDialog(QDialog):
         widget.setRange(1, 65535)
         widget.setValue(value)
         widget.setGroupSeparatorShown(True)
-        widget.setAlignment(Qt.AlignmentFlag.AlignRight)
         return widget
 
     @staticmethod
@@ -563,6 +602,8 @@ class WorkflowWindow(QMainWindow):
 
         self.worker_thread: Optional[QThread] = None
         self.worker: Optional[WorkflowWorker] = None
+        self.channel_source_thread: Optional[QThread] = None
+        self.channel_source_worker: Optional[ChannelSourceUpdateWorker] = None
         self.close_after_stop = False
         self.current_section = 0
         self.config_widgets: list[QWidget] = []
@@ -570,6 +611,7 @@ class WorkflowWindow(QMainWindow):
         self.database_status_button: Optional[QPushButton] = None
         self.database_breath_bright = True
         self.channel_codes_by_environment = load_channel_code_config()
+        self.channel_sources_by_environment = load_channel_source_config()
         self.database_connections_by_environment = load_database_connections()
         self.ssh_private_keys = load_ssh_private_keys()
 
@@ -611,7 +653,7 @@ class WorkflowWindow(QMainWindow):
         titles.setSpacing(3)
         title = QLabel("自动化控制台")
         title.setObjectName("title")
-        self.eyebrow = QLabel("$ account / create")
+        self.eyebrow = QLabel("$ account / create-batch")
         self.eyebrow.setObjectName("eyebrow")
         titles.addWidget(title)
         titles.addWidget(self.eyebrow)
@@ -704,7 +746,7 @@ class WorkflowWindow(QMainWindow):
         self.settings_stack.addWidget(self._build_tournament_tab())
         layout.addWidget(self.settings_stack, 1)
 
-        self.mode_hint = QLabel("只注册账号并导出账号信息，不执行加钱或下注。")
+        self.mode_hint = QLabel("按原有逻辑批量注册随机邮箱账号，并导出账号信息。")
         self.mode_hint.setObjectName("fieldHint")
         self.mode_hint.setWordWrap(True)
         layout.addWidget(self.mode_hint)
@@ -713,7 +755,7 @@ class WorkflowWindow(QMainWindow):
         buttons = QHBoxLayout(self.action_bar)
         buttons.setContentsMargins(0, 0, 0, 0)
         buttons.setSpacing(8)
-        self.start_button = QPushButton("创建账号")
+        self.start_button = QPushButton("批量创建账号")
         self.start_button.setObjectName("primaryButton")
         self.start_button.clicked.connect(self._start)
         buttons.addWidget(self.start_button, 1)
@@ -735,35 +777,109 @@ class WorkflowWindow(QMainWindow):
         layout.setSpacing(10)
         form = self._form_layout()
 
+        (
+            account_creation_mode,
+            self.account_batch_mode_button,
+            self.account_custom_mode_button,
+        ) = self._account_creation_mode_control()
+        self._add_form_row(form, 0, "创建方式", account_creation_mode)
+
         self.account_environment = QComboBox()
         self.account_environment.addItems(list(SUPPORTED_ENVIRONMENTS))
-        self._add_form_row(form, 0, "运行环境", self.account_environment)
+        self.account_environment.currentTextChanged.connect(
+            self._refresh_account_channel_source
+        )
+        self._add_form_row(form, 1, "运行环境", self.account_environment)
 
         self.account_platform = self._platform_combo()
-        self._add_form_row(form, 1, "注册平台", self.account_platform)
+        self._add_form_row(form, 2, "注册平台", self.account_platform)
 
-        self.account_channel_code = self._channel_code_combo(
-            self.account_environment.currentText()
+        (
+            self.account_enter_b_control,
+            self.account_enter_b_no_button,
+            self.account_enter_b_yes_button,
+        ) = self._boolean_choice_control(default=True)
+        self.account_enter_b_label = self._add_form_row(
+            form,
+            3,
+            "进入 B 面",
+            self.account_enter_b_control,
         )
-        self.account_environment.currentTextChanged.connect(
-            lambda environment: self._refresh_channel_code_combo(
-                self.account_channel_code,
-                environment,
-            )
+
+        (
+            self.account_new_user_control,
+            self.account_new_user_no_button,
+            self.account_new_user_yes_button,
+        ) = self._boolean_choice_control(default=False)
+        self.account_new_user_label = self._add_form_row(
+            form,
+            4,
+            "新手套路",
+            self.account_new_user_control,
         )
-        self._add_form_row(form, 2, "Channel Code", self.account_channel_code)
+
+        self.account_channel_source = QLineEdit()
+        self.account_channel_source.setReadOnly(True)
+        self.account_channel_source.setPlaceholderText("请先更新渠道参数")
+        (
+            account_channel_source_field,
+            self.account_update_parameters_button,
+        ) = self._channel_source_field(self.account_channel_source)
+        self._add_form_row(
+            form,
+            5,
+            "匹配渠道源",
+            account_channel_source_field,
+        )
+
+        self.account_enter_b_no_button.toggled.connect(
+            lambda checked: self._sync_account_channel_options() if checked else None
+        )
+        self.account_enter_b_yes_button.toggled.connect(
+            lambda checked: self._sync_account_channel_options() if checked else None
+        )
+        self.account_new_user_no_button.toggled.connect(
+            lambda checked: self._refresh_account_channel_source() if checked else None
+        )
+        self.account_new_user_yes_button.toggled.connect(
+            lambda checked: self._refresh_account_channel_source() if checked else None
+        )
 
         self.account_count = self._spin_box(DEFAULT_ACCOUNT_COUNT, maximum=100_000)
-        self._add_form_row(form, 3, "账号数量", self.account_count)
+        self.account_count_label = self._add_form_row(
+            form,
+            6,
+            "账号数量",
+            self.account_count,
+        )
+
+        self.account_custom_email = QLineEdit()
+        self.account_custom_email.setPlaceholderText("例如：tester@example.com")
+        self.account_custom_email_label = self._add_form_row(
+            form,
+            7,
+            "自定义邮箱",
+            self.account_custom_email,
+        )
 
         self.account_max_workers = self._spin_box(DEFAULT_MAX_WORKERS, maximum=100)
         (
-            account_execution_mode,
+            self.account_execution_mode,
             self.account_serial_button,
             self.account_parallel_button,
         ) = self._execution_mode_control(self.account_max_workers)
-        self._add_form_row(form, 4, "执行方式", account_execution_mode)
-        self._add_form_row(form, 5, "并行账号", self.account_max_workers)
+        self.account_execution_mode_label = self._add_form_row(
+            form,
+            8,
+            "执行方式",
+            self.account_execution_mode,
+        )
+        self.account_max_workers_label = self._add_form_row(
+            form,
+            9,
+            "并行账号",
+            self.account_max_workers,
+        )
 
         self.account_output_file = QLineEdit(
             str(PROJECT_ROOT / "accounts_created.txt")
@@ -771,7 +887,7 @@ class WorkflowWindow(QMainWindow):
         account_output, self.account_browse_button = self._output_field(
             self.account_output_file
         )
-        self._add_form_row(form, 6, "输出文件", account_output)
+        self._add_form_row(form, 10, "输出文件", account_output)
         layout.addLayout(form)
 
         self.account_verbose = QCheckBox("显示调试日志")
@@ -782,8 +898,15 @@ class WorkflowWindow(QMainWindow):
             [
                 self.account_environment,
                 self.account_platform,
-                self.account_channel_code,
+                self.account_enter_b_no_button,
+                self.account_enter_b_yes_button,
+                self.account_new_user_no_button,
+                self.account_new_user_yes_button,
+                self.account_update_parameters_button,
+                self.account_batch_mode_button,
+                self.account_custom_mode_button,
                 self.account_count,
+                self.account_custom_email,
                 self.account_max_workers,
                 self.account_serial_button,
                 self.account_parallel_button,
@@ -792,6 +915,8 @@ class WorkflowWindow(QMainWindow):
                 self.account_verbose,
             ]
         )
+        self._sync_account_creation_mode_inputs()
+        self._sync_account_channel_options()
         return self._scrollable_settings_page(page)
 
     def _build_config_tab(self) -> QWidget:
@@ -840,7 +965,9 @@ class WorkflowWindow(QMainWindow):
         title = QLabel("Channel Code")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
-        description = QLabel("各环境独立维护，保存后立即同步到任务页。")
+        description = QLabel(
+            "各环境独立维护；供锦标赛任务和创建账号的渠道匹配优先级使用。"
+        )
         description.setObjectName("fieldHint")
         description.setWordWrap(True)
         layout.addWidget(description)
@@ -1179,6 +1306,77 @@ class WorkflowWindow(QMainWindow):
         max_workers.setEnabled(True)
         return holder, serial, parallel
 
+    def _account_creation_mode_control(
+        self,
+    ) -> tuple[QWidget, QPushButton, QPushButton]:
+        """创建批量与定制单账号的互斥选择控件。"""
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        batch = QPushButton("批量创建")
+        batch.setObjectName("modeButton")
+        batch.setCheckable(True)
+        batch.setChecked(True)
+        custom = QPushButton("定制单账号")
+        custom.setObjectName("modeButton")
+        custom.setCheckable(True)
+
+        group = QButtonGroup(holder)
+        group.setExclusive(True)
+        group.addButton(batch)
+        group.addButton(custom)
+        batch.toggled.connect(
+            lambda checked: self._on_account_creation_mode_changed() if checked else None
+        )
+        custom.toggled.connect(
+            lambda checked: self._on_account_creation_mode_changed() if checked else None
+        )
+        row.addWidget(batch, 1)
+        row.addWidget(custom, 1)
+        return holder, batch, custom
+
+    @staticmethod
+    def _boolean_choice_control(
+        *,
+        default: bool,
+    ) -> tuple[QWidget, QPushButton, QPushButton]:
+        """创建“否 / 是”互斥选择控件。"""
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        no_button = QPushButton("否")
+        yes_button = QPushButton("是")
+        for button in (no_button, yes_button):
+            button.setObjectName("modeButton")
+            button.setCheckable(True)
+            row.addWidget(button, 1)
+        group = QButtonGroup(holder)
+        group.setExclusive(True)
+        group.addButton(no_button)
+        group.addButton(yes_button)
+        yes_button.setChecked(default)
+        no_button.setChecked(not default)
+        return holder, no_button, yes_button
+
+    def _channel_source_field(
+        self,
+        line_edit: QLineEdit,
+    ) -> tuple[QWidget, QPushButton]:
+        """创建只读渠道源预览和参数更新按钮。"""
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(7)
+        row.addWidget(line_edit, 1)
+        update_button = QPushButton("更新参数")
+        update_button.setObjectName("secondaryButton")
+        update_button.clicked.connect(self._update_channel_source_parameters)
+        row.addWidget(update_button)
+        return holder, update_button
+
     def _output_field(self, line_edit: QLineEdit) -> tuple[QWidget, QPushButton]:
         row = QHBoxLayout()
         row.setSpacing(7)
@@ -1201,7 +1399,7 @@ class WorkflowWindow(QMainWindow):
         layout.setSpacing(12)
 
         session_row = QHBoxLayout()
-        self.session_title = QLabel("ACCOUNT CREATE")
+        self.session_title = QLabel("ACCOUNT BATCH CREATE")
         self.session_title.setObjectName("sessionTitle")
         session_row.addWidget(self.session_title)
         session_row.addStretch()
@@ -1257,7 +1455,6 @@ class WorkflowWindow(QMainWindow):
         widget.setRange(1, maximum)
         widget.setValue(value)
         widget.setGroupSeparatorShown(True)
-        widget.setAlignment(Qt.AlignmentFlag.AlignRight)
         return widget
 
     @staticmethod
@@ -1296,7 +1493,7 @@ class WorkflowWindow(QMainWindow):
         label_text: str,
         widget: QWidget,
         suffix: str = "",
-    ) -> None:
+    ) -> QLabel:
         label = QLabel(label_text)
         label.setObjectName("fieldLabel")
         label.setFixedWidth(100)
@@ -1309,6 +1506,7 @@ class WorkflowWindow(QMainWindow):
             hint = QLabel(suffix)
             hint.setObjectName("fieldHint")
             layout.addWidget(hint, row, 2)
+        return label
 
     @Slot(bool)
     def _toggle_random_inputs(self, enabled: bool) -> None:
@@ -1319,7 +1517,9 @@ class WorkflowWindow(QMainWindow):
     def _sync_execution_mode_inputs(self) -> None:
         if hasattr(self, "account_max_workers"):
             self.account_max_workers.setEnabled(
-                not self._is_running() and self.account_parallel_button.isChecked()
+                not self._is_running()
+                and self.account_batch_mode_button.isChecked()
+                and self.account_parallel_button.isChecked()
             )
         if hasattr(self, "max_workers"):
             self.max_workers.setEnabled(
@@ -1330,6 +1530,156 @@ class WorkflowWindow(QMainWindow):
                 not self._is_running() and self.spin_parallel_button.isChecked()
             )
 
+    def _sync_account_creation_mode_inputs(self) -> None:
+        """仅启用当前创建方式需要的账号参数。"""
+        if not hasattr(self, "account_custom_email"):
+            return
+        editable = not self._is_running()
+        is_batch = self.account_batch_mode_button.isChecked()
+        self.account_count_label.setVisible(is_batch)
+        self.account_count.setVisible(is_batch)
+        self.account_execution_mode_label.setVisible(is_batch)
+        self.account_execution_mode.setVisible(is_batch)
+        self.account_max_workers_label.setVisible(is_batch)
+        self.account_max_workers.setVisible(is_batch)
+        self.account_custom_email_label.setVisible(not is_batch)
+        self.account_custom_email.setVisible(not is_batch)
+        self.account_count.setEnabled(editable)
+        self.account_serial_button.setEnabled(editable)
+        self.account_parallel_button.setEnabled(editable)
+        self.account_custom_email.setEnabled(editable)
+        self._sync_execution_mode_inputs()
+
+    def _sync_account_channel_options(self) -> None:
+        """不进 B 面时隐藏无效的新手套路选项。"""
+        if not hasattr(self, "account_new_user_control"):
+            return
+        can_enter_b = self.account_enter_b_yes_button.isChecked()
+        self.account_new_user_label.setVisible(can_enter_b)
+        self.account_new_user_control.setVisible(can_enter_b)
+        self._refresh_account_channel_source()
+
+    def _resolve_account_channel_source(self) -> str:
+        environment = self.account_environment.currentText()
+        return resolve_channel_source(
+            self.channel_sources_by_environment[environment],
+            can_enter_b=self.account_enter_b_yes_button.isChecked(),
+            has_new_user_offer=self.account_new_user_yes_button.isChecked(),
+            preferred_sources=self.channel_codes_by_environment[environment],
+        )
+
+    @Slot()
+    @Slot(str)
+    def _refresh_account_channel_source(self, _value: str = "") -> None:
+        """预览当前业务选项自动匹配出的渠道源。"""
+        if not hasattr(self, "account_channel_source"):
+            return
+        try:
+            channel_source = self._resolve_account_channel_source()
+        except ValueError:
+            self.account_channel_source.clear()
+            self.account_channel_source.setPlaceholderText("请先更新渠道参数")
+        else:
+            self.account_channel_source.setText(channel_source)
+
+    @Slot()
+    def _update_channel_source_parameters(self) -> None:
+        """从当前环境日志库更新渠道源缓存。"""
+        if self._is_channel_source_updating():
+            return
+        environment = self.account_environment.currentText()
+        connection = self.database_connections_by_environment[environment]
+        if not is_database_connection_configured(connection):
+            QMessageBox.warning(
+                self,
+                "数据库未配置",
+                f"请先在参数配置页完成 {environment} 环境的数据库连接配置。",
+            )
+            return
+
+        self.start_button.setEnabled(False)
+        self.account_update_parameters_button.setEnabled(False)
+        self.account_update_parameters_button.setText("更新中…")
+        self._append_log(
+            f"\n[channel-source:{environment}] updating parameters\n"
+        )
+        self.channel_source_thread = QThread(self)
+        self.channel_source_worker = ChannelSourceUpdateWorker(
+            environment,
+            connection,
+        )
+        self.channel_source_worker.moveToThread(self.channel_source_thread)
+        self.channel_source_thread.started.connect(self.channel_source_worker.run)
+        self.channel_source_worker.succeeded.connect(
+            self._on_channel_source_update_succeeded
+        )
+        self.channel_source_worker.failed.connect(self._on_channel_source_update_failed)
+        self.channel_source_worker.done.connect(self.channel_source_thread.quit)
+        self.channel_source_worker.done.connect(self.channel_source_worker.deleteLater)
+        self.channel_source_thread.finished.connect(
+            self._on_channel_source_update_finished
+        )
+        self.channel_source_thread.finished.connect(
+            self.channel_source_thread.deleteLater
+        )
+        self.channel_source_thread.start()
+
+    @Slot(str, object)
+    def _on_channel_source_update_succeeded(
+        self,
+        environment: str,
+        sources: object,
+    ) -> None:
+        if not isinstance(sources, list):
+            return
+        self.channel_sources_by_environment[environment] = [
+            source for source in sources if isinstance(source, ChannelSource)
+        ]
+        if self.account_environment.currentText() == environment:
+            self._refresh_account_channel_source()
+        self._append_log(
+            f"[channel-source:{environment}] cached {len(sources)} sources\n"
+        )
+
+    @Slot(str, str)
+    def _on_channel_source_update_failed(
+        self,
+        environment: str,
+        message: str,
+    ) -> None:
+        self._append_log(f"[channel-source:{environment}] update failed: {message}\n")
+        QMessageBox.critical(self, "参数更新失败", message)
+
+    @Slot()
+    def _on_channel_source_update_finished(self) -> None:
+        self.channel_source_worker = None
+        self.channel_source_thread = None
+        self.account_update_parameters_button.setText("更新参数")
+        self.account_update_parameters_button.setEnabled(not self._is_running())
+        self.start_button.setEnabled(not self._is_running())
+
+    def _is_channel_source_updating(self) -> bool:
+        return bool(
+            self.channel_source_thread and self.channel_source_thread.isRunning()
+        )
+
+    @Slot()
+    def _on_account_creation_mode_changed(self) -> None:
+        """切换账号创建方式并同步界面说明。"""
+        self._sync_account_creation_mode_inputs()
+        if not hasattr(self, "mode_hint") or self.current_section != 0:
+            return
+        if self.account_custom_mode_button.isChecked():
+            self.mode_hint.setText("使用指定邮箱创建一个账号，并导出账号信息。")
+            self.start_button.setText("创建指定账号")
+            self.session_title.setText("CUSTOM ACCOUNT CREATE")
+            self.eyebrow.setText("$ account / create-custom")
+        else:
+            self.mode_hint.setText("按原有逻辑批量注册随机邮箱账号，并导出账号信息。")
+            self.start_button.setText("批量创建账号")
+            self.session_title.setText("ACCOUNT BATCH CREATE")
+            self.eyebrow.setText("$ account / create-batch")
+
     # 参数维护
     def _switch_section(self, index: int) -> None:
         self.current_section = index
@@ -1339,10 +1689,7 @@ class WorkflowWindow(QMainWindow):
             self.content_stack.setCurrentIndex(0)
             self.settings_stack.setCurrentIndex(0)
             self.settings_title.setText("创建账号")
-            self.mode_hint.setText("只注册账号并导出账号信息，不执行加钱或下注。")
-            self.start_button.setText("创建账号")
-            self.session_title.setText("ACCOUNT CREATE")
-            self.eyebrow.setText("$ account / create")
+            self._on_account_creation_mode_changed()
         elif index == 1:
             self.content_stack.setCurrentIndex(0)
             self.settings_stack.setCurrentIndex(1)
@@ -1493,13 +1840,10 @@ class WorkflowWindow(QMainWindow):
         self.channel_codes_by_environment[environment] = saved_codes
         self.channel_code_list.clear()
         self.channel_code_list.addItems(saved_codes)
-        if self.account_environment.currentText() == environment:
-            self._refresh_channel_code_combo(
-                self.account_channel_code,
-                environment,
-            )
         if self.environment.currentText() == environment:
             self._refresh_channel_code_combo(self.channel_code, environment)
+        if self.account_environment.currentText() == environment:
+            self._refresh_account_channel_source()
         return True
 
     def _browse_output(self, line_edit: QLineEdit) -> None:
@@ -1519,22 +1863,36 @@ class WorkflowWindow(QMainWindow):
             output_path = Path(self.account_output_file.text()).expanduser()
             if not output_path.name:
                 raise ValueError("请选择输出文件")
+            common_parameters = {
+                "environment": self.account_environment.currentText(),
+                "platform": self.account_platform.currentData(),
+                "channel_code": self._resolve_account_channel_source(),
+                "output_file": output_path,
+                "verbose": self.account_verbose.isChecked(),
+            }
+            if self.account_custom_mode_button.isChecked():
+                return (
+                    create_custom_account,
+                    {
+                        **common_parameters,
+                        "email": validate_custom_email(
+                            self.account_custom_email.text()
+                        ),
+                    },
+                    "create-custom-account",
+                )
             return (
                 create_accounts,
                 {
+                    **common_parameters,
                     "count": self.account_count.value(),
                     "max_workers": (
                         self.account_max_workers.value()
                         if self.account_parallel_button.isChecked()
                         else 1
                     ),
-                    "environment": self.account_environment.currentText(),
-                    "platform": self.account_platform.currentData(),
-                    "channel_code": self.account_channel_code.currentText(),
-                    "output_file": output_path,
-                    "verbose": self.account_verbose.isChecked(),
                 },
-                "create-accounts",
+                "create-accounts-batch",
             )
 
         if self.current_section != 1:
@@ -1596,9 +1954,10 @@ class WorkflowWindow(QMainWindow):
 
         self._set_running(True)
         self._set_status("●  RUNNING", "#228653")
-        self.progress.setRange(0, parameters["count"])
+        total_count = parameters.get("count", 1)
+        self.progress.setRange(0, total_count)
         self.progress.setValue(0)
-        self.progress_text.setText(f"0 / {parameters['count']}  ·  OK 0")
+        self.progress_text.setText(f"0 / {total_count}  ·  OK 0")
         self._append_log(f"\nrunner@local:~$ {command}\n")
 
         self.worker_thread = QThread(self)
@@ -1679,6 +2038,7 @@ class WorkflowWindow(QMainWindow):
             widget.setEnabled(not running)
         if not running:
             self._toggle_random_inputs(self.random_spins.isChecked())
+            self._sync_account_creation_mode_inputs()
             self._sync_execution_mode_inputs()
 
     def _is_running(self) -> bool:
@@ -1690,6 +2050,14 @@ class WorkflowWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """任务运行时确认停止后再关闭窗口。"""
+        if self._is_channel_source_updating():
+            QMessageBox.information(
+                self,
+                "正在更新参数",
+                "渠道参数更新结束后才能退出。",
+            )
+            event.ignore()
+            return
         if self._is_running():
             answer = QMessageBox.question(
                 self,

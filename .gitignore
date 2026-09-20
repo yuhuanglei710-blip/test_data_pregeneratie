@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 accounts*.txt
 cache/channel_codes.json
+cache/channel_sources.json
 cache/database_connections.json
 cache/ssh_private_keys.json
 
