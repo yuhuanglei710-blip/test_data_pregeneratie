@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Callable, Dict, Optional, Union
 
 from .enums import Platform
+from .database_config import DatabaseConnectionConfig
+from .sql_data import SqlTemplate, execute_sql_template
 from .tournment_test import DEFAULT_ACCOUNT_COUNT, DEFAULT_MAX_WORKERS
 from .user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD, User
 
@@ -37,6 +39,8 @@ def _register_account(
     verbose: bool,
     stop_requested: Callable[[], bool],
     email: Optional[str] = None,
+    sql_template: Optional[SqlTemplate] = None,
+    database_connection: Optional[DatabaseConnectionConfig] = None,
 ) -> RegisteredAccount:
     """注册一个账号并生成导出内容。"""
     if stop_requested():
@@ -50,6 +54,16 @@ def _register_account(
     )
     if not account.uid or not account.token:
         raise RuntimeError("注册成功但未获取到 uid 或 token")
+
+    if sql_template is not None:
+        if database_connection is None:
+            raise ValueError("绑定 SQL 时必须配置当前环境数据库")
+        execute_sql_template(
+            sql_template,
+            account.uid,
+            database_connection,
+        )
+        print(f"[{index}/{count}] SQL OK · {sql_template.title}")
 
     print(
         f"[{index}/{count}] 注册成功："
@@ -77,6 +91,8 @@ def create_accounts(
     stop_requested: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
     email: Optional[str] = None,
+    sql_template: Optional[SqlTemplate] = None,
+    database_connection: Optional[DatabaseConnectionConfig] = None,
 ) -> int:
     """并行注册账号并导出成功结果。"""
     if count <= 0:
@@ -122,6 +138,8 @@ def create_accounts(
                 verbose=verbose,
                 stop_requested=should_stop,
                 email=email,
+                sql_template=sql_template,
+                database_connection=database_connection,
             ): index
             for index in range(1, count + 1)
         }
@@ -177,9 +195,17 @@ def create_custom_account(
     verbose: bool = False,
     stop_requested: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
+    sql_template: Optional[SqlTemplate] = None,
+    database_connection: Optional[DatabaseConnectionConfig] = None,
 ) -> int:
     """使用指定邮箱创建并导出一个账号。"""
     email = validate_custom_email(email)
+    sql_parameters = {}
+    if sql_template is not None:
+        sql_parameters = {
+            "sql_template": sql_template,
+            "database_connection": database_connection,
+        }
     return create_accounts(
         count=1,
         output_file=output_file,
@@ -191,4 +217,5 @@ def create_custom_account(
         stop_requested=stop_requested,
         progress_callback=progress_callback,
         email=email,
+        **sql_parameters,
     )

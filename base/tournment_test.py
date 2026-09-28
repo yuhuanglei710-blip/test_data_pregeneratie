@@ -11,7 +11,9 @@ from typing import Callable, Dict, Optional, Tuple, Union
 
 try:  # Support ``python -m base.tournment_test``.
     from . import add_money, spin
+    from .database_config import DatabaseConnectionConfig
     from .enums import Platform
+    from .sql_data import SqlTemplate, execute_sql_template
     from .user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD, User
 except ImportError:  # Support ``python base/tournment_test.py``.
     script_dir = str(Path(__file__).resolve().parent)
@@ -19,7 +21,9 @@ except ImportError:  # Support ``python base/tournment_test.py``.
         sys.path.insert(0, script_dir)
     import add_money
     import spin
+    from database_config import DatabaseConnectionConfig
     from enums import Platform
+    from sql_data import SqlTemplate, execute_sql_template
     from user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD, User
 
 
@@ -139,6 +143,8 @@ def _create_account_and_bet(
     spin_workers: int = 1,
     verbose: bool,
     stop_requested: Callable[[], bool],
+    sql_template: Optional[SqlTemplate] = None,
+    database_connection: Optional[DatabaseConnectionConfig] = None,
 ) -> AccountResult:
     """执行单个账号的注册、加钱和初始下注流程。"""
     if stop_requested():
@@ -161,6 +167,16 @@ def _create_account_and_bet(
 
     if not account.uid or not account.token:
         raise RuntimeError("注册成功但未获取到 uid 或 token")
+
+    if sql_template is not None:
+        if database_connection is None:
+            raise ValueError("绑定 SQL 时必须配置当前环境数据库")
+        execute_sql_template(
+            sql_template,
+            account.uid,
+            database_connection,
+        )
+        print(f"[{index}/{count}] SQL OK · {sql_template.title}")
 
     money_result = add_money.add_money(
         user_id=account.uid,
@@ -216,6 +232,8 @@ def create_accounts_and_bet(
     spin_workers: int = DEFAULT_SPIN_WORKERS,
     stop_requested: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
+    sql_template: Optional[SqlTemplate] = None,
+    database_connection: Optional[DatabaseConnectionConfig] = None,
 ) -> int:
     """按账号并发和下注并发配置批量生成测试数据。"""
     if count <= 0:
@@ -262,6 +280,8 @@ def create_accounts_and_bet(
                 spin_workers=spin_workers,
                 verbose=verbose,
                 stop_requested=should_stop,
+                sql_template=sql_template,
+                database_connection=database_connection,
             ): index
             for index in range(1, count + 1)
         }

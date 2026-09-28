@@ -17,6 +17,7 @@ from base import (
     add_money,
     channel_source,
     database_config,
+    sql_data,
     spin,
     tournment_test,
 )
@@ -93,7 +94,128 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(huidu_codes, [DEFAULT_CHANNEL_CODE])
 
 
+class SqlDataTests(unittest.TestCase):
+    def test_templates_are_saved_updated_and_deleted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = f"{temp_dir}/sql_templates.json"
+            created = sql_data.save_sql_template(
+                "VIP 数据",
+                "SET @userid=xxx; UPDATE user SET vip_level=1 WHERE id=@userid;",
+                path=config_file,
+            )
+            updated = sql_data.save_sql_template(
+                "VIP 数据 v2",
+                "SET @userid=xxx; UPDATE user SET vip_level=2 WHERE id=@userid;",
+                template_id=created.template_id,
+                path=config_file,
+            )
+            loaded = sql_data.load_sql_templates(config_file)
+
+            self.assertEqual(loaded, [updated])
+
+            sql_data.delete_sql_template(updated.template_id, config_file)
+
+            self.assertEqual(sql_data.load_sql_templates(config_file), [])
+
+    def test_user_id_placeholder_is_replaced_with_integer(self):
+        template = sql_data.SqlTemplate(
+            "template-id",
+            "test",
+            "SET @userid = xxx; SELECT @userid;",
+        )
+
+        rendered = sql_data.render_sql_template(template, 4321)
+
+        self.assertEqual(rendered, "SET @userid = 4321; SELECT @userid;")
+
+    def test_bare_user_id_declaration_is_normalized_to_mysql_set(self):
+        template = sql_data.SqlTemplate(
+            "template-id",
+            "test",
+            "@userid=xxx; SELECT @userid;",
+        )
+
+        rendered = sql_data.render_sql_template(template, 4321)
+
+        self.assertEqual(rendered, "SET @userid=4321; SELECT @userid;")
+
+    def test_template_requires_user_id_placeholder(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "@userid=xxx"):
+                sql_data.save_sql_template(
+                    "invalid",
+                    "SELECT 1;",
+                    path=f"{temp_dir}/sql_templates.json",
+                )
+
+
 class ChannelSourceTests(unittest.TestCase):
+    def test_prod_uses_manual_channel_code(self):
+        resolved = channel_source.resolve_registration_channel(
+            "prod",
+            [],
+            can_enter_b=True,
+            has_new_user_offer=False,
+            manual_channel_code=" manual-prod-code ",
+        )
+
+        self.assertEqual(resolved, "manual-prod-code")
+
+    def test_prod_rejects_empty_manual_channel_code(self):
+        with self.assertRaisesRegex(ValueError, "Channel Code 不能为空"):
+            channel_source.resolve_registration_channel(
+                "prod",
+                [],
+                can_enter_b=True,
+                has_new_user_offer=False,
+            )
+
+    def test_non_prod_still_matches_channel_source(self):
+        sources = [channel_source.ChannelSource("matched-code", "", 1)]
+
+        resolved = channel_source.resolve_registration_channel(
+            "yy",
+            sources,
+            can_enter_b=True,
+            has_new_user_offer=False,
+            manual_channel_code="ignored-manual-code",
+        )
+
+        self.assertEqual(resolved, "matched-code")
+
+    def test_huidu_uses_dev_log_database(self):
+        connection = DatabaseConnectionConfig(database_name="ush_dev")
+
+        database_name = channel_source.log_database_name_for_environment(
+            "huidu",
+            connection,
+        )
+
+        self.assertEqual(database_name, "ush_log_dev")
+
+    def test_yy_uses_its_own_log_database(self):
+        connection = DatabaseConnectionConfig(database_name="ush_yy")
+
+        database_name = channel_source.log_database_name_for_environment(
+            "yy",
+            connection,
+        )
+
+        self.assertEqual(database_name, "ush_log_yy")
+
+    def test_explicit_log_database_overrides_environment_default(self):
+        connection = DatabaseConnectionConfig(
+            database_name="ush_dev",
+            log_database_name="custom_gray_log",
+        )
+
+        database_name = channel_source.log_database_name_for_environment(
+            "huidu",
+            connection,
+        )
+
+        self.assertEqual(database_name, "custom_gray_log")
+
     def test_not_entering_b_always_uses_organic(self):
         resolved = channel_source.resolve_channel_source(
             [],
@@ -156,6 +278,7 @@ class DatabaseConfigTests(unittest.TestCase):
             ssh_username="deploy",
             ssh_private_key_id=key_id,
             database_name="automation",
+            log_database_name="automation_log",
             database_username="tester",
             database_password="secret",
         )
@@ -185,6 +308,7 @@ class DatabaseConfigTests(unittest.TestCase):
             connections = load_database_connections(config_file)
 
         self.assertEqual(connections["dev"].ssh_host, "dev-ssh.example.test")
+        self.assertEqual(connections["dev"].log_database_name, "automation_log")
         self.assertEqual(connections["prod"].ssh_host, "prod-ssh.example.test")
         self.assertEqual(connections["huidu"].ssh_host, "")
 
@@ -645,6 +769,37 @@ class BatchWorkflowTests(unittest.TestCase):
 
 
 class AccountCreationTests(unittest.TestCase):
+    def test_bound_sql_runs_with_new_account_uid(self):
+        account = Mock(uid=42, token="user-token", email="sql@cc.cc")
+        template = sql_data.SqlTemplate(
+            "template-id",
+            "VIP 数据",
+            "SET @userid=xxx; SELECT @userid;",
+        )
+        connection = DatabaseConnectionConfig(database_name="ush_dev")
+        execution_result = sql_data.SqlExecutionResult(2, 1, 0)
+        with (
+            patch.object(account_batch, "User", return_value=account),
+            patch.object(
+                account_batch,
+                "execute_sql_template",
+                return_value=execution_result,
+            ) as execute,
+        ):
+            account_batch._register_account(
+                1,
+                1,
+                environment="dev",
+                platform=Platform.ios.value,
+                channel_code="channel",
+                verbose=False,
+                stop_requested=lambda: False,
+                sql_template=template,
+                database_connection=connection,
+            )
+
+        execute.assert_called_once_with(template, 42, connection)
+
     def test_selected_platform_is_used_for_registration(self):
         account = Mock(uid=42, token="user-token", email="android@cc.cc")
         with patch.object(account_batch, "User", return_value=account):

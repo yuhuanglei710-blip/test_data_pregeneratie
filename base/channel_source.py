@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CHANNEL_SOURCES_FILE = PROJECT_ROOT / "cache" / "channel_sources.json"
 NEW_USER_CHANNEL_GROUP = "USH-10SC-100-group"
 ORGANIC_CHANNEL_SOURCE = "Organic"
+MANUAL_CHANNEL_CODE_ENVIRONMENTS = frozenset({"prod"})
 
 
 @dataclass(frozen=True)
@@ -108,11 +109,18 @@ def save_channel_sources(
     return normalized
 
 
-def _log_database_name(
+def log_database_name_for_environment(
     environment: str,
     connection: DatabaseConnectionConfig,
 ) -> str:
-    """根据业务库名称推导同环境日志库名称。"""
+    """读取显式日志库配置，并兼容旧版自动推导规则。"""
+    configured_name = connection.log_database_name.strip()
+    if configured_name:
+        return configured_name
+
+    if environment == "huidu":
+        return "ush_log_dev"
+
     suffix = f"_{environment}"
     log_suffix = f"_log_{environment}"
     database_name = connection.database_name.strip()
@@ -132,7 +140,7 @@ def fetch_channel_sources(
         raise ValueError(f"不支持的环境：{environment}")
     log_connection = replace(
         connection,
-        database_name=_log_database_name(environment, connection),
+        database_name=log_database_name_for_environment(environment, connection),
     )
     with open_database_connection(log_connection) as database:
         with database.cursor() as cursor:
@@ -190,4 +198,33 @@ def resolve_channel_source(
             len(source),
             source.casefold(),
         ),
+    )
+
+
+def requires_manual_channel_code(environment: str) -> bool:
+    """当前环境是否要求手动输入 Channel Code。"""
+    return environment in MANUAL_CHANNEL_CODE_ENVIRONMENTS
+
+
+def resolve_registration_channel(
+    environment: str,
+    sources: Sequence[ChannelSource],
+    *,
+    can_enter_b: bool,
+    has_new_user_offer: bool,
+    preferred_sources: Sequence[str] = (),
+    manual_channel_code: str = "",
+) -> str:
+    """生产环境使用手动值，其他环境自动匹配渠道源。"""
+    if requires_manual_channel_code(environment):
+        channel_code = manual_channel_code.strip()
+        if not channel_code:
+            raise ValueError("Channel Code 不能为空")
+        return channel_code
+
+    return resolve_channel_source(
+        sources,
+        can_enter_b=can_enter_b,
+        has_new_user_offer=has_new_user_offer,
+        preferred_sources=preferred_sources,
     )

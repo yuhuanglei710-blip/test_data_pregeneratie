@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDialog,
     QFileDialog,
     QFrame,
@@ -46,7 +47,9 @@ from base.channel_source import (
     ChannelSource,
     fetch_channel_sources,
     load_channel_source_config,
-    resolve_channel_source,
+    log_database_name_for_environment,
+    requires_manual_channel_code,
+    resolve_registration_channel,
     save_channel_sources,
 )
 from base.database_config import (
@@ -62,6 +65,13 @@ from base.database_config import (
     validate_database_connection,
 )
 from base.enums import Platform
+from base.sql_data import (
+    SqlTemplate,
+    delete_sql_template,
+    generate_feature_data,
+    load_sql_templates,
+    save_sql_template,
+)
 from base.tournment_test import (
     DEFAULT_ACCOUNT_COUNT,
     DEFAULT_MAX_WORKERS,
@@ -261,6 +271,21 @@ class NumberInput(QSpinBox):
         event.ignore()
 
 
+class SearchableComboBox(QComboBox):
+    """可按标题模糊检索的下拉选择框。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setEditable(True)
+        self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.completer().setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.completer().setFilterMode(Qt.MatchFlag.MatchContains)
+        self.completer().setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        line_edit = self.lineEdit()
+        if line_edit is not None:
+            line_edit.setPlaceholderText("输入标题检索")
+
+
 # 后台线程与输出转发
 class QueueWriter:
     """把工作线程的标准输出转发给 Qt 信号。"""
@@ -437,12 +462,19 @@ class DatabaseConnectionDialog(QDialog):
         self.database_name = QLineEdit(connection.database_name)
         self._add_row(form, 6, "数据库名称", self.database_name)
 
+        self.log_database_name = QLineEdit(
+            connection.log_database_name
+            or log_database_name_for_environment(environment, connection)
+        )
+        self.log_database_name.setPlaceholderText("渠道参数所在的日志库")
+        self._add_row(form, 7, "日志库名称", self.log_database_name)
+
         self.database_username = QLineEdit(connection.database_username)
-        self._add_row(form, 7, "数据库用户", self.database_username)
+        self._add_row(form, 8, "数据库用户", self.database_username)
 
         self.database_password = QLineEdit(connection.database_password)
         self.database_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self._add_row(form, 8, "数据库密码", self.database_password)
+        self._add_row(form, 9, "数据库密码", self.database_password)
         layout.addLayout(form)
 
         self.connection_status = QLabel("可先测试连接，确认无误后保存。")
@@ -475,6 +507,7 @@ class DatabaseConnectionDialog(QDialog):
             self.database_host,
             self.database_port,
             self.database_name,
+            self.log_database_name,
             self.database_username,
             self.database_password,
             self.cancel_button,
@@ -517,6 +550,7 @@ class DatabaseConnectionDialog(QDialog):
             database_host=self.database_host.text().strip(),
             database_port=self.database_port.value(),
             database_name=self.database_name.text().strip(),
+            log_database_name=self.log_database_name.text().strip(),
             database_username=self.database_username.text().strip(),
             database_password=self.database_password.text(),
         )
@@ -589,6 +623,76 @@ class DatabaseConnectionDialog(QDialog):
         event.accept()
 
 
+class SqlTemplateDialog(QDialog):
+    """新增或编辑一条可复用 SQL 模板。"""
+
+    def __init__(
+        self,
+        parent: QWidget,
+        template: Optional[SqlTemplate] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.template = template
+        self.saved_template: Optional[SqlTemplate] = None
+        self.setWindowTitle("编辑 SQL 模板" if template else "新增 SQL 模板")
+        self.resize(760, 560)
+        self.setMinimumSize(620, 460)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(12)
+
+        title_label = QLabel("标题")
+        title_label.setObjectName("fieldLabel")
+        layout.addWidget(title_label)
+        self.title_input = QLineEdit(template.title if template else "")
+        self.title_input.setPlaceholderText("例如：开通 VIP 测试数据")
+        layout.addWidget(self.title_input)
+
+        sql_label = QLabel("SQL（使用 @userid=xxx; 声明 UID）")
+        sql_label.setObjectName("fieldLabel")
+        layout.addWidget(sql_label)
+        self.sql_input = QPlainTextEdit()
+        self.sql_input.setPlaceholderText(
+            "@userid=xxx;\n"
+            "UPDATE user SET vip_level=1 WHERE id=@userid;"
+        )
+        self.sql_input.setPlainText(template.sql if template else "@userid=xxx;\n")
+        layout.addWidget(self.sql_input, 1)
+
+        hint = QLabel(
+            "执行时会自动转换为 SET @userid=<UID>;，后续 SQL 可使用 @userid。"
+        )
+        hint.setObjectName("fieldHint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel_button = QPushButton("取消")
+        cancel_button.setObjectName("secondaryButton")
+        cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(cancel_button)
+        save_button = QPushButton("保存")
+        save_button.setObjectName("primaryButton")
+        save_button.clicked.connect(self._save)
+        buttons.addWidget(save_button)
+        layout.addLayout(buttons)
+
+    @Slot()
+    def _save(self) -> None:
+        try:
+            self.saved_template = save_sql_template(
+                self.title_input.text(),
+                self.sql_input.toPlainText(),
+                template_id=self.template.template_id if self.template else None,
+            )
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "保存失败", str(error))
+            return
+        self.accept()
+
+
 # 主窗口
 class WorkflowWindow(QMainWindow):
     """Termius 风格的自动化控制台主窗口。"""
@@ -614,6 +718,7 @@ class WorkflowWindow(QMainWindow):
         self.channel_sources_by_environment = load_channel_source_config()
         self.database_connections_by_environment = load_database_connections()
         self.ssh_private_keys = load_ssh_private_keys()
+        self.sql_templates = load_sql_templates()
 
         root = QWidget()
         root.setObjectName("root")
@@ -631,6 +736,7 @@ class WorkflowWindow(QMainWindow):
         self.content_stack = QStackedWidget()
         self.content_stack.addWidget(self._build_task_workspace())
         self.content_stack.addWidget(self._build_config_workspace())
+        self.content_stack.addWidget(self._build_feature_workspace())
         workspace.addWidget(self.content_stack, 1)
         page.addLayout(workspace, 1)
 
@@ -683,7 +789,9 @@ class WorkflowWindow(QMainWindow):
 
         group = QButtonGroup(navigation)
         group.setExclusive(True)
-        for index, label in enumerate(("创建账号", "锦标赛数据", "参数配置")):
+        for index, label in enumerate(
+            ("创建账号", "锦标赛数据", "功能数据", "参数配置")
+        ):
             button = QPushButton(label)
             button.setObjectName("navigationButton")
             button.setCheckable(True)
@@ -787,7 +895,7 @@ class WorkflowWindow(QMainWindow):
         self.account_environment = QComboBox()
         self.account_environment.addItems(list(SUPPORTED_ENVIRONMENTS))
         self.account_environment.currentTextChanged.connect(
-            self._refresh_account_channel_source
+            self._sync_account_channel_options
         )
         self._add_form_row(form, 1, "运行环境", self.account_environment)
 
@@ -821,11 +929,16 @@ class WorkflowWindow(QMainWindow):
         self.account_channel_source = QLineEdit()
         self.account_channel_source.setReadOnly(True)
         self.account_channel_source.setPlaceholderText("请先更新渠道参数")
+        self.account_channel_code = self._prod_channel_code_combo()
         (
             account_channel_source_field,
             self.account_update_parameters_button,
-        ) = self._channel_source_field(self.account_channel_source)
-        self._add_form_row(
+        ) = self._channel_source_field(
+            self.account_channel_source,
+            "account",
+            self.account_channel_code,
+        )
+        self.account_channel_source_label = self._add_form_row(
             form,
             5,
             "匹配渠道源",
@@ -888,6 +1001,8 @@ class WorkflowWindow(QMainWindow):
             self.account_output_file
         )
         self._add_form_row(form, 10, "输出文件", account_output)
+        self.account_sql_template = self._sql_binding_combo()
+        self._add_form_row(form, 11, "绑定 SQL", self.account_sql_template)
         layout.addLayout(form)
 
         self.account_verbose = QCheckBox("显示调试日志")
@@ -912,6 +1027,7 @@ class WorkflowWindow(QMainWindow):
                 self.account_parallel_button,
                 self.account_output_file,
                 self.account_browse_button,
+                self.account_sql_template,
                 self.account_verbose,
             ]
         )
@@ -1074,22 +1190,79 @@ class WorkflowWindow(QMainWindow):
 
         self.environment = QComboBox()
         self.environment.addItems(list(SUPPORTED_ENVIRONMENTS))
+        self.environment.currentTextChanged.connect(
+            self._sync_tournament_channel_options
+        )
         self._add_form_row(form, 0, "运行环境", self.environment)
 
         self.platform = self._platform_combo()
         self._add_form_row(form, 1, "注册平台", self.platform)
 
-        self.channel_code = self._channel_code_combo(self.environment.currentText())
-        self.environment.currentTextChanged.connect(
-            lambda environment: self._refresh_channel_code_combo(
-                self.channel_code,
-                environment,
-            )
+        (
+            self.tournament_enter_b_control,
+            self.tournament_enter_b_no_button,
+            self.tournament_enter_b_yes_button,
+        ) = self._boolean_choice_control(default=True)
+        self.tournament_enter_b_label = self._add_form_row(
+            form,
+            2,
+            "进入 B 面",
+            self.tournament_enter_b_control,
         )
-        self._add_form_row(form, 2, "Channel Code", self.channel_code)
+
+        (
+            self.tournament_new_user_control,
+            self.tournament_new_user_no_button,
+            self.tournament_new_user_yes_button,
+        ) = self._boolean_choice_control(default=False)
+        self.tournament_new_user_label = self._add_form_row(
+            form,
+            3,
+            "新手套路",
+            self.tournament_new_user_control,
+        )
+
+        self.tournament_channel_source = QLineEdit()
+        self.tournament_channel_source.setReadOnly(True)
+        self.tournament_channel_source.setPlaceholderText("请先更新渠道参数")
+        self.tournament_channel_code = self._prod_channel_code_combo()
+        (
+            tournament_channel_source_field,
+            self.tournament_update_parameters_button,
+        ) = self._channel_source_field(
+            self.tournament_channel_source,
+            "tournament",
+            self.tournament_channel_code,
+        )
+        self.tournament_channel_source_label = self._add_form_row(
+            form,
+            4,
+            "匹配渠道源",
+            tournament_channel_source_field,
+        )
+        self.tournament_enter_b_no_button.toggled.connect(
+            lambda checked: self._sync_tournament_channel_options()
+            if checked
+            else None
+        )
+        self.tournament_enter_b_yes_button.toggled.connect(
+            lambda checked: self._sync_tournament_channel_options()
+            if checked
+            else None
+        )
+        self.tournament_new_user_no_button.toggled.connect(
+            lambda checked: self._refresh_tournament_channel_source()
+            if checked
+            else None
+        )
+        self.tournament_new_user_yes_button.toggled.connect(
+            lambda checked: self._refresh_tournament_channel_source()
+            if checked
+            else None
+        )
 
         self.count = self._spin_box(DEFAULT_ACCOUNT_COUNT, maximum=100_000)
-        self._add_form_row(form, 3, "账号数量", self.count)
+        self._add_form_row(form, 5, "账号数量", self.count)
 
         self.max_workers = self._spin_box(DEFAULT_MAX_WORKERS, maximum=100)
         (
@@ -1097,8 +1270,8 @@ class WorkflowWindow(QMainWindow):
             self.serial_button,
             self.parallel_button,
         ) = self._execution_mode_control(self.max_workers)
-        self._add_form_row(form, 4, "执行方式", tournament_execution_mode)
-        self._add_form_row(form, 5, "并行账号", self.max_workers)
+        self._add_form_row(form, 6, "执行方式", tournament_execution_mode)
+        self._add_form_row(form, 7, "并行账号", self.max_workers)
 
         self.spin_workers = self._spin_box(DEFAULT_SPIN_WORKERS, maximum=100)
         (
@@ -1106,21 +1279,23 @@ class WorkflowWindow(QMainWindow):
             self.spin_serial_button,
             self.spin_parallel_button,
         ) = self._execution_mode_control(self.spin_workers)
-        self._add_form_row(form, 6, "下注方式", spin_execution_mode)
-        self._add_form_row(form, 7, "下注并发", self.spin_workers)
+        self._add_form_row(form, 8, "下注方式", spin_execution_mode)
+        self._add_form_row(form, 9, "下注并发", self.spin_workers)
 
         self.balance = self._spin_box(INITIAL_BALANCE)
-        self._add_form_row(form, 8, "加钱金额", self.balance)
+        self._add_form_row(form, 10, "加钱金额", self.balance)
 
         self.spin_count = self._spin_box(INITIAL_SPIN_COUNT, maximum=100_000)
-        self._add_form_row(form, 9, "下注次数", self.spin_count)
+        self._add_form_row(form, 11, "下注次数", self.spin_count)
 
         self.bet_amount = self._spin_box(spin.DEFAULT_BET_CENTS)
-        self._add_form_row(form, 10, "下注金额", self.bet_amount, "美分")
+        self._add_form_row(form, 12, "下注金额", self.bet_amount, "美分")
 
         self.output_file = QLineEdit(str(PROJECT_ROOT / "accounts.txt"))
         tournament_output, self.browse_button = self._output_field(self.output_file)
-        self._add_form_row(form, 11, "输出文件", tournament_output)
+        self._add_form_row(form, 13, "输出文件", tournament_output)
+        self.tournament_sql_template = self._sql_binding_combo()
+        self._add_form_row(form, 14, "绑定 SQL", self.tournament_sql_template)
         layout.addLayout(form)
 
         self.random_spins = QCheckBox("每个账号随机下注次数")
@@ -1159,7 +1334,11 @@ class WorkflowWindow(QMainWindow):
             [
                 self.environment,
                 self.platform,
-                self.channel_code,
+                self.tournament_enter_b_no_button,
+                self.tournament_enter_b_yes_button,
+                self.tournament_new_user_no_button,
+                self.tournament_new_user_yes_button,
+                self.tournament_update_parameters_button,
                 self.count,
                 self.max_workers,
                 self.serial_button,
@@ -1172,13 +1351,168 @@ class WorkflowWindow(QMainWindow):
                 self.bet_amount,
                 self.output_file,
                 self.browse_button,
+                self.tournament_sql_template,
                 self.random_spins,
                 self.spin_min,
                 self.spin_max,
                 self.verbose,
             ]
         )
+        self._sync_tournament_channel_options()
         return self._scrollable_settings_page(page)
+
+    def _build_feature_workspace(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        main = QHBoxLayout()
+        main.setSpacing(12)
+
+        list_panel = QFrame()
+        list_panel.setObjectName("settingsPanel")
+        list_layout = QVBoxLayout(list_panel)
+        list_layout.setContentsMargins(22, 20, 22, 20)
+        list_layout.setSpacing(10)
+        list_title = QLabel("SQL 模板")
+        list_title.setObjectName("sectionTitle")
+        list_layout.addWidget(list_title)
+        list_hint = QLabel("按命名标题管理和检索功能数据 SQL。")
+        list_hint.setObjectName("fieldHint")
+        list_layout.addWidget(list_hint)
+
+        self.feature_sql_search = QLineEdit()
+        self.feature_sql_search.setPlaceholderText("输入标题检索…")
+        self.feature_sql_search.textChanged.connect(
+            self._filter_feature_sql_templates
+        )
+        list_layout.addWidget(self.feature_sql_search)
+
+        self.feature_sql_list = QListWidget()
+        self.feature_sql_list.setObjectName("channelCodeList")
+        self.feature_sql_list.currentItemChanged.connect(
+            self._on_feature_sql_selection_changed
+        )
+        self.feature_sql_list.itemDoubleClicked.connect(
+            lambda _item: self._edit_sql_template()
+        )
+        list_layout.addWidget(self.feature_sql_list, 1)
+
+        manage_buttons = QHBoxLayout()
+        manage_buttons.setSpacing(7)
+        self.new_sql_template_button = QPushButton("新增 SQL")
+        self.new_sql_template_button.setObjectName("secondaryButton")
+        self.new_sql_template_button.clicked.connect(self._new_sql_template)
+        manage_buttons.addWidget(self.new_sql_template_button)
+        self.edit_sql_template_button = QPushButton("编辑")
+        self.edit_sql_template_button.setObjectName("secondaryButton")
+        self.edit_sql_template_button.clicked.connect(self._edit_sql_template)
+        manage_buttons.addWidget(self.edit_sql_template_button)
+        self.delete_sql_template_button = QPushButton("删除")
+        self.delete_sql_template_button.setObjectName("stopButton")
+        self.delete_sql_template_button.clicked.connect(self._delete_sql_template)
+        manage_buttons.addWidget(self.delete_sql_template_button)
+        list_layout.addLayout(manage_buttons)
+        main.addWidget(list_panel, 2)
+
+        execute_panel = QFrame()
+        execute_panel.setObjectName("settingsPanel")
+        execute_panel.setFixedWidth(360)
+        execute_layout = QVBoxLayout(execute_panel)
+        execute_layout.setContentsMargins(22, 20, 22, 20)
+        execute_layout.setSpacing(12)
+        execute_title = QLabel("执行功能数据")
+        execute_title.setObjectName("sectionTitle")
+        execute_layout.addWidget(execute_title)
+
+        selected_caption = QLabel("已选模板")
+        selected_caption.setObjectName("fieldLabel")
+        execute_layout.addWidget(selected_caption)
+        self.feature_selected_title = QLabel("未选择")
+        self.feature_selected_title.setObjectName("fieldHint")
+        self.feature_selected_title.setWordWrap(True)
+        execute_layout.addWidget(self.feature_selected_title)
+
+        environment_label = QLabel("运行环境")
+        environment_label.setObjectName("fieldLabel")
+        execute_layout.addWidget(environment_label)
+        self.feature_environment = QComboBox()
+        self.feature_environment.addItems(list(SUPPORTED_ENVIRONMENTS))
+        execute_layout.addWidget(self.feature_environment)
+
+        user_id_label = QLabel("User ID")
+        user_id_label.setObjectName("fieldLabel")
+        execute_layout.addWidget(user_id_label)
+        self.feature_user_id = self._spin_box(1, maximum=2_147_483_647)
+        self.feature_user_id.setMinimum(1)
+        execute_layout.addWidget(self.feature_user_id)
+
+        parameter_hint = QLabel(
+            "@userid=xxx 会自动替换为上方 User ID。"
+        )
+        parameter_hint.setObjectName("fieldHint")
+        parameter_hint.setWordWrap(True)
+        execute_layout.addWidget(parameter_hint)
+        execute_layout.addStretch()
+
+        execute_buttons = QHBoxLayout()
+        self.feature_execute_button = QPushButton("执行")
+        self.feature_execute_button.setObjectName("primaryButton")
+        self.feature_execute_button.clicked.connect(self._start)
+        execute_buttons.addWidget(self.feature_execute_button, 1)
+        self.feature_stop_button = QPushButton("停止")
+        self.feature_stop_button.setObjectName("stopButton")
+        self.feature_stop_button.setEnabled(False)
+        self.feature_stop_button.clicked.connect(self._stop)
+        execute_buttons.addWidget(self.feature_stop_button)
+        execute_layout.addLayout(execute_buttons)
+        main.addWidget(execute_panel)
+        layout.addLayout(main, 1)
+
+        log_panel = QFrame()
+        log_panel.setObjectName("terminalPanel")
+        log_panel.setFixedHeight(150)
+        log_layout = QVBoxLayout(log_panel)
+        log_layout.setContentsMargins(16, 10, 16, 12)
+        log_layout.setSpacing(6)
+        log_header = QHBoxLayout()
+        log_title = QLabel("执行日志")
+        log_title.setObjectName("sessionTitle")
+        log_header.addWidget(log_title)
+        log_header.addStretch()
+        clear_log_button = QPushButton("清空")
+        clear_log_button.setObjectName("secondaryButton")
+        clear_log_button.clicked.connect(lambda: self.feature_log.clear())
+        log_header.addWidget(clear_log_button)
+        log_layout.addLayout(log_header)
+        self.feature_log = QPlainTextEdit()
+        self.feature_log.setObjectName("terminal")
+        self.feature_log.setReadOnly(True)
+        self.feature_log.setUndoRedoEnabled(False)
+        self.feature_log.document().setMaximumBlockCount(500)
+        compact_font = QFontDatabase.systemFont(
+            QFontDatabase.SystemFont.FixedFont
+        )
+        compact_font.setPointSize(9)
+        self.feature_log.setFont(compact_font)
+        log_layout.addWidget(self.feature_log, 1)
+        layout.addWidget(log_panel)
+
+        self.config_widgets.extend(
+            [
+                self.feature_sql_search,
+                self.feature_sql_list,
+                self.feature_environment,
+                self.feature_user_id,
+                self.new_sql_template_button,
+                self.edit_sql_template_button,
+                self.delete_sql_template_button,
+                self.feature_execute_button,
+            ]
+        )
+        self._refresh_sql_template_combos()
+        return page
 
     # 通用表单组件
     @staticmethod
@@ -1364,18 +1698,230 @@ class WorkflowWindow(QMainWindow):
     def _channel_source_field(
         self,
         line_edit: QLineEdit,
+        context: str,
+        manual_combo: Optional[QComboBox] = None,
     ) -> tuple[QWidget, QPushButton]:
-        """创建只读渠道源预览和参数更新按钮。"""
+        """创建自动渠道预览和生产 Channel Code 选择器。"""
         holder = QWidget()
         row = QHBoxLayout(holder)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(7)
+        if manual_combo is not None:
+            manual_combo.hide()
+            row.addWidget(manual_combo, 1)
         row.addWidget(line_edit, 1)
         update_button = QPushButton("更新参数")
         update_button.setObjectName("secondaryButton")
-        update_button.clicked.connect(self._update_channel_source_parameters)
+        update_button.clicked.connect(
+            lambda: self._update_channel_source_parameters(context)
+        )
         row.addWidget(update_button)
         return holder, update_button
+
+    def _prod_channel_code_combo(self) -> QComboBox:
+        combo = QComboBox()
+        combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        combo.setMinimumContentsLength(10)
+        combo.addItems(self.channel_codes_by_environment["prod"])
+        return combo
+
+    def _refresh_prod_channel_code_combo(self, combo: QComboBox) -> None:
+        selected = combo.currentText()
+        combo.clear()
+        combo.addItems(self.channel_codes_by_environment["prod"])
+        selected_index = combo.findText(selected)
+        combo.setCurrentIndex(max(0, selected_index))
+
+    def _sql_binding_combo(self) -> QComboBox:
+        combo = SearchableComboBox()
+        combo.addItem("不绑定 SQL", None)
+        for template in self.sql_templates:
+            combo.addItem(template.title, template.template_id)
+        return combo
+
+    def _template_by_id(self, template_id: object) -> Optional[SqlTemplate]:
+        return next(
+            (
+                template
+                for template in self.sql_templates
+                if template.template_id == template_id
+            ),
+            None,
+        )
+
+    def _selected_sql_template(
+        self,
+        combo: QComboBox,
+        *,
+        required: bool = False,
+    ) -> Optional[SqlTemplate]:
+        selected_text = combo.currentText().strip()
+        if not selected_text or selected_text in ("不绑定 SQL", "请先新增 SQL"):
+            template = None
+        else:
+            template = next(
+                (
+                    candidate
+                    for candidate in self.sql_templates
+                    if candidate.title.casefold() == selected_text.casefold()
+                ),
+                None,
+            )
+            if template is None:
+                raise ValueError("请从检索结果中选择完整的 SQL 模板标题")
+        if required and template is None:
+            raise ValueError("请先选择 SQL 模板")
+        return template
+
+    @staticmethod
+    def _restore_combo_selection(combo: QComboBox, value: object) -> None:
+        index = combo.findData(value)
+        combo.setCurrentIndex(max(0, index))
+
+    def _refresh_sql_template_combos(
+        self,
+        selected_template_id: Optional[str] = None,
+    ) -> None:
+        account_selected = (
+            self.account_sql_template.currentData()
+            if hasattr(self, "account_sql_template")
+            else None
+        )
+        tournament_selected = (
+            self.tournament_sql_template.currentData()
+            if hasattr(self, "tournament_sql_template")
+            else None
+        )
+        current_feature = (
+            self.feature_sql_list.currentItem()
+            if hasattr(self, "feature_sql_list")
+            else None
+        )
+        feature_selected = selected_template_id or (
+            current_feature.data(Qt.ItemDataRole.UserRole)
+            if current_feature is not None
+            else None
+        )
+
+        for combo, selected in (
+            (getattr(self, "account_sql_template", None), account_selected),
+            (getattr(self, "tournament_sql_template", None), tournament_selected),
+        ):
+            if combo is None:
+                continue
+            combo.clear()
+            combo.addItem("不绑定 SQL", None)
+            for template in self.sql_templates:
+                combo.addItem(template.title, template.template_id)
+            self._restore_combo_selection(combo, selected)
+
+        if hasattr(self, "feature_sql_list"):
+            self.feature_sql_list.blockSignals(True)
+            self.feature_sql_list.clear()
+            selected_row = -1
+            for row, template in enumerate(self.sql_templates):
+                item = QListWidgetItem(template.title)
+                item.setData(Qt.ItemDataRole.UserRole, template.template_id)
+                item.setToolTip(template.title)
+                self.feature_sql_list.addItem(item)
+                if template.template_id == feature_selected:
+                    selected_row = row
+            self.feature_sql_list.blockSignals(False)
+            if self.feature_sql_list.count():
+                self.feature_sql_list.setCurrentRow(max(0, selected_row))
+            self._filter_feature_sql_templates(self.feature_sql_search.text())
+            self._on_feature_sql_selection_changed()
+
+    def _selected_feature_sql_template(self) -> Optional[SqlTemplate]:
+        if not hasattr(self, "feature_sql_list"):
+            return None
+        item = self.feature_sql_list.currentItem()
+        if item is None or item.isHidden():
+            return None
+        return self._template_by_id(item.data(Qt.ItemDataRole.UserRole))
+
+    @Slot(str)
+    def _filter_feature_sql_templates(self, query: str) -> None:
+        if not hasattr(self, "feature_sql_list"):
+            return
+        normalized = query.strip().casefold()
+        first_visible = None
+        for row in range(self.feature_sql_list.count()):
+            item = self.feature_sql_list.item(row)
+            visible = not normalized or normalized in item.text().casefold()
+            item.setHidden(not visible)
+            if visible and first_visible is None:
+                first_visible = item
+        current = self.feature_sql_list.currentItem()
+        if current is None or current.isHidden():
+            self.feature_sql_list.setCurrentItem(first_visible)
+        self._on_feature_sql_selection_changed()
+
+    def _on_feature_sql_selection_changed(self, *_args) -> None:
+        if not hasattr(self, "feature_selected_title"):
+            return
+        template = self._selected_feature_sql_template()
+        self.feature_selected_title.setText(template.title if template else "未选择")
+        has_template = template is not None
+        self.edit_sql_template_button.setEnabled(has_template)
+        self.delete_sql_template_button.setEnabled(has_template)
+        self.feature_execute_button.setEnabled(has_template and not self._is_running())
+
+    @Slot()
+    def _new_sql_template(self) -> None:
+        dialog = SqlTemplateDialog(self)
+        if (
+            dialog.exec() == QDialog.DialogCode.Accepted
+            and dialog.saved_template is not None
+        ):
+            self.sql_templates = load_sql_templates()
+            self._refresh_sql_template_combos(dialog.saved_template.template_id)
+            self._append_log(
+                f"[sql-config] created: {dialog.saved_template.title}\n"
+            )
+
+    @Slot()
+    def _edit_sql_template(self) -> None:
+        template = self._selected_feature_sql_template()
+        if template is None:
+            QMessageBox.information(self, "选择 SQL", "请先选择要编辑的 SQL 模板")
+            return
+        dialog = SqlTemplateDialog(self, template)
+        if (
+            dialog.exec() == QDialog.DialogCode.Accepted
+            and dialog.saved_template is not None
+        ):
+            self.sql_templates = load_sql_templates()
+            self._refresh_sql_template_combos(dialog.saved_template.template_id)
+            self._append_log(
+                f"[sql-config] updated: {dialog.saved_template.title}\n"
+            )
+
+    @Slot()
+    def _delete_sql_template(self) -> None:
+        template = self._selected_feature_sql_template()
+        if template is None:
+            QMessageBox.information(self, "选择 SQL", "请先选择要删除的 SQL 模板")
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除 SQL 模板",
+            f"确定删除「{template.title}」？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            delete_sql_template(template.template_id)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "删除失败", str(error))
+            return
+        self.sql_templates = load_sql_templates()
+        self._refresh_sql_template_combos()
+        self._append_log(f"[sql-config] deleted: {template.title}\n")
 
     def _output_field(self, line_edit: QLineEdit) -> tuple[QWidget, QPushButton]:
         row = QHBoxLayout()
@@ -1465,27 +2011,6 @@ class WorkflowWindow(QMainWindow):
         widget.setCurrentIndex(1)
         return widget
 
-    def _channel_code_combo(self, environment: str) -> QComboBox:
-        widget = QComboBox()
-        widget.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        widget.setMinimumContentsLength(10)
-        widget.setMinimumWidth(0)
-        widget.addItems(self.channel_codes_by_environment[environment])
-        return widget
-
-    def _refresh_channel_code_combo(
-        self,
-        combo: QComboBox,
-        environment: str,
-    ) -> None:
-        selected = combo.currentText()
-        combo.clear()
-        combo.addItems(self.channel_codes_by_environment[environment])
-        selected_index = combo.findText(selected)
-        combo.setCurrentIndex(max(0, selected_index))
-
     @staticmethod
     def _add_form_row(
         layout: QGridLayout,
@@ -1550,22 +2075,34 @@ class WorkflowWindow(QMainWindow):
         self.account_custom_email.setEnabled(editable)
         self._sync_execution_mode_inputs()
 
-    def _sync_account_channel_options(self) -> None:
-        """不进 B 面时隐藏无效的新手套路选项。"""
+    def _sync_account_channel_options(self, _environment: str = "") -> None:
+        """生产环境改为手动输入，其他环境自动匹配。"""
         if not hasattr(self, "account_new_user_control"):
             return
-        can_enter_b = self.account_enter_b_yes_button.isChecked()
+        environment = self.account_environment.currentText()
+        manual = requires_manual_channel_code(environment)
+        can_enter_b = self.account_enter_b_yes_button.isChecked() and not manual
+        self.account_enter_b_label.setVisible(not manual)
+        self.account_enter_b_control.setVisible(not manual)
         self.account_new_user_label.setVisible(can_enter_b)
         self.account_new_user_control.setVisible(can_enter_b)
+        self.account_channel_source_label.setText(
+            "Channel Code" if manual else "匹配渠道源"
+        )
+        self.account_channel_source.setVisible(not manual)
+        self.account_channel_code.setVisible(manual)
+        self.account_update_parameters_button.setVisible(not manual)
         self._refresh_account_channel_source()
 
     def _resolve_account_channel_source(self) -> str:
         environment = self.account_environment.currentText()
-        return resolve_channel_source(
+        return resolve_registration_channel(
+            environment,
             self.channel_sources_by_environment[environment],
             can_enter_b=self.account_enter_b_yes_button.isChecked(),
             has_new_user_offer=self.account_new_user_yes_button.isChecked(),
             preferred_sources=self.channel_codes_by_environment[environment],
+            manual_channel_code=self.account_channel_code.currentText(),
         )
 
     @Slot()
@@ -1573,6 +2110,8 @@ class WorkflowWindow(QMainWindow):
     def _refresh_account_channel_source(self, _value: str = "") -> None:
         """预览当前业务选项自动匹配出的渠道源。"""
         if not hasattr(self, "account_channel_source"):
+            return
+        if requires_manual_channel_code(self.account_environment.currentText()):
             return
         try:
             channel_source = self._resolve_account_channel_source()
@@ -1582,12 +2121,62 @@ class WorkflowWindow(QMainWindow):
         else:
             self.account_channel_source.setText(channel_source)
 
+    def _sync_tournament_channel_options(self, _environment: str = "") -> None:
+        """生产环境改为手动输入，其他环境自动匹配。"""
+        if not hasattr(self, "tournament_new_user_control"):
+            return
+        environment = self.environment.currentText()
+        manual = requires_manual_channel_code(environment)
+        can_enter_b = self.tournament_enter_b_yes_button.isChecked() and not manual
+        self.tournament_enter_b_label.setVisible(not manual)
+        self.tournament_enter_b_control.setVisible(not manual)
+        self.tournament_new_user_label.setVisible(can_enter_b)
+        self.tournament_new_user_control.setVisible(can_enter_b)
+        self.tournament_channel_source_label.setText(
+            "Channel Code" if manual else "匹配渠道源"
+        )
+        self.tournament_channel_source.setVisible(not manual)
+        self.tournament_channel_code.setVisible(manual)
+        self.tournament_update_parameters_button.setVisible(not manual)
+        self._refresh_tournament_channel_source()
+
+    def _resolve_tournament_channel_source(self) -> str:
+        environment = self.environment.currentText()
+        return resolve_registration_channel(
+            environment,
+            self.channel_sources_by_environment[environment],
+            can_enter_b=self.tournament_enter_b_yes_button.isChecked(),
+            has_new_user_offer=self.tournament_new_user_yes_button.isChecked(),
+            preferred_sources=self.channel_codes_by_environment[environment],
+            manual_channel_code=self.tournament_channel_code.currentText(),
+        )
+
     @Slot()
-    def _update_channel_source_parameters(self) -> None:
+    @Slot(str)
+    def _refresh_tournament_channel_source(self, _value: str = "") -> None:
+        """预览锦标赛任务自动匹配出的渠道源。"""
+        if not hasattr(self, "tournament_channel_source"):
+            return
+        if requires_manual_channel_code(self.environment.currentText()):
+            return
+        try:
+            channel_source = self._resolve_tournament_channel_source()
+        except ValueError:
+            self.tournament_channel_source.clear()
+            self.tournament_channel_source.setPlaceholderText("请先更新渠道参数")
+        else:
+            self.tournament_channel_source.setText(channel_source)
+
+    def _update_channel_source_parameters(self, context: str = "account") -> None:
         """从当前环境日志库更新渠道源缓存。"""
         if self._is_channel_source_updating():
             return
-        environment = self.account_environment.currentText()
+        if context == "tournament":
+            environment = self.environment.currentText()
+            update_button = self.tournament_update_parameters_button
+        else:
+            environment = self.account_environment.currentText()
+            update_button = self.account_update_parameters_button
         connection = self.database_connections_by_environment[environment]
         if not is_database_connection_configured(connection):
             QMessageBox.warning(
@@ -1599,7 +2188,8 @@ class WorkflowWindow(QMainWindow):
 
         self.start_button.setEnabled(False)
         self.account_update_parameters_button.setEnabled(False)
-        self.account_update_parameters_button.setText("更新中…")
+        self.tournament_update_parameters_button.setEnabled(False)
+        update_button.setText("更新中…")
         self._append_log(
             f"\n[channel-source:{environment}] updating parameters\n"
         )
@@ -1637,6 +2227,8 @@ class WorkflowWindow(QMainWindow):
         ]
         if self.account_environment.currentText() == environment:
             self._refresh_account_channel_source()
+        if self.environment.currentText() == environment:
+            self._refresh_tournament_channel_source()
         self._append_log(
             f"[channel-source:{environment}] cached {len(sources)} sources\n"
         )
@@ -1655,7 +2247,9 @@ class WorkflowWindow(QMainWindow):
         self.channel_source_worker = None
         self.channel_source_thread = None
         self.account_update_parameters_button.setText("更新参数")
+        self.tournament_update_parameters_button.setText("更新参数")
         self.account_update_parameters_button.setEnabled(not self._is_running())
+        self.tournament_update_parameters_button.setEnabled(not self._is_running())
         self.start_button.setEnabled(not self._is_running())
 
     def _is_channel_source_updating(self) -> bool:
@@ -1700,6 +2294,9 @@ class WorkflowWindow(QMainWindow):
             self.start_button.setText("生成锦标赛数据")
             self.session_title.setText("TOURNAMENT DATA")
             self.eyebrow.setText("$ tournament / generate")
+        elif index == 2:
+            self.content_stack.setCurrentIndex(2)
+            self.eyebrow.setText("$ sql-data / generate")
         else:
             self.content_stack.setCurrentIndex(1)
             self.eyebrow.setText("$ settings / parameters")
@@ -1840,8 +2437,11 @@ class WorkflowWindow(QMainWindow):
         self.channel_codes_by_environment[environment] = saved_codes
         self.channel_code_list.clear()
         self.channel_code_list.addItems(saved_codes)
+        if environment == "prod":
+            self._refresh_prod_channel_code_combo(self.account_channel_code)
+            self._refresh_prod_channel_code_combo(self.tournament_channel_code)
         if self.environment.currentText() == environment:
-            self._refresh_channel_code_combo(self.channel_code, environment)
+            self._refresh_tournament_channel_source()
         if self.account_environment.currentText() == environment:
             self._refresh_account_channel_source()
         return True
@@ -1857,6 +2457,24 @@ class WorkflowWindow(QMainWindow):
             line_edit.setText(selected)
 
     # 任务生命周期
+    def _sql_binding_parameters(
+        self,
+        environment: str,
+        combo: QComboBox,
+    ) -> dict:
+        template = self._selected_sql_template(combo)
+        if template is None:
+            return {}
+        connection = self.database_connections_by_environment[environment]
+        if not is_database_connection_configured(connection):
+            raise ValueError(
+                f"绑定 SQL 前请先完成 {environment} 环境的数据库配置"
+            )
+        return {
+            "sql_template": template,
+            "database_connection": connection,
+        }
+
     def _parameters(self) -> tuple[Callable[..., int], dict, str]:
         """校验当前页面并生成任务参数。"""
         if self.current_section == 0:
@@ -1869,6 +2487,10 @@ class WorkflowWindow(QMainWindow):
                 "channel_code": self._resolve_account_channel_source(),
                 "output_file": output_path,
                 "verbose": self.account_verbose.isChecked(),
+                **self._sql_binding_parameters(
+                    self.account_environment.currentText(),
+                    self.account_sql_template,
+                ),
             }
             if self.account_custom_mode_button.isChecked():
                 return (
@@ -1895,6 +2517,26 @@ class WorkflowWindow(QMainWindow):
                 "create-accounts-batch",
             )
 
+        if self.current_section == 2:
+            environment = self.feature_environment.currentText()
+            template = self._selected_feature_sql_template()
+            if template is None:
+                raise ValueError("请先从列表选择 SQL 模板")
+            connection = self.database_connections_by_environment[environment]
+            if not is_database_connection_configured(connection):
+                raise ValueError(
+                    f"请先完成 {environment} 环境的数据库配置"
+                )
+            return (
+                generate_feature_data,
+                {
+                    "template": template,
+                    "user_id": self.feature_user_id.value(),
+                    "connection": connection,
+                },
+                "generate-feature-data",
+            )
+
         if self.current_section != 1:
             raise ValueError("参数配置页不能执行任务")
 
@@ -1918,9 +2560,13 @@ class WorkflowWindow(QMainWindow):
             "spin_count_range": None,
             "environment": self.environment.currentText(),
             "platform": self.platform.currentData(),
-            "channel_code": self.channel_code.currentText(),
+            "channel_code": self._resolve_tournament_channel_source(),
             "output_file": output_path,
             "verbose": self.verbose.isChecked(),
+            **self._sql_binding_parameters(
+                self.environment.currentText(),
+                self.tournament_sql_template,
+            ),
         }
         if self.random_spins.isChecked():
             minimum = self.spin_min.value()
@@ -1940,8 +2586,8 @@ class WorkflowWindow(QMainWindow):
             QMessageBox.critical(self, "参数错误", str(error))
             return
 
-        output_file = parameters["output_file"]
-        if output_file.exists():
+        output_file = parameters.get("output_file")
+        if output_file is not None and output_file.exists():
             answer = QMessageBox.question(
                 self,
                 "覆盖文件",
@@ -1980,6 +2626,7 @@ class WorkflowWindow(QMainWindow):
         if self.worker:
             self.worker.request_stop()
         self.stop_button.setEnabled(False)
+        self.feature_stop_button.setEnabled(False)
         self._set_status("●  STOPPING", "#a66b13")
         self._append_log("\n[signal] stop requested; waiting for active requests\n")
 
@@ -2019,24 +2666,30 @@ class WorkflowWindow(QMainWindow):
 
     @Slot(str)
     def _append_log(self, text: str) -> None:
-        cursor = self.log.textCursor()
+        target = self.feature_log if self.current_section == 2 else self.log
+        cursor = target.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText(text)
-        self.log.setTextCursor(cursor)
-        self.log.ensureCursorVisible()
+        target.setTextCursor(cursor)
+        target.ensureCursorVisible()
 
     @Slot()
     def _clear_log(self) -> None:
-        self.log.clear()
+        if self.current_section == 2:
+            self.feature_log.clear()
+        else:
+            self.log.clear()
 
     def _set_running(self, running: bool) -> None:
         self.start_button.setEnabled(not running)
         self.stop_button.setEnabled(running)
+        self.feature_stop_button.setEnabled(running)
         for button in self.navigation_buttons:
             button.setEnabled(not running)
         for widget in self.config_widgets:
             widget.setEnabled(not running)
         if not running:
+            self._on_feature_sql_selection_changed()
             self._toggle_random_inputs(self.random_spins.isChecked())
             self._sync_account_creation_mode_inputs()
             self._sync_execution_mode_inputs()

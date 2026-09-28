@@ -41,6 +41,7 @@ class DatabaseConnectionConfig:
     database_host: str = "127.0.0.1"
     database_port: int = 3306
     database_name: str = ""
+    log_database_name: str = ""
     database_username: str = ""
     database_password: str = ""
     database_charset: str = "utf8mb4"
@@ -58,6 +59,7 @@ class DatabaseConnectionConfig:
                 ("ssh_private_key_id", ""),
                 ("database_host", "127.0.0.1"),
                 ("database_name", ""),
+                ("log_database_name", ""),
                 ("database_username", ""),
                 ("database_charset", "utf8mb4"),
             )
@@ -376,11 +378,14 @@ def _ssh_tunnel(connection: DatabaseConnectionConfig) -> Iterator[int]:
 @contextmanager
 def open_database_connection(
     connection: DatabaseConnectionConfig,
+    *,
+    multi_statements: bool = False,
 ):
     """通过私钥 SSH 隧道打开 MySQL 连接。"""
     validate_database_connection(connection)
     try:
         import pymysql
+        from pymysql.constants import CLIENT
     except ImportError as error:  # pragma: no cover - depends on installation
         raise RuntimeError("缺少 PyMySQL，请先安装项目依赖") from error
 
@@ -396,6 +401,7 @@ def open_database_connection(
             read_timeout=10,
             write_timeout=10,
             autocommit=False,
+            client_flag=CLIENT.MULTI_STATEMENTS if multi_statements else 0,
         )
         try:
             yield database
