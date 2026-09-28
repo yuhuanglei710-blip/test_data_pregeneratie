@@ -43,8 +43,8 @@ Channel Code，而是选择是否进入 B 面及是否启用新手套路：不�
 `cache/channel_sources.json`。“锦标赛数据”会注册
 账号、加钱并完成固定或随机次数的下注。账号处理和下注都能分别选择串行或并行；串行
 模式会固定使用一个执行线程，并禁用对应的并发数。界面会实时显示运行日志及完成进度，
-注册平台可选择 Android 或 iOS。左侧导航可在创建账号、锦标赛数据和参数配置三个页面
-之间切换；参数配置页维护的 Channel Code 作为两个任务页的渠道匹配优先级，页面也可
+注册平台可选择 Android 或 iOS。左侧导航可在创建账号、锦标赛数据、功能数据、API 请求
+和参数配置之间切换；参数配置页维护的 Channel Code 作为两个账号任务页的渠道匹配优先级，页面也可
 维护 SSH 数据库连接。两类配置都按运行环境
 隔离，切换环境时会自动加载对应参数。数据库连接通过 SSH 隧道访问 MySQL，SSH 只允许
 使用界面导入的私钥文件，不使用密码、SSH Agent 或自动密钥搜索，并可在界面中测试连接。
@@ -97,6 +97,27 @@ UPDATE user_other SET some_flag=1 WHERE user_id=@userid;
 `cache/sql_templates.json`（已排除版本控制）。
 SQL 模板选择框支持按标题模糊检索；执行日志只输出模板名、UID 和成功状态。
 “功能数据”页以标题列表管理模板，右侧为独立执行参数，底部仅保留紧凑日志栏。
+
+## API 请求模板
+
+“API 请求”页可按标题保存、检索、编辑和删除 HTTP 请求模板。模板支持
+`GET`、`POST`、`PUT`、`PATCH` 和 `DELETE`，可配置完整 URL、JSON 格式的 Headers、
+Body 与请求超时时间。模板保存在本机 `cache/api_templates.json`（已排除版本控制）。
+
+URL、Headers 和 Body 均支持 `{{参数名}}` 占位符，例如：
+
+```text
+https://example.test/v1/user/{{userid}}
+```
+
+发送前在右侧运行参数中填写 JSON 对象：
+
+```json
+{"userid": 123, "token": "example-token"}
+```
+
+界面会提示当前模板需要的参数；发送操作在后台线程中执行，底部响应日志显示状态码、
+耗时和响应正文。超长响应会自动截断，避免日志区域持续膨胀。
 
 ## 测试
 

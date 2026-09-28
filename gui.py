@@ -42,6 +42,15 @@ from base.account_batch import (
     create_custom_account,
     validate_custom_email,
 )
+from base.api_request import (
+    ApiTemplate,
+    delete_api_template,
+    load_api_templates,
+    parse_runtime_parameters,
+    save_api_template,
+    send_api_request,
+    template_parameter_names,
+)
 from base.app_config import load_channel_code_config, save_channel_codes
 from base.channel_source import (
     ChannelSource,
@@ -693,6 +702,112 @@ class SqlTemplateDialog(QDialog):
         self.accept()
 
 
+class ApiTemplateDialog(QDialog):
+    """新增或编辑一条可复用 API 请求模板。"""
+
+    def __init__(
+        self,
+        parent: QWidget,
+        template: Optional[ApiTemplate] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.template = template
+        self.saved_template: Optional[ApiTemplate] = None
+        self.setWindowTitle("编辑 API 模板" if template else "新增 API 模板")
+        self.resize(780, 680)
+        self.setMinimumSize(640, 560)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(10)
+
+        title_label = QLabel("标题")
+        title_label.setObjectName("fieldLabel")
+        layout.addWidget(title_label)
+        self.title_input = QLineEdit(template.title if template else "")
+        self.title_input.setPlaceholderText("例如：查询用户信息")
+        layout.addWidget(self.title_input)
+
+        request_row = QHBoxLayout()
+        self.method_input = QComboBox()
+        self.method_input.addItems(["GET", "POST", "PUT", "PATCH", "DELETE"])
+        if template:
+            self.method_input.setCurrentText(template.method)
+        self.method_input.setFixedWidth(110)
+        request_row.addWidget(self.method_input)
+        self.url_input = QLineEdit(template.url if template else "")
+        self.url_input.setPlaceholderText("https://api.example.com/users/{{userid}}")
+        request_row.addWidget(self.url_input, 1)
+        layout.addLayout(request_row)
+
+        headers_label = QLabel("Headers（JSON 对象）")
+        headers_label.setObjectName("fieldLabel")
+        layout.addWidget(headers_label)
+        self.headers_input = QPlainTextEdit()
+        self.headers_input.setPlaceholderText(
+            '{"Content-Type":"application/json","Authorization":"Bearer {{token}}"}'
+        )
+        self.headers_input.setPlainText(template.headers if template else "{}")
+        self.headers_input.setMaximumHeight(130)
+        layout.addWidget(self.headers_input)
+
+        body_label = QLabel("Body（可留空）")
+        body_label.setObjectName("fieldLabel")
+        layout.addWidget(body_label)
+        self.body_input = QPlainTextEdit()
+        self.body_input.setPlaceholderText('{"user_id":{{userid}}}')
+        self.body_input.setPlainText(template.body if template else "")
+        layout.addWidget(self.body_input, 1)
+
+        timeout_row = QHBoxLayout()
+        timeout_label = QLabel("超时时间（秒）")
+        timeout_label.setObjectName("fieldLabel")
+        timeout_row.addWidget(timeout_label)
+        self.timeout_input = NumberInput()
+        self.timeout_input.setRange(1, 300)
+        self.timeout_input.setValue(template.timeout if template else 30)
+        self.timeout_input.setFixedWidth(110)
+        timeout_row.addWidget(self.timeout_input)
+        timeout_row.addStretch()
+        layout.addLayout(timeout_row)
+
+        hint = QLabel(
+            "URL、Headers 和 Body 均可使用 {{参数名}}，发送时在运行参数中填写对应值。"
+        )
+        hint.setObjectName("fieldHint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel_button = QPushButton("取消")
+        cancel_button.setObjectName("secondaryButton")
+        cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(cancel_button)
+        save_button = QPushButton("保存")
+        save_button.setObjectName("primaryButton")
+        save_button.clicked.connect(self._save)
+        buttons.addWidget(save_button)
+        layout.addLayout(buttons)
+
+    @Slot()
+    def _save(self) -> None:
+        try:
+            self.saved_template = save_api_template(
+                self.title_input.text(),
+                self.method_input.currentText(),
+                self.url_input.text(),
+                self.headers_input.toPlainText(),
+                self.body_input.toPlainText(),
+                self.timeout_input.value(),
+                template_id=self.template.template_id if self.template else None,
+            )
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "保存失败", str(error))
+            return
+        self.accept()
+
+
 # 主窗口
 class WorkflowWindow(QMainWindow):
     """Termius 风格的自动化控制台主窗口。"""
@@ -719,6 +834,7 @@ class WorkflowWindow(QMainWindow):
         self.database_connections_by_environment = load_database_connections()
         self.ssh_private_keys = load_ssh_private_keys()
         self.sql_templates = load_sql_templates()
+        self.api_templates = load_api_templates()
 
         root = QWidget()
         root.setObjectName("root")
@@ -737,6 +853,7 @@ class WorkflowWindow(QMainWindow):
         self.content_stack.addWidget(self._build_task_workspace())
         self.content_stack.addWidget(self._build_config_workspace())
         self.content_stack.addWidget(self._build_feature_workspace())
+        self.content_stack.addWidget(self._build_api_workspace())
         workspace.addWidget(self.content_stack, 1)
         page.addLayout(workspace, 1)
 
@@ -790,7 +907,7 @@ class WorkflowWindow(QMainWindow):
         group = QButtonGroup(navigation)
         group.setExclusive(True)
         for index, label in enumerate(
-            ("创建账号", "锦标赛数据", "功能数据", "参数配置")
+            ("创建账号", "锦标赛数据", "功能数据", "API 请求", "参数配置")
         ):
             button = QPushButton(label)
             button.setObjectName("navigationButton")
@@ -1514,6 +1631,148 @@ class WorkflowWindow(QMainWindow):
         self._refresh_sql_template_combos()
         return page
 
+    def _build_api_workspace(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        main = QHBoxLayout()
+        main.setSpacing(12)
+
+        list_panel = QFrame()
+        list_panel.setObjectName("settingsPanel")
+        list_layout = QVBoxLayout(list_panel)
+        list_layout.setContentsMargins(22, 20, 22, 20)
+        list_layout.setSpacing(10)
+        list_title = QLabel("API 模板")
+        list_title.setObjectName("sectionTitle")
+        list_layout.addWidget(list_title)
+        list_hint = QLabel("按标题保存、检索和管理 HTTP 请求。")
+        list_hint.setObjectName("fieldHint")
+        list_layout.addWidget(list_hint)
+
+        self.api_search = QLineEdit()
+        self.api_search.setPlaceholderText("输入标题检索…")
+        self.api_search.textChanged.connect(self._filter_api_templates)
+        list_layout.addWidget(self.api_search)
+
+        self.api_list = QListWidget()
+        self.api_list.setObjectName("channelCodeList")
+        self.api_list.currentItemChanged.connect(
+            self._on_api_selection_changed
+        )
+        self.api_list.itemDoubleClicked.connect(
+            lambda _item: self._edit_api_template()
+        )
+        list_layout.addWidget(self.api_list, 1)
+
+        manage_buttons = QHBoxLayout()
+        manage_buttons.setSpacing(7)
+        self.new_api_button = QPushButton("新增 API")
+        self.new_api_button.setObjectName("secondaryButton")
+        self.new_api_button.clicked.connect(self._new_api_template)
+        manage_buttons.addWidget(self.new_api_button)
+        self.edit_api_button = QPushButton("编辑")
+        self.edit_api_button.setObjectName("secondaryButton")
+        self.edit_api_button.clicked.connect(self._edit_api_template)
+        manage_buttons.addWidget(self.edit_api_button)
+        self.delete_api_button = QPushButton("删除")
+        self.delete_api_button.setObjectName("stopButton")
+        self.delete_api_button.clicked.connect(self._delete_api_template)
+        manage_buttons.addWidget(self.delete_api_button)
+        list_layout.addLayout(manage_buttons)
+        main.addWidget(list_panel, 2)
+
+        execute_panel = QFrame()
+        execute_panel.setObjectName("settingsPanel")
+        execute_panel.setFixedWidth(390)
+        execute_layout = QVBoxLayout(execute_panel)
+        execute_layout.setContentsMargins(22, 20, 22, 20)
+        execute_layout.setSpacing(10)
+        execute_title = QLabel("发送请求")
+        execute_title.setObjectName("sectionTitle")
+        execute_layout.addWidget(execute_title)
+
+        selected_caption = QLabel("已选模板")
+        selected_caption.setObjectName("fieldLabel")
+        execute_layout.addWidget(selected_caption)
+        self.api_selected_title = QLabel("未选择")
+        self.api_selected_title.setObjectName("fieldHint")
+        self.api_selected_title.setWordWrap(True)
+        execute_layout.addWidget(self.api_selected_title)
+
+        parameters_label = QLabel("运行参数（JSON 对象）")
+        parameters_label.setObjectName("fieldLabel")
+        execute_layout.addWidget(parameters_label)
+        self.api_parameters = QPlainTextEdit()
+        self.api_parameters.setPlaceholderText('{"userid": 123, "token": "xxx"}')
+        self.api_parameters.setPlainText("{}")
+        self.api_parameters.setMaximumHeight(150)
+        execute_layout.addWidget(self.api_parameters)
+        self.api_parameter_hint = QLabel("当前模板无需运行参数")
+        self.api_parameter_hint.setObjectName("fieldHint")
+        self.api_parameter_hint.setWordWrap(True)
+        execute_layout.addWidget(self.api_parameter_hint)
+        execute_layout.addStretch()
+
+        execute_buttons = QHBoxLayout()
+        self.api_send_button = QPushButton("发送")
+        self.api_send_button.setObjectName("primaryButton")
+        self.api_send_button.clicked.connect(self._start)
+        execute_buttons.addWidget(self.api_send_button, 1)
+        self.api_stop_button = QPushButton("停止")
+        self.api_stop_button.setObjectName("stopButton")
+        self.api_stop_button.setEnabled(False)
+        self.api_stop_button.clicked.connect(self._stop)
+        execute_buttons.addWidget(self.api_stop_button)
+        execute_layout.addLayout(execute_buttons)
+        main.addWidget(execute_panel)
+        layout.addLayout(main, 1)
+
+        log_panel = QFrame()
+        log_panel.setObjectName("terminalPanel")
+        log_panel.setFixedHeight(160)
+        log_layout = QVBoxLayout(log_panel)
+        log_layout.setContentsMargins(16, 10, 16, 12)
+        log_layout.setSpacing(6)
+        log_header = QHBoxLayout()
+        log_title = QLabel("响应日志")
+        log_title.setObjectName("sessionTitle")
+        log_header.addWidget(log_title)
+        log_header.addStretch()
+        clear_log_button = QPushButton("清空")
+        clear_log_button.setObjectName("secondaryButton")
+        clear_log_button.clicked.connect(lambda: self.api_log.clear())
+        log_header.addWidget(clear_log_button)
+        log_layout.addLayout(log_header)
+        self.api_log = QPlainTextEdit()
+        self.api_log.setObjectName("terminal")
+        self.api_log.setReadOnly(True)
+        self.api_log.setUndoRedoEnabled(False)
+        self.api_log.document().setMaximumBlockCount(500)
+        compact_font = QFontDatabase.systemFont(
+            QFontDatabase.SystemFont.FixedFont
+        )
+        compact_font.setPointSize(9)
+        self.api_log.setFont(compact_font)
+        log_layout.addWidget(self.api_log, 1)
+        layout.addWidget(log_panel)
+
+        self.config_widgets.extend(
+            [
+                self.api_search,
+                self.api_list,
+                self.api_parameters,
+                self.new_api_button,
+                self.edit_api_button,
+                self.delete_api_button,
+                self.api_send_button,
+            ]
+        )
+        self._refresh_api_templates()
+        return page
+
     # 通用表单组件
     @staticmethod
     def _scrollable_settings_page(page: QWidget) -> QScrollArea:
@@ -1923,6 +2182,149 @@ class WorkflowWindow(QMainWindow):
         self._refresh_sql_template_combos()
         self._append_log(f"[sql-config] deleted: {template.title}\n")
 
+    def _api_template_by_id(self, template_id: object) -> Optional[ApiTemplate]:
+        return next(
+            (
+                template
+                for template in self.api_templates
+                if template.template_id == template_id
+            ),
+            None,
+        )
+
+    def _selected_api_template(self) -> Optional[ApiTemplate]:
+        if not hasattr(self, "api_list"):
+            return None
+        item = self.api_list.currentItem()
+        if item is None or item.isHidden():
+            return None
+        return self._api_template_by_id(item.data(Qt.ItemDataRole.UserRole))
+
+    def _refresh_api_templates(
+        self,
+        selected_template_id: Optional[str] = None,
+    ) -> None:
+        if not hasattr(self, "api_list"):
+            return
+        current = self.api_list.currentItem()
+        selected_id = selected_template_id or (
+            current.data(Qt.ItemDataRole.UserRole) if current is not None else None
+        )
+        self.api_list.blockSignals(True)
+        self.api_list.clear()
+        selected_row = -1
+        for row, template in enumerate(self.api_templates):
+            item = QListWidgetItem(f"{template.method}  ·  {template.title}")
+            item.setData(Qt.ItemDataRole.UserRole, template.template_id)
+            item.setToolTip(template.url)
+            self.api_list.addItem(item)
+            if template.template_id == selected_id:
+                selected_row = row
+        self.api_list.blockSignals(False)
+        if self.api_list.count():
+            self.api_list.setCurrentRow(max(0, selected_row))
+        self._filter_api_templates(self.api_search.text())
+        self._on_api_selection_changed()
+
+    @Slot(str)
+    def _filter_api_templates(self, query: str) -> None:
+        if not hasattr(self, "api_list"):
+            return
+        normalized = query.strip().casefold()
+        first_visible = None
+        for row in range(self.api_list.count()):
+            item = self.api_list.item(row)
+            template = self._api_template_by_id(
+                item.data(Qt.ItemDataRole.UserRole)
+            )
+            search_value = (
+                f"{item.text()} {template.url}" if template else item.text()
+            ).casefold()
+            visible = not normalized or normalized in search_value
+            item.setHidden(not visible)
+            if visible and first_visible is None:
+                first_visible = item
+        current = self.api_list.currentItem()
+        if current is None or current.isHidden():
+            self.api_list.setCurrentItem(first_visible)
+        self._on_api_selection_changed()
+
+    def _on_api_selection_changed(self, *_args) -> None:
+        if not hasattr(self, "api_selected_title"):
+            return
+        template = self._selected_api_template()
+        has_template = template is not None
+        if template is None:
+            self.api_selected_title.setText("未选择")
+            self.api_parameter_hint.setText("当前模板无需运行参数")
+        else:
+            self.api_selected_title.setText(
+                f"{template.method} · {template.title}"
+            )
+            names = template_parameter_names(template)
+            self.api_parameter_hint.setText(
+                f"需要参数：{', '.join(names)}"
+                if names
+                else "当前模板无需运行参数"
+            )
+        self.edit_api_button.setEnabled(has_template and not self._is_running())
+        self.delete_api_button.setEnabled(has_template and not self._is_running())
+        self.api_send_button.setEnabled(has_template and not self._is_running())
+
+    @Slot()
+    def _new_api_template(self) -> None:
+        dialog = ApiTemplateDialog(self)
+        if (
+            dialog.exec() == QDialog.DialogCode.Accepted
+            and dialog.saved_template is not None
+        ):
+            self.api_templates = load_api_templates()
+            self._refresh_api_templates(dialog.saved_template.template_id)
+            self._append_log(
+                f"[api-config] created: {dialog.saved_template.title}\n"
+            )
+
+    @Slot()
+    def _edit_api_template(self) -> None:
+        template = self._selected_api_template()
+        if template is None:
+            QMessageBox.information(self, "选择 API", "请先选择要编辑的 API 模板")
+            return
+        dialog = ApiTemplateDialog(self, template)
+        if (
+            dialog.exec() == QDialog.DialogCode.Accepted
+            and dialog.saved_template is not None
+        ):
+            self.api_templates = load_api_templates()
+            self._refresh_api_templates(dialog.saved_template.template_id)
+            self._append_log(
+                f"[api-config] updated: {dialog.saved_template.title}\n"
+            )
+
+    @Slot()
+    def _delete_api_template(self) -> None:
+        template = self._selected_api_template()
+        if template is None:
+            QMessageBox.information(self, "选择 API", "请先选择要删除的 API 模板")
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除 API 模板",
+            f"确定删除「{template.title}」？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            delete_api_template(template.template_id)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "删除失败", str(error))
+            return
+        self.api_templates = load_api_templates()
+        self._refresh_api_templates()
+        self._append_log(f"[api-config] deleted: {template.title}\n")
+
     def _output_field(self, line_edit: QLineEdit) -> tuple[QWidget, QPushButton]:
         row = QHBoxLayout()
         row.setSpacing(7)
@@ -2297,6 +2699,9 @@ class WorkflowWindow(QMainWindow):
         elif index == 2:
             self.content_stack.setCurrentIndex(2)
             self.eyebrow.setText("$ sql-data / generate")
+        elif index == 3:
+            self.content_stack.setCurrentIndex(3)
+            self.eyebrow.setText("$ api-request / send")
         else:
             self.content_stack.setCurrentIndex(1)
             self.eyebrow.setText("$ settings / parameters")
@@ -2537,6 +2942,21 @@ class WorkflowWindow(QMainWindow):
                 "generate-feature-data",
             )
 
+        if self.current_section == 3:
+            template = self._selected_api_template()
+            if template is None:
+                raise ValueError("请先从列表选择 API 模板")
+            return (
+                send_api_request,
+                {
+                    "template": template,
+                    "parameters": parse_runtime_parameters(
+                        self.api_parameters.toPlainText()
+                    ),
+                },
+                "send-api-request",
+            )
+
         if self.current_section != 1:
             raise ValueError("参数配置页不能执行任务")
 
@@ -2627,6 +3047,7 @@ class WorkflowWindow(QMainWindow):
             self.worker.request_stop()
         self.stop_button.setEnabled(False)
         self.feature_stop_button.setEnabled(False)
+        self.api_stop_button.setEnabled(False)
         self._set_status("●  STOPPING", "#a66b13")
         self._append_log("\n[signal] stop requested; waiting for active requests\n")
 
@@ -2666,7 +3087,12 @@ class WorkflowWindow(QMainWindow):
 
     @Slot(str)
     def _append_log(self, text: str) -> None:
-        target = self.feature_log if self.current_section == 2 else self.log
+        if self.current_section == 2:
+            target = self.feature_log
+        elif self.current_section == 3:
+            target = self.api_log
+        else:
+            target = self.log
         cursor = target.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText(text)
@@ -2677,6 +3103,8 @@ class WorkflowWindow(QMainWindow):
     def _clear_log(self) -> None:
         if self.current_section == 2:
             self.feature_log.clear()
+        elif self.current_section == 3:
+            self.api_log.clear()
         else:
             self.log.clear()
 
@@ -2684,12 +3112,14 @@ class WorkflowWindow(QMainWindow):
         self.start_button.setEnabled(not running)
         self.stop_button.setEnabled(running)
         self.feature_stop_button.setEnabled(running)
+        self.api_stop_button.setEnabled(running)
         for button in self.navigation_buttons:
             button.setEnabled(not running)
         for widget in self.config_widgets:
             widget.setEnabled(not running)
         if not running:
             self._on_feature_sql_selection_changed()
+            self._on_api_selection_changed()
             self._toggle_random_inputs(self.random_spins.isChecked())
             self._sync_account_creation_mode_inputs()
             self._sync_execution_mode_inputs()

@@ -15,6 +15,7 @@ import jwt
 from base import (
     account_batch,
     add_money,
+    api_request,
     channel_source,
     database_config,
     sql_data,
@@ -147,6 +148,98 @@ class SqlDataTests(unittest.TestCase):
                     "SELECT 1;",
                     path=f"{temp_dir}/sql_templates.json",
                 )
+
+
+class ApiRequestTests(unittest.TestCase):
+    def test_templates_are_saved_updated_and_deleted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = f"{temp_dir}/api_templates.json"
+            created = api_request.save_api_template(
+                "查询用户",
+                "GET",
+                "https://example.test/users/{{userid}}",
+                path=config_file,
+            )
+            updated = api_request.save_api_template(
+                "更新用户",
+                "PATCH",
+                "https://example.test/users/{{userid}}",
+                '{"Content-Type":"application/json"}',
+                '{"enabled":true}',
+                template_id=created.template_id,
+                path=config_file,
+            )
+
+            self.assertEqual(api_request.load_api_templates(config_file), [updated])
+
+            api_request.delete_api_template(updated.template_id, config_file)
+
+            self.assertEqual(api_request.load_api_templates(config_file), [])
+
+    def test_template_parameter_names_are_unique_and_ordered(self):
+        template = api_request.ApiTemplate(
+            "id",
+            "test",
+            "POST",
+            "https://example.test/{{userid}}",
+            '{"Authorization":"Bearer {{token}}"}',
+            '{"id":{{userid}}}',
+        )
+
+        self.assertEqual(
+            api_request.template_parameter_names(template),
+            ["userid", "token"],
+        )
+
+    def test_execute_renders_url_headers_and_body(self):
+        template = api_request.ApiTemplate(
+            "id",
+            "test",
+            "POST",
+            "https://example.test/users/{{userid}}",
+            '{"Authorization":"Bearer {{token}}"}',
+            '{"user_id":{{userid}}}',
+            12,
+        )
+        response = Mock(
+            status_code=200,
+            text='{"ok":true}',
+            headers={"Content-Type": "application/json"},
+        )
+        with patch.object(
+            api_request.requests,
+            "request",
+            return_value=response,
+        ) as request:
+            result = api_request.execute_api_template(
+                template,
+                {"userid": 42, "token": "secret"},
+            )
+
+        request.assert_called_once_with(
+            "POST",
+            "https://example.test/users/42",
+            headers={"Authorization": "Bearer secret"},
+            data='{"user_id":42}',
+            timeout=12,
+        )
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.response_text, '{"ok":true}')
+
+    def test_missing_runtime_parameter_is_rejected(self):
+        template = api_request.ApiTemplate(
+            "id",
+            "test",
+            "GET",
+            "https://example.test/users/{{userid}}",
+        )
+
+        with self.assertRaisesRegex(ValueError, "userid"):
+            api_request.execute_api_template(template, {})
+
+    def test_runtime_parameters_must_be_json_object(self):
+        with self.assertRaisesRegex(ValueError, "JSON 对象"):
+            api_request.parse_runtime_parameters("[]")
 
 
 class ChannelSourceTests(unittest.TestCase):

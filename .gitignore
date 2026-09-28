@@ -8,5 +8,6 @@ cache/channel_sources.json
 cache/database_connections.json
 cache/ssh_private_keys.json
 cache/sql_templates.json
+cache/api_templates.json
 
 cache/bgtoken.json
