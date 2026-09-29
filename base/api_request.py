@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 
 import requests
+from dotenv import dotenv_values
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -65,6 +67,7 @@ class ApiExecutionResult:
     elapsed_ms: int
     response_text: str
     response_headers: Dict[str, str]
+    decoded_body: object = None
 
 
 def load_api_templates(
@@ -136,8 +139,8 @@ def save_api_template(
         raise ValueError("API 标题不能为空")
     if normalized_method not in SUPPORTED_METHODS:
         raise ValueError("不支持的请求方法")
-    if not normalized_url.startswith(("http://", "https://")):
-        raise ValueError("URL 必须以 http:// 或 https:// 开头")
+    if not normalized_url.startswith(("/", "http://", "https://")):
+        raise ValueError("接口路径必须以 / 开头，固定 URL 必须以 http:// 或 https:// 开头")
     if int(timeout) <= 0:
         raise ValueError("超时时间必须大于 0 秒")
     _parse_headers(headers)
@@ -228,14 +231,129 @@ def _render_value(value: str, parameters: Mapping[str, object]) -> str:
     return rendered
 
 
+def _parameter_value(name: str, parameters: Mapping[str, object]) -> object:
+    if name not in parameters:
+        raise ValueError(f"缺少 API 参数：{name}")
+    return parameters[name]
+
+
+def render_json_template(value: str, parameters: Mapping[str, object]) -> str:
+    """以保留 JSON 类型并正确转义字符串的方式渲染模板。"""
+    exact_string = re.compile(
+        r'"\s*\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}\s*"'
+    )
+
+    rendered = exact_string.sub(
+        lambda match: json.dumps(
+            _parameter_value(match.group(1), parameters),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        value,
+    )
+
+    def inside_json_string(position: int) -> bool:
+        in_string = False
+        escaped = False
+        for character in rendered[:position]:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = not in_string
+        return in_string
+
+    def replace(match: re.Match[str]) -> str:
+        parameter = _parameter_value(match.group(1), parameters)
+        if inside_json_string(match.start()):
+            encoded = json.dumps(str(parameter), ensure_ascii=False)
+            return encoded[1:-1]
+        return json.dumps(parameter, ensure_ascii=False, separators=(",", ":"))
+
+    rendered = PARAMETER_PATTERN.sub(replace, rendered)
+    try:
+        parsed = json.loads(rendered)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"渲染后的 JSON 格式无效：{error.msg}") from error
+    return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+
+
+def decode_api_protocol_response(response_text: str) -> object:
+    """解析 JSON，并解码协议中的 Base64 data/msg 字段。"""
+    try:
+        payload = json.loads(response_text)
+    except json.JSONDecodeError:
+        return response_text
+    if not isinstance(payload, dict):
+        return payload
+
+    decoded: Dict[str, Any] = dict(payload)
+    for field in ("data", "msg"):
+        value = payload.get(field)
+        if not isinstance(value, str):
+            continue
+        try:
+            padded = value + "=" * (-len(value) % 4)
+            raw = base64.b64decode(padded, validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if field == "data":
+            try:
+                decoded[field] = json.loads(raw)
+            except json.JSONDecodeError:
+                decoded[field] = raw
+        else:
+            decoded[field] = raw
+    return decoded
+
+
+def load_environment_api_base_url(
+    environment: str,
+    project_root: Union[str, Path] = PROJECT_ROOT,
+) -> str:
+    """读取环境文件中的前台 API 域名并转换成基础 URL。"""
+    env_file = Path(project_root) / f"{environment}.env"
+    domain = str(dotenv_values(env_file).get("domain") or "").strip()
+    if not domain:
+        raise ValueError(f"{env_file.name} 未配置 domain")
+    if domain.startswith(("http://", "https://")):
+        return domain.rstrip("/")
+    return f"https://{domain.rstrip('/')}"
+
+
+def resolve_api_url(
+    endpoint: str,
+    environment: Optional[str],
+    parameters: Mapping[str, object],
+) -> str:
+    """将相对接口路径和所选环境域名组合成完整 URL。"""
+    rendered_endpoint = _render_value(endpoint, parameters)
+    if rendered_endpoint.startswith(("http://", "https://")):
+        return rendered_endpoint
+    if not environment:
+        raise ValueError("相对接口路径必须选择运行环境")
+    return f"{load_environment_api_base_url(environment)}{rendered_endpoint}"
+
+
 def execute_api_template(
     template: ApiTemplate,
     parameters: Mapping[str, object],
+    environment: Optional[str] = None,
 ) -> ApiExecutionResult:
     """渲染并发送一次 HTTP 请求。"""
-    url = _render_value(template.url, parameters)
-    headers = _parse_headers(_render_value(template.headers, parameters))
-    body = _render_value(template.body, parameters) if template.body else None
+    url = resolve_api_url(template.url, environment, parameters)
+    rendered_headers = render_json_template(template.headers, parameters)
+    headers = _parse_headers(rendered_headers)
+    if template.body:
+        stripped_body = template.body.lstrip()
+        body = (
+            render_json_template(template.body, parameters)
+            if stripped_body.startswith(("{", "["))
+            else _render_value(template.body, parameters)
+        )
+    else:
+        body = None
     started = time.perf_counter()
     response = requests.request(
         template.method,
@@ -256,6 +374,7 @@ def execute_api_template(
         elapsed_ms,
         response_text,
         dict(response.headers),
+        decode_api_protocol_response(response_text),
     )
 
 
@@ -263,6 +382,7 @@ def send_api_request(
     *,
     template: ApiTemplate,
     parameters: Mapping[str, object],
+    environment: Optional[str] = None,
     stop_requested: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
 ) -> int:
@@ -270,13 +390,22 @@ def send_api_request(
     if stop_requested and stop_requested():
         print("用户已停止任务")
         return 0
-    result = execute_api_template(template, parameters)
+    result = execute_api_template(template, parameters, environment)
     print(
         f"[api] {template.method} · {result.status_code} · "
         f"{result.elapsed_ms} ms · {template.title}"
     )
     if result.response_text:
-        print(result.response_text)
+        if isinstance(result.decoded_body, (dict, list)):
+            print(
+                json.dumps(
+                    result.decoded_body,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(result.decoded_body)
     successful = 1 if 200 <= result.status_code < 400 else 0
     if progress_callback:
         progress_callback(1, 1, successful)

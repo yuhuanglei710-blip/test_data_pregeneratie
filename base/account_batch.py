@@ -2,13 +2,20 @@
 
 import re
 import threading
-from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    CancelledError,
+    Future,
+    ThreadPoolExecutor,
+    wait,
+)
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Union
 
 from .enums import Platform
 from .database_config import DatabaseConnectionConfig
+from .feature_scenario import FeatureScenario, execute_feature_scenario
 from .sql_data import SqlTemplate, execute_sql_template
 from .tournment_test import DEFAULT_ACCOUNT_COUNT, DEFAULT_MAX_WORKERS
 from .user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD, User
@@ -19,6 +26,10 @@ _EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 class AccountBatchCancelled(RuntimeError):
     """账号创建被安全取消。"""
+
+
+class AccountBatchCriticalError(RuntimeError):
+    """绑定 SQL 或场景发生系统性错误。"""
 
 
 @dataclass(frozen=True)
@@ -41,6 +52,8 @@ def _register_account(
     email: Optional[str] = None,
     sql_template: Optional[SqlTemplate] = None,
     database_connection: Optional[DatabaseConnectionConfig] = None,
+    feature_scenario: Optional[FeatureScenario] = None,
+    scenario_database_connection: Optional[DatabaseConnectionConfig] = None,
 ) -> RegisteredAccount:
     """注册一个账号并生成导出内容。"""
     if stop_requested():
@@ -58,12 +71,42 @@ def _register_account(
     if sql_template is not None:
         if database_connection is None:
             raise ValueError("绑定 SQL 时必须配置当前环境数据库")
-        execute_sql_template(
-            sql_template,
-            account.uid,
-            database_connection,
-        )
+        try:
+            execute_sql_template(
+                sql_template,
+                account.uid,
+                database_connection,
+            )
+        except Exception as error:
+            if stop_requested():
+                raise AccountBatchCancelled("用户已停止任务") from error
+            raise AccountBatchCriticalError(
+                f"绑定 SQL 执行失败：{error}"
+            ) from error
         print(f"[{index}/{count}] SQL OK · {sql_template.title}")
+
+    if feature_scenario is not None:
+        try:
+            execute_feature_scenario(
+                feature_scenario,
+                environment=environment,
+                runtime_parameters={
+                    "userid": account.uid,
+                    "token": account.token,
+                    "email": account.email,
+                    "platform": platform,
+                    "channel_code": channel_code,
+                },
+                database_connection=scenario_database_connection,
+                stop_requested=stop_requested,
+            )
+        except Exception as error:
+            if stop_requested():
+                raise AccountBatchCancelled("用户已停止任务") from error
+            raise AccountBatchCriticalError(
+                f"功能场景执行失败：{error}"
+            ) from error
+        print(f"[{index}/{count}] 场景 PASS · {feature_scenario.title}")
 
     print(
         f"[{index}/{count}] 注册成功："
@@ -93,6 +136,8 @@ def create_accounts(
     email: Optional[str] = None,
     sql_template: Optional[SqlTemplate] = None,
     database_connection: Optional[DatabaseConnectionConfig] = None,
+    feature_scenario: Optional[FeatureScenario] = None,
+    scenario_database_connection: Optional[DatabaseConnectionConfig] = None,
 ) -> int:
     """并行注册账号并导出成功结果。"""
     if count <= 0:
@@ -111,7 +156,9 @@ def create_accounts(
     output_path = Path(output_file)
     success_count = 0
     completed_count = 0
+    failed_count = 0
     internal_stop = threading.Event()
+    fatal_error: Optional[Exception] = None
 
     def should_stop() -> bool:
         """合并内部取消和界面停止信号。"""
@@ -127,51 +174,99 @@ def create_accounts(
             max_workers=worker_count,
             thread_name_prefix="register",
         )
-        futures: Dict[Future[RegisteredAccount], int] = {
-            executor.submit(
-                _register_account,
-                index,
-                count,
-                environment=environment,
-                platform=platform,
-                channel_code=channel_code,
-                verbose=verbose,
-                stop_requested=should_stop,
-                email=email,
-                sql_template=sql_template,
-                database_connection=database_connection,
-            ): index
-            for index in range(1, count + 1)
-        }
+        futures: Dict[Future[RegisteredAccount], int] = {}
+        next_index = 1
+
+        def submit_account(index: int) -> None:
+            futures[
+                executor.submit(
+                    _register_account,
+                    index,
+                    count,
+                    environment=environment,
+                    platform=platform,
+                    channel_code=channel_code,
+                    verbose=verbose,
+                    stop_requested=should_stop,
+                    email=email,
+                    sql_template=sql_template,
+                    database_connection=database_connection,
+                    feature_scenario=feature_scenario,
+                    scenario_database_connection=scenario_database_connection,
+                )
+            ] = index
+
+        while next_index <= count and len(futures) < worker_count:
+            submit_account(next_index)
+            next_index += 1
 
         try:
-            for future in as_completed(futures):
-                index = futures[future]
-                try:
-                    result = future.result()
-                    account_file.write(result.output_line)
-                    account_file.flush()
-                    success_count += 1
-                except (AccountBatchCancelled, CancelledError):
-                    pass
-                except Exception as error:
-                    print(f"[{index}/{count}] 创建账号失败: {error}")
-                finally:
-                    completed_count += 1
-                    if progress_callback:
-                        progress_callback(completed_count, count, success_count)
+            while futures:
+                done, _ = wait(tuple(futures), return_when=FIRST_COMPLETED)
+                for future in done:
+                    index = futures.pop(future)
+                    processed = True
+                    try:
+                        result = future.result()
+                        account_file.write(result.output_line)
+                        account_file.flush()
+                        success_count += 1
+                    except (AccountBatchCancelled, CancelledError):
+                        processed = False
+                    except AccountBatchCriticalError as error:
+                        failed_count += 1
+                        first_fatal = fatal_error is None
+                        fatal_error = fatal_error or error
+                        print(f"[{index}/{count}] 创建账号失败: {error}")
+                        if first_fatal:
+                            print("检测到关键业务错误，正在停止剩余批量任务")
+                        internal_stop.set()
+                    except Exception as error:
+                        failed_count += 1
+                        print(f"[{index}/{count}] 创建账号失败: {error}")
+                    finally:
+                        if processed:
+                            completed_count += 1
+                            if progress_callback:
+                                progress_callback(
+                                    completed_count,
+                                    count,
+                                    success_count,
+                                )
 
                 if should_stop():
                     internal_stop.set()
-                    for pending_future in futures:
-                        if not pending_future.done():
-                            pending_future.cancel()
+                    for pending_future in tuple(futures):
+                        pending_future.cancel()
+                    continue
+
+                while next_index <= count and len(futures) < worker_count:
+                    submit_account(next_index)
+                    next_index += 1
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
 
     if stop_requested and stop_requested():
-        print("用户已停止任务")
-    print(f"账号创建结束：成功 {success_count}/{count}，输出文件：{output_path}")
+        print(
+            f"账号创建已停止：成功 {success_count}，失败 {failed_count}，"
+            f"实际完成 {completed_count}/{count}，输出文件：{output_path}"
+        )
+        return success_count
+    if fatal_error is not None:
+        raise RuntimeError(
+            f"账号创建因关键业务错误终止：{fatal_error}；"
+            f"成功 {success_count}，失败 {failed_count}，"
+            f"实际完成 {completed_count}/{count}"
+        ) from fatal_error
+    if failed_count:
+        raise RuntimeError(
+            f"账号创建部分失败：成功 {success_count}，失败 {failed_count}，"
+            f"实际完成 {completed_count}/{count}，输出文件：{output_path}"
+        )
+    print(
+        f"账号创建结束：成功 {success_count}，失败 {failed_count}，"
+        f"实际完成 {completed_count}/{count}，输出文件：{output_path}"
+    )
     return success_count
 
 
@@ -197,6 +292,8 @@ def create_custom_account(
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
     sql_template: Optional[SqlTemplate] = None,
     database_connection: Optional[DatabaseConnectionConfig] = None,
+    feature_scenario: Optional[FeatureScenario] = None,
+    scenario_database_connection: Optional[DatabaseConnectionConfig] = None,
 ) -> int:
     """使用指定邮箱创建并导出一个账号。"""
     email = validate_custom_email(email)
@@ -205,6 +302,12 @@ def create_custom_account(
         sql_parameters = {
             "sql_template": sql_template,
             "database_connection": database_connection,
+        }
+    scenario_parameters = {}
+    if feature_scenario is not None:
+        scenario_parameters = {
+            "feature_scenario": feature_scenario,
+            "scenario_database_connection": scenario_database_connection,
         }
     return create_accounts(
         count=1,
@@ -218,4 +321,5 @@ def create_custom_account(
         progress_callback=progress_callback,
         email=email,
         **sql_parameters,
+        **scenario_parameters,
     )

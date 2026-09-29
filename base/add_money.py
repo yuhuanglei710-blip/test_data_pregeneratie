@@ -14,7 +14,7 @@ from dotenv import dotenv_values
 BASE_URL = os.getenv("ADMIN_BASE_URL", "https://admin.ushdev.top")
 USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 PASSWORD = os.getenv("ADMIN_PASSWORD", "us.1us.1")
-REQUEST_TIMEOUT = 15
+REQUEST_TIMEOUT = 10
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 _token_cache: Dict[str, str] = {}

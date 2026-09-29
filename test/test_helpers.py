@@ -8,7 +8,7 @@ import threading
 import time
 import unittest
 from contextlib import redirect_stdout
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 
 import jwt
 
@@ -18,6 +18,7 @@ from base import (
     api_request,
     channel_source,
     database_config,
+    feature_scenario,
     sql_data,
     spin,
     tournment_test,
@@ -157,13 +158,13 @@ class ApiRequestTests(unittest.TestCase):
             created = api_request.save_api_template(
                 "查询用户",
                 "GET",
-                "https://example.test/users/{{userid}}",
+                "/users/{{userid}}",
                 path=config_file,
             )
             updated = api_request.save_api_template(
                 "更新用户",
                 "PATCH",
-                "https://example.test/users/{{userid}}",
+                "/users/{{userid}}",
                 '{"Content-Type":"application/json"}',
                 '{"enabled":true}',
                 template_id=created.template_id,
@@ -237,9 +238,217 @@ class ApiRequestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "userid"):
             api_request.execute_api_template(template, {})
 
+    def test_relative_path_uses_selected_environment_domain(self):
+        template = api_request.ApiTemplate(
+            "id",
+            "test",
+            "GET",
+            "/v1/users/{{userid}}",
+        )
+        response = Mock(status_code=200, text="ok", headers={})
+        with (
+            patch.object(
+                api_request,
+                "load_environment_api_base_url",
+                return_value="https://yyapi.ushdev.top",
+            ) as load_domain,
+            patch.object(
+                api_request.requests,
+                "request",
+                return_value=response,
+            ) as request,
+        ):
+            api_request.execute_api_template(
+                template,
+                {"userid": 42},
+                "yy",
+            )
+
+        load_domain.assert_called_once_with("yy")
+        request.assert_called_once_with(
+            "GET",
+            "https://yyapi.ushdev.top/v1/users/42",
+            headers={},
+            data=None,
+            timeout=30,
+        )
+
+    def test_environment_domain_is_loaded_from_env_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_file = f"{temp_dir}/yy.env"
+            with open(env_file, "w", encoding="utf-8") as stream:
+                stream.write("domain='yyapi.example.test'\n")
+
+            base_url = api_request.load_environment_api_base_url("yy", temp_dir)
+
+        self.assertEqual(base_url, "https://yyapi.example.test")
+
     def test_runtime_parameters_must_be_json_object(self):
         with self.assertRaisesRegex(ValueError, "JSON 对象"):
             api_request.parse_runtime_parameters("[]")
+
+    def test_protocol_base64_fields_are_decoded(self):
+        data = base64.b64encode(b'{"status":"ready"}').decode()
+        message = base64.b64encode("成功".encode()).decode()
+
+        decoded = api_request.decode_api_protocol_response(
+            json.dumps({"code": 0, "data": data, "msg": message})
+        )
+
+        self.assertEqual(
+            decoded,
+            {"code": 0, "data": {"status": "ready"}, "msg": "成功"},
+        )
+
+    def test_json_template_preserves_types_and_escapes_strings(self):
+        rendered = api_request.render_json_template(
+            '{"uid":{{userid}},"token":"Bearer {{token}}"}',
+            {"userid": 42, "token": 'a"b'},
+        )
+
+        self.assertEqual(
+            json.loads(rendered),
+            {"uid": 42, "token": 'Bearer a"b'},
+        )
+
+
+class FeatureScenarioTests(unittest.TestCase):
+    def test_scenarios_are_saved_and_deleted(self):
+        step = feature_scenario.new_step(
+            "assert",
+            "校验 code",
+            {"path": "response.code", "operator": "equals", "expected": 0},
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = f"{temp_dir}/feature_scenarios.json"
+            saved = feature_scenario.save_feature_scenario(
+                "广告触发",
+                [step],
+                path=config_file,
+            )
+
+            self.assertEqual(
+                feature_scenario.load_feature_scenarios(config_file),
+                [saved],
+            )
+
+            feature_scenario.delete_feature_scenario(
+                saved.scenario_id,
+                config_file,
+            )
+            self.assertEqual(
+                feature_scenario.load_feature_scenarios(config_file),
+                [],
+            )
+
+    def test_sql_api_extract_and_assert_steps_share_context(self):
+        sql_template = sql_data.SqlTemplate(
+            "sql-id",
+            "准备数据",
+            "SET @userid=xxx; SELECT @userid;",
+        )
+        api_template = api_request.ApiTemplate(
+            "api-id",
+            "查询状态",
+            "GET",
+            "/v1/user/{{userid}}",
+        )
+        steps = [
+            feature_scenario.new_step(
+                "sql", "准备数据", {"template_id": "sql-id"}
+            ),
+            feature_scenario.new_step(
+                "api", "查询状态", {"template_id": "api-id"}
+            ),
+            feature_scenario.new_step(
+                "extract",
+                "提取状态",
+                {"path": "response.data.status", "variable": "status"},
+            ),
+            feature_scenario.new_step(
+                "assert",
+                "校验状态",
+                {"path": "status", "operator": "equals", "expected": "ready"},
+            ),
+        ]
+        scenario = feature_scenario.FeatureScenario("id", "test", tuple(steps))
+        sql_result = sql_data.SqlExecutionResult(
+            2,
+            0,
+            1,
+            (({"user_id": 42},),),
+        )
+        api_result = api_request.ApiExecutionResult(
+            200,
+            10,
+            "raw",
+            {},
+            {"code": 0, "data": {"status": "ready"}, "msg": "成功"},
+        )
+        with (
+            patch.object(
+                feature_scenario,
+                "execute_sql_template",
+                return_value=sql_result,
+            ),
+            patch.object(
+                feature_scenario,
+                "execute_api_template",
+                return_value=api_result,
+            ),
+        ):
+            context = feature_scenario.execute_feature_scenario(
+                scenario,
+                environment="yy",
+                runtime_parameters={"userid": 42},
+                database_connection=DatabaseConnectionConfig(database_name="ush_yy"),
+                sql_templates=[sql_template],
+                api_templates=[api_template],
+            )
+
+        self.assertEqual(context["status"], "ready")
+        self.assertEqual(context["sql"], {"user_id": 42})
+
+    def test_cleanup_step_runs_after_assertion_failure(self):
+        api_template = api_request.ApiTemplate(
+            "cleanup-api",
+            "清理",
+            "POST",
+            "/cleanup",
+        )
+        scenario = feature_scenario.FeatureScenario(
+            "id",
+            "test",
+            (
+                feature_scenario.new_step(
+                    "assert",
+                    "失败断言",
+                    {"path": "userid", "operator": "equals", "expected": 99},
+                ),
+                feature_scenario.new_step(
+                    "api",
+                    "清理数据",
+                    {"template_id": "cleanup-api"},
+                    cleanup=True,
+                ),
+            ),
+        )
+        api_result = api_request.ApiExecutionResult(200, 1, "{}", {}, {})
+        with patch.object(
+            feature_scenario,
+            "execute_api_template",
+            return_value=api_result,
+        ) as execute_api:
+            with self.assertRaises(feature_scenario.ScenarioExecutionError):
+                feature_scenario.execute_feature_scenario(
+                    scenario,
+                    environment="dev",
+                    runtime_parameters={"userid": 42},
+                    api_templates=[api_template],
+                    sql_templates=[],
+                )
+
+        execute_api.assert_called_once()
 
 
 class ChannelSourceTests(unittest.TestCase):
@@ -490,6 +699,36 @@ class DatabaseConfigTests(unittest.TestCase):
             auth_timeout=10,
         )
 
+    def test_database_tunnel_is_reused_for_same_environment(self):
+        connection = self._connection("key-id", "ssh.example.test")
+        transport = Mock()
+        transport.is_active.return_value = True
+        client = Mock()
+        client.get_transport.return_value = transport
+        server = Mock()
+        server.server_address = ("127.0.0.1", 33060)
+        database_config.close_shared_database_tunnels()
+        with (
+            patch.object(
+                database_config,
+                "_connect_ssh_client",
+                return_value=client,
+            ) as connect,
+            patch.object(
+                database_config,
+                "_ForwardServer",
+                return_value=server,
+            ),
+        ):
+            first = database_config._shared_tunnel_port(connection)
+            second = database_config._shared_tunnel_port(connection)
+
+        self.assertEqual(first, 33060)
+        self.assertEqual(second, 33060)
+        connect.assert_called_once_with(connection)
+        transport.set_keepalive.assert_called_once_with(30)
+        database_config.close_shared_database_tunnels()
+
 
 class ApiParsingTests(unittest.TestCase):
     def setUp(self):
@@ -512,6 +751,26 @@ class ApiParsingTests(unittest.TestCase):
         }
 
         self.assertEqual(spin._extract_game_token(result), "game-token")
+
+    def test_extracts_game_token_from_nested_encoded_url(self):
+        game_data = {
+            "data": {"url": "https://example.test/play?sign=nested-token"}
+        }
+        result = {
+            "data": base64.b64encode(json.dumps(game_data).encode()).decode()
+        }
+
+        self.assertEqual(spin._extract_game_token(result), "nested-token")
+
+    def test_missing_game_url_reports_protocol_details(self):
+        result = {
+            "code": 1001,
+            "data": base64.b64encode(b"{}").decode(),
+            "msg": base64.b64encode("游戏未配置".encode()).decode(),
+        }
+
+        with self.assertRaisesRegex(ValueError, "游戏未配置"):
+            spin._extract_game_token(result)
 
     def test_decodes_base64_spin_error(self):
         result = spin._decode_api_result(
@@ -556,6 +815,43 @@ class ApiParsingTests(unittest.TestCase):
         self.assertEqual(
             request.kwargs["json"]["cash_event"],
             "https://newhdweb.ushdev.top/backshop",
+        )
+
+    def test_yy_game_token_uses_yy_environment_endpoints(self):
+        game_info = {
+            "url": "https://game.example.test/play?sign=yy-game-token"
+        }
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "data": base64.b64encode(
+                json.dumps(game_info).encode("utf-8")
+            ).decode("ascii")
+        }
+
+        with patch.object(spin.requests, "post", return_value=response) as post:
+            token = spin.get_game_token(
+                "yy-user-token",
+                environment="yy",
+            )
+
+        self.assertEqual(token, "yy-game-token")
+        request = post.call_args
+        self.assertEqual(
+            request.args[0],
+            "https://yyapi.ushdev.top/v1/gamehall/self_game_url",
+        )
+        self.assertEqual(
+            request.kwargs["headers"]["Origin"],
+            "https://yyres.ushdev.top",
+        )
+        self.assertNotIn("version", request.kwargs["headers"])
+        self.assertEqual(
+            request.kwargs["json"]["exit_event"],
+            "https://yyres.ushdev.top/home",
+        )
+        self.assertEqual(
+            request.kwargs["json"]["cash_event"],
+            "https://yyres.ushdev.top/backshop",
         )
 
     def test_successful_spin_prints_compact_result(self):
@@ -645,6 +941,70 @@ class TimestampToolTests(unittest.TestCase):
 
 
 class BatchWorkflowTests(unittest.TestCase):
+    def test_stop_does_not_submit_or_count_thousands_of_cancelled_accounts(self):
+        stopped = threading.Event()
+        calls = []
+        progress = []
+
+        def create_one(index, count, **_kwargs):
+            calls.append(index)
+            stopped.set()
+            return tournment_test.AccountResult(index, f"account {index}\n")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_file = f"{temp_dir}/accounts.txt"
+            with (
+                patch.object(
+                    tournment_test,
+                    "_create_account_and_bet",
+                    side_effect=create_one,
+                ),
+                patch.object(
+                    tournment_test.add_money,
+                    "base_url_for_environment",
+                    return_value="https://admin.example.test",
+                ),
+            ):
+                successful = tournment_test.create_accounts_and_bet(
+                    count=10_000,
+                    output_file=output_file,
+                    max_workers=3,
+                    stop_requested=stopped.is_set,
+                    progress_callback=lambda *value: progress.append(value),
+                )
+
+        self.assertLessEqual(len(calls), 3)
+        self.assertEqual(successful, len(calls))
+        self.assertTrue(progress)
+        self.assertLessEqual(progress[-1][0], 3)
+        self.assertEqual(progress[-1][1], 10_000)
+
+    def test_spin_failure_is_reported_instead_of_completed(self):
+        progress = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_file = f"{temp_dir}/accounts.txt"
+            with (
+                patch.object(
+                    tournment_test,
+                    "_create_account_and_bet",
+                    side_effect=tournment_test.SpinWorkflowError("下注失败"),
+                ),
+                patch.object(
+                    tournment_test.add_money,
+                    "base_url_for_environment",
+                    return_value="https://admin.example.test",
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "关键业务错误终止"):
+                    tournment_test.create_accounts_and_bet(
+                        count=10_000,
+                        output_file=output_file,
+                        max_workers=1,
+                        progress_callback=lambda *value: progress.append(value),
+                    )
+
+        self.assertEqual(progress, [(1, 10_000, 0)])
+
     def test_tournament_registration_uses_selected_channel_code(self):
         account = Mock(uid=42, token="user-token", email="tournament@cc.cc")
         with (
@@ -675,6 +1035,65 @@ class BatchWorkflowTests(unittest.TestCase):
             channel_code="tournament-channel",
             platform=Platform.ios.value,
             verbose=False,
+        )
+
+    def test_tournament_bound_scenario_receives_account_context(self):
+        account = Mock(uid=42, token="user-token", email="scenario@cc.cc")
+        scenario = feature_scenario.FeatureScenario(
+            "scenario-id",
+            "赛后校验",
+            (
+                feature_scenario.new_step(
+                    "assert",
+                    "校验 UID",
+                    {"path": "userid", "operator": "equals", "expected": 42},
+                ),
+            ),
+        )
+        connection = DatabaseConnectionConfig(database_name="ush_dev")
+        with (
+            patch.object(tournment_test, "User", return_value=account),
+            patch.object(
+                tournment_test.add_money,
+                "add_money",
+                return_value={"code": 0},
+            ),
+            patch.object(tournment_test, "_place_initial_spins"),
+            patch.object(
+                tournment_test,
+                "execute_feature_scenario",
+                return_value={"userid": 42},
+            ) as execute,
+        ):
+            tournment_test._create_account_and_bet(
+                1,
+                1,
+                environment="dev",
+                platform=Platform.ios.value,
+                channel_code="tournament-channel",
+                admin_base_url="https://admin.example.test",
+                initial_balance=1_000,
+                spin_count=3,
+                spin_count_range=None,
+                bet_amount=100,
+                verbose=False,
+                stop_requested=lambda: False,
+                feature_scenario=scenario,
+                scenario_database_connection=connection,
+            )
+
+        execute.assert_called_once_with(
+            scenario,
+            environment="dev",
+            runtime_parameters={
+                "userid": 42,
+                "token": "user-token",
+                "email": "scenario@cc.cc",
+                "platform": Platform.ios.value,
+                "channel_code": "tournament-channel",
+            },
+            database_connection=connection,
+            stop_requested=ANY,
         )
 
     def test_random_spin_count_uses_given_range(self):
@@ -892,6 +1311,58 @@ class AccountCreationTests(unittest.TestCase):
             )
 
         execute.assert_called_once_with(template, 42, connection)
+
+    def test_bound_scenario_receives_new_account_context(self):
+        account = Mock(
+            uid=42,
+            token="user-token",
+            email="scenario@cc.cc",
+        )
+        scenario = feature_scenario.FeatureScenario(
+            "scenario-id",
+            "广告校验",
+            (
+                feature_scenario.new_step(
+                    "assert",
+                    "校验 UID",
+                    {"path": "userid", "operator": "equals", "expected": 42},
+                ),
+            ),
+        )
+        connection = DatabaseConnectionConfig(database_name="ush_dev")
+        with (
+            patch.object(account_batch, "User", return_value=account),
+            patch.object(
+                account_batch,
+                "execute_feature_scenario",
+                return_value={"userid": 42},
+            ) as execute,
+        ):
+            account_batch._register_account(
+                1,
+                1,
+                environment="dev",
+                platform=Platform.ios.value,
+                channel_code="channel",
+                verbose=False,
+                stop_requested=lambda: False,
+                feature_scenario=scenario,
+                scenario_database_connection=connection,
+            )
+
+        execute.assert_called_once_with(
+            scenario,
+            environment="dev",
+            runtime_parameters={
+                "userid": 42,
+                "token": "user-token",
+                "email": "scenario@cc.cc",
+                "platform": Platform.ios.value,
+                "channel_code": "channel",
+            },
+            database_connection=connection,
+            stop_requested=ANY,
+        )
 
     def test_selected_platform_is_used_for_registration(self):
         account = Mock(uid=42, token="user-token", email="android@cc.cc")

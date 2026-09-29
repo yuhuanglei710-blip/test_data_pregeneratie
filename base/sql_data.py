@@ -7,7 +7,7 @@ import re
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 try:
     from .database_config import DatabaseConnectionConfig, open_database_connection
@@ -53,6 +53,7 @@ class SqlExecutionResult:
     statements: int
     affected_rows: int
     result_rows: int
+    result_sets: Tuple[Tuple[Dict[str, object], ...], ...] = ()
 
 
 def load_sql_templates(
@@ -177,6 +178,7 @@ def execute_sql_template(
     statements = 0
     affected_rows = 0
     result_rows = 0
+    result_sets: List[Tuple[Dict[str, object], ...]] = []
     with open_database_connection(connection, multi_statements=True) as database:
         try:
             with database.cursor() as cursor:
@@ -186,14 +188,28 @@ def execute_sql_template(
                     if cursor.description is None:
                         affected_rows += max(0, int(cursor.rowcount))
                     else:
-                        result_rows += len(cursor.fetchall())
+                        rows = cursor.fetchall()
+                        columns = [str(column[0]) for column in cursor.description]
+                        normalized_rows = tuple(
+                            dict(row)
+                            if isinstance(row, dict)
+                            else dict(zip(columns, row))
+                            for row in rows
+                        )
+                        result_rows += len(normalized_rows)
+                        result_sets.append(normalized_rows)
                     if not cursor.nextset():
                         break
             database.commit()
         except Exception:
             database.rollback()
             raise
-    return SqlExecutionResult(statements, affected_rows, result_rows)
+    return SqlExecutionResult(
+        statements,
+        affected_rows,
+        result_rows,
+        tuple(result_sets),
+    )
 
 
 def generate_feature_data(

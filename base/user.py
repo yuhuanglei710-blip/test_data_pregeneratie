@@ -33,6 +33,7 @@ DEFAULT_PASSWORD = "123456"
 DEFAULT_PASSWORD_HASH = "e10adc3949ba59abbe56e057f20f883e"
 DEFAULT_CHANNEL_CODE = "com.hotspin777.hotspin|testtest|"
 DEFAULT_DOWN_ORIGIN = "gpa17drop"
+REGISTRATION_TIMEOUT = 10
 
 _oaid_lock = threading.Lock()
 _last_oaid = 0
@@ -171,7 +172,10 @@ class User:
 
     def _post_registration(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """提交注册请求并返回 JSON 对象。"""
-        connection = http.client.HTTPSConnection(self.domain)
+        connection = http.client.HTTPSConnection(
+            self.domain,
+            timeout=REGISTRATION_TIMEOUT,
+        )
         try:
             connection.request(
                 "POST",

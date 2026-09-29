@@ -45,6 +45,7 @@ from base.account_batch import (
 from base.api_request import (
     ApiTemplate,
     delete_api_template,
+    load_environment_api_base_url,
     load_api_templates,
     parse_runtime_parameters,
     save_api_template,
@@ -74,6 +75,17 @@ from base.database_config import (
     validate_database_connection,
 )
 from base.enums import Platform
+from base.feature_scenario import (
+    ASSERT_OPERATORS,
+    FeatureScenario,
+    ScenarioStep,
+    delete_feature_scenario,
+    load_feature_scenarios,
+    new_step,
+    run_feature_scenario,
+    save_feature_scenario,
+    scenario_needs_database,
+)
 from base.sql_data import (
     SqlTemplate,
     delete_sql_template,
@@ -736,7 +748,7 @@ class ApiTemplateDialog(QDialog):
         self.method_input.setFixedWidth(110)
         request_row.addWidget(self.method_input)
         self.url_input = QLineEdit(template.url if template else "")
-        self.url_input.setPlaceholderText("https://api.example.com/users/{{userid}}")
+        self.url_input.setPlaceholderText("/v1/user/{{userid}}")
         request_row.addWidget(self.url_input, 1)
         layout.addLayout(request_row)
 
@@ -772,7 +784,8 @@ class ApiTemplateDialog(QDialog):
         layout.addLayout(timeout_row)
 
         hint = QLabel(
-            "URL、Headers 和 Body 均可使用 {{参数名}}，发送时在运行参数中填写对应值。"
+            "接口路径以 / 开头时会自动使用发送页所选环境的 domain；完整 URL 固定域名。"
+            "路径、Headers 和 Body 均可使用 {{参数名}}。"
         )
         hint.setObjectName("fieldHint")
         hint.setWordWrap(True)
@@ -808,6 +821,350 @@ class ApiTemplateDialog(QDialog):
         self.accept()
 
 
+STEP_TYPE_LABELS = {
+    "sql": "SQL",
+    "api": "API",
+    "extract": "提取变量",
+    "assert": "断言",
+}
+ASSERT_OPERATOR_LABELS = {
+    "equals": "等于",
+    "not_equals": "不等于",
+    "exists": "字段存在",
+    "not_exists": "字段不存在",
+    "contains": "包含",
+    "greater_than": "大于",
+    "less_than": "小于",
+}
+
+
+class ScenarioStepDialog(QDialog):
+    """新增或编辑一个场景步骤。"""
+
+    def __init__(
+        self,
+        parent: QWidget,
+        step_type: str,
+        sql_templates: list[SqlTemplate],
+        api_templates: list[ApiTemplate],
+        step: Optional[ScenarioStep] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.step_type = step_type
+        self.original_step = step
+        self.saved_step: Optional[ScenarioStep] = None
+        self.setWindowTitle(
+            f"{'编辑' if step else '新增'}{STEP_TYPE_LABELS[step_type]}步骤"
+        )
+        self.resize(540, 330)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(11)
+
+        title_label = QLabel("步骤标题")
+        title_label.setObjectName("fieldLabel")
+        layout.addWidget(title_label)
+        default_title = STEP_TYPE_LABELS[step_type]
+        self.title_input = QLineEdit(step.title if step else default_title)
+        layout.addWidget(self.title_input)
+
+        config = step.config if step else {}
+        if step_type == "sql":
+            label = QLabel("SQL 模板")
+            label.setObjectName("fieldLabel")
+            layout.addWidget(label)
+            self.template_input = SearchableComboBox()
+            for template in sql_templates:
+                self.template_input.addItem(template.title, template.template_id)
+            selected = self.template_input.findData(config.get("template_id"))
+            if selected >= 0:
+                self.template_input.setCurrentIndex(selected)
+            layout.addWidget(self.template_input)
+        elif step_type == "api":
+            label = QLabel("API 模板")
+            label.setObjectName("fieldLabel")
+            layout.addWidget(label)
+            self.template_input = SearchableComboBox()
+            for template in api_templates:
+                self.template_input.addItem(
+                    f"{template.method} · {template.title}",
+                    template.template_id,
+                )
+            selected = self.template_input.findData(config.get("template_id"))
+            if selected >= 0:
+                self.template_input.setCurrentIndex(selected)
+            layout.addWidget(self.template_input)
+        elif step_type == "extract":
+            path_label = QLabel("来源字段路径")
+            path_label.setObjectName("fieldLabel")
+            layout.addWidget(path_label)
+            self.path_input = QLineEdit(str(config.get("path", "")))
+            self.path_input.setPlaceholderText("例如：response.data.order_id")
+            layout.addWidget(self.path_input)
+            variable_label = QLabel("保存为变量")
+            variable_label.setObjectName("fieldLabel")
+            layout.addWidget(variable_label)
+            self.variable_input = QLineEdit(str(config.get("variable", "")))
+            self.variable_input.setPlaceholderText("例如：order_id")
+            layout.addWidget(self.variable_input)
+        else:
+            path_label = QLabel("实际值字段路径")
+            path_label.setObjectName("fieldLabel")
+            layout.addWidget(path_label)
+            self.path_input = QLineEdit(str(config.get("path", "")))
+            self.path_input.setPlaceholderText("例如：response.code")
+            layout.addWidget(self.path_input)
+            assertion_row = QHBoxLayout()
+            self.operator_input = QComboBox()
+            for operator in ASSERT_OPERATORS:
+                self.operator_input.addItem(
+                    ASSERT_OPERATOR_LABELS[operator],
+                    operator,
+                )
+            selected = self.operator_input.findData(config.get("operator"))
+            if selected >= 0:
+                self.operator_input.setCurrentIndex(selected)
+            assertion_row.addWidget(self.operator_input)
+            self.expected_input = QLineEdit(
+                "" if config.get("expected") is None else str(config.get("expected"))
+            )
+            self.expected_input.setPlaceholderText("期望值，可使用 {{变量名}}")
+            assertion_row.addWidget(self.expected_input, 1)
+            layout.addLayout(assertion_row)
+            self.operator_input.currentIndexChanged.connect(
+                self._sync_expected_input
+            )
+            self._sync_expected_input()
+
+        self.cleanup_input = QCheckBox("作为清理步骤（前面失败后仍会执行）")
+        self.cleanup_input.setChecked(step.cleanup if step else False)
+        layout.addWidget(self.cleanup_input)
+        layout.addStretch()
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel_button = QPushButton("取消")
+        cancel_button.setObjectName("secondaryButton")
+        cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(cancel_button)
+        save_button = QPushButton("保存步骤")
+        save_button.setObjectName("primaryButton")
+        save_button.clicked.connect(self._save)
+        buttons.addWidget(save_button)
+        layout.addLayout(buttons)
+
+    def _sync_expected_input(self) -> None:
+        if not hasattr(self, "expected_input"):
+            return
+        self.expected_input.setEnabled(
+            self.operator_input.currentData() not in ("exists", "not_exists")
+        )
+
+    @Slot()
+    def _save(self) -> None:
+        title = self.title_input.text().strip()
+        if not title:
+            QMessageBox.critical(self, "参数错误", "步骤标题不能为空")
+            return
+        if self.step_type in ("sql", "api"):
+            template_id = self.template_input.currentData()
+            if not template_id:
+                QMessageBox.critical(self, "参数错误", "请先创建并选择模板")
+                return
+            config = {"template_id": template_id}
+        elif self.step_type == "extract":
+            path = self.path_input.text().strip()
+            variable = self.variable_input.text().strip()
+            if not path or not variable:
+                QMessageBox.critical(self, "参数错误", "字段路径和变量名不能为空")
+                return
+            config = {"path": path, "variable": variable}
+        else:
+            path = self.path_input.text().strip()
+            if not path:
+                QMessageBox.critical(self, "参数错误", "字段路径不能为空")
+                return
+            config = {
+                "path": path,
+                "operator": self.operator_input.currentData(),
+                "expected": self.expected_input.text(),
+            }
+        created = new_step(
+            self.step_type,
+            title,
+            config,
+            cleanup=self.cleanup_input.isChecked(),
+        )
+        self.saved_step = (
+            ScenarioStep(
+                self.original_step.step_id,
+                created.step_type,
+                created.title,
+                created.config,
+                created.cleanup,
+            )
+            if self.original_step
+            else created
+        )
+        self.accept()
+
+
+class FeatureScenarioDialog(QDialog):
+    """通过有序步骤列表新增或编辑功能场景。"""
+
+    def __init__(
+        self,
+        parent: QWidget,
+        sql_templates: list[SqlTemplate],
+        api_templates: list[ApiTemplate],
+        scenario: Optional[FeatureScenario] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.scenario = scenario
+        self.sql_templates = sql_templates
+        self.api_templates = api_templates
+        self.steps = list(scenario.steps) if scenario else []
+        self.saved_scenario: Optional[FeatureScenario] = None
+        self.setWindowTitle("编辑功能场景" if scenario else "新增功能场景")
+        self.resize(760, 610)
+        self.setMinimumSize(650, 500)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(10)
+        title_label = QLabel("场景标题")
+        title_label.setObjectName("fieldLabel")
+        layout.addWidget(title_label)
+        self.title_input = QLineEdit(scenario.title if scenario else "")
+        self.title_input.setPlaceholderText("例如：广告触发与状态校验")
+        layout.addWidget(self.title_input)
+
+        step_label = QLabel("执行步骤（按列表顺序运行）")
+        step_label.setObjectName("fieldLabel")
+        layout.addWidget(step_label)
+        self.step_list = QListWidget()
+        self.step_list.setObjectName("channelCodeList")
+        self.step_list.itemDoubleClicked.connect(lambda _item: self._edit_step())
+        layout.addWidget(self.step_list, 1)
+
+        add_buttons = QHBoxLayout()
+        for label, step_type in (
+            ("+ SQL", "sql"),
+            ("+ API", "api"),
+            ("+ 提取", "extract"),
+            ("+ 断言", "assert"),
+        ):
+            button = QPushButton(label)
+            button.setObjectName("secondaryButton")
+            button.clicked.connect(
+                lambda _checked=False, selected=step_type: self._add_step(selected)
+            )
+            add_buttons.addWidget(button)
+        add_buttons.addStretch()
+        layout.addLayout(add_buttons)
+
+        manage_buttons = QHBoxLayout()
+        edit_button = QPushButton("编辑步骤")
+        edit_button.setObjectName("secondaryButton")
+        edit_button.clicked.connect(self._edit_step)
+        manage_buttons.addWidget(edit_button)
+        delete_button = QPushButton("删除步骤")
+        delete_button.setObjectName("stopButton")
+        delete_button.clicked.connect(self._delete_step)
+        manage_buttons.addWidget(delete_button)
+        up_button = QPushButton("上移")
+        up_button.setObjectName("secondaryButton")
+        up_button.clicked.connect(lambda: self._move_step(-1))
+        manage_buttons.addWidget(up_button)
+        down_button = QPushButton("下移")
+        down_button.setObjectName("secondaryButton")
+        down_button.clicked.connect(lambda: self._move_step(1))
+        manage_buttons.addWidget(down_button)
+        manage_buttons.addStretch()
+        layout.addLayout(manage_buttons)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel_button = QPushButton("取消")
+        cancel_button.setObjectName("secondaryButton")
+        cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(cancel_button)
+        save_button = QPushButton("保存场景")
+        save_button.setObjectName("primaryButton")
+        save_button.clicked.connect(self._save)
+        buttons.addWidget(save_button)
+        layout.addLayout(buttons)
+        self._refresh_steps()
+
+    def _refresh_steps(self, selected: int = -1) -> None:
+        self.step_list.clear()
+        for index, step in enumerate(self.steps, 1):
+            cleanup = "清理 · " if step.cleanup else ""
+            self.step_list.addItem(
+                f"{index}. {cleanup}{STEP_TYPE_LABELS[step.step_type]} · {step.title}"
+            )
+        if self.steps:
+            self.step_list.setCurrentRow(
+                min(max(0, selected), len(self.steps) - 1)
+            )
+
+    def _add_step(self, step_type: str) -> None:
+        dialog = ScenarioStepDialog(
+            self,
+            step_type,
+            self.sql_templates,
+            self.api_templates,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.saved_step:
+            self.steps.append(dialog.saved_step)
+            self._refresh_steps(len(self.steps) - 1)
+
+    def _edit_step(self) -> None:
+        row = self.step_list.currentRow()
+        if row < 0:
+            return
+        step = self.steps[row]
+        dialog = ScenarioStepDialog(
+            self,
+            step.step_type,
+            self.sql_templates,
+            self.api_templates,
+            step,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.saved_step:
+            self.steps[row] = dialog.saved_step
+            self._refresh_steps(row)
+
+    def _delete_step(self) -> None:
+        row = self.step_list.currentRow()
+        if row < 0:
+            return
+        self.steps.pop(row)
+        self._refresh_steps(row)
+
+    def _move_step(self, offset: int) -> None:
+        row = self.step_list.currentRow()
+        target = row + offset
+        if row < 0 or target < 0 or target >= len(self.steps):
+            return
+        self.steps[row], self.steps[target] = self.steps[target], self.steps[row]
+        self._refresh_steps(target)
+
+    @Slot()
+    def _save(self) -> None:
+        try:
+            self.saved_scenario = save_feature_scenario(
+                self.title_input.text(),
+                self.steps,
+                scenario_id=self.scenario.scenario_id if self.scenario else None,
+            )
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "保存失败", str(error))
+            return
+        self.accept()
+
+
 # 主窗口
 class WorkflowWindow(QMainWindow):
     """Termius 风格的自动化控制台主窗口。"""
@@ -835,6 +1192,7 @@ class WorkflowWindow(QMainWindow):
         self.ssh_private_keys = load_ssh_private_keys()
         self.sql_templates = load_sql_templates()
         self.api_templates = load_api_templates()
+        self.feature_scenarios = load_feature_scenarios()
 
         root = QWidget()
         root.setObjectName("root")
@@ -854,6 +1212,7 @@ class WorkflowWindow(QMainWindow):
         self.content_stack.addWidget(self._build_config_workspace())
         self.content_stack.addWidget(self._build_feature_workspace())
         self.content_stack.addWidget(self._build_api_workspace())
+        self.content_stack.addWidget(self._build_scenario_workspace())
         workspace.addWidget(self.content_stack, 1)
         page.addLayout(workspace, 1)
 
@@ -907,7 +1266,14 @@ class WorkflowWindow(QMainWindow):
         group = QButtonGroup(navigation)
         group.setExclusive(True)
         for index, label in enumerate(
-            ("创建账号", "锦标赛数据", "功能数据", "API 请求", "参数配置")
+            (
+                "创建账号",
+                "锦标赛数据",
+                "功能数据",
+                "API 请求",
+                "功能场景",
+                "参数配置",
+            )
         ):
             button = QPushButton(label)
             button.setObjectName("navigationButton")
@@ -1120,6 +1486,8 @@ class WorkflowWindow(QMainWindow):
         self._add_form_row(form, 10, "输出文件", account_output)
         self.account_sql_template = self._sql_binding_combo()
         self._add_form_row(form, 11, "绑定 SQL", self.account_sql_template)
+        self.account_scenario = self._scenario_binding_combo()
+        self._add_form_row(form, 12, "绑定场景", self.account_scenario)
         layout.addLayout(form)
 
         self.account_verbose = QCheckBox("显示调试日志")
@@ -1145,6 +1513,7 @@ class WorkflowWindow(QMainWindow):
                 self.account_output_file,
                 self.account_browse_button,
                 self.account_sql_template,
+                self.account_scenario,
                 self.account_verbose,
             ]
         )
@@ -1413,6 +1782,8 @@ class WorkflowWindow(QMainWindow):
         self._add_form_row(form, 13, "输出文件", tournament_output)
         self.tournament_sql_template = self._sql_binding_combo()
         self._add_form_row(form, 14, "绑定 SQL", self.tournament_sql_template)
+        self.tournament_scenario = self._scenario_binding_combo()
+        self._add_form_row(form, 15, "绑定场景", self.tournament_scenario)
         layout.addLayout(form)
 
         self.random_spins = QCheckBox("每个账号随机下注次数")
@@ -1469,6 +1840,7 @@ class WorkflowWindow(QMainWindow):
                 self.output_file,
                 self.browse_button,
                 self.tournament_sql_template,
+                self.tournament_scenario,
                 self.random_spins,
                 self.spin_min,
                 self.spin_max,
@@ -1702,6 +2074,20 @@ class WorkflowWindow(QMainWindow):
         self.api_selected_title.setWordWrap(True)
         execute_layout.addWidget(self.api_selected_title)
 
+        environment_label = QLabel("运行环境")
+        environment_label.setObjectName("fieldLabel")
+        execute_layout.addWidget(environment_label)
+        self.api_environment = QComboBox()
+        self.api_environment.addItems(list(SUPPORTED_ENVIRONMENTS))
+        self.api_environment.currentTextChanged.connect(
+            self._on_api_environment_changed
+        )
+        execute_layout.addWidget(self.api_environment)
+        self.api_domain_hint = QLabel()
+        self.api_domain_hint.setObjectName("fieldHint")
+        self.api_domain_hint.setWordWrap(True)
+        execute_layout.addWidget(self.api_domain_hint)
+
         parameters_label = QLabel("运行参数（JSON 对象）")
         parameters_label.setObjectName("fieldLabel")
         execute_layout.addWidget(parameters_label)
@@ -1763,6 +2149,7 @@ class WorkflowWindow(QMainWindow):
             [
                 self.api_search,
                 self.api_list,
+                self.api_environment,
                 self.api_parameters,
                 self.new_api_button,
                 self.edit_api_button,
@@ -1771,6 +2158,156 @@ class WorkflowWindow(QMainWindow):
             ]
         )
         self._refresh_api_templates()
+        self._on_api_environment_changed(self.api_environment.currentText())
+        return page
+
+    def _build_scenario_workspace(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+        main = QHBoxLayout()
+        main.setSpacing(12)
+
+        list_panel = QFrame()
+        list_panel.setObjectName("settingsPanel")
+        list_layout = QVBoxLayout(list_panel)
+        list_layout.setContentsMargins(22, 20, 22, 20)
+        list_layout.setSpacing(10)
+        list_title = QLabel("功能场景")
+        list_title.setObjectName("sectionTitle")
+        list_layout.addWidget(list_title)
+        list_hint = QLabel("将 SQL、API、变量提取和断言编排成可复用流程。")
+        list_hint.setObjectName("fieldHint")
+        list_hint.setWordWrap(True)
+        list_layout.addWidget(list_hint)
+        self.scenario_search = QLineEdit()
+        self.scenario_search.setPlaceholderText("输入场景标题检索…")
+        self.scenario_search.textChanged.connect(self._filter_scenarios)
+        list_layout.addWidget(self.scenario_search)
+        self.scenario_list = QListWidget()
+        self.scenario_list.setObjectName("channelCodeList")
+        self.scenario_list.currentItemChanged.connect(
+            self._on_scenario_selection_changed
+        )
+        self.scenario_list.itemDoubleClicked.connect(
+            lambda _item: self._edit_scenario()
+        )
+        list_layout.addWidget(self.scenario_list, 1)
+        manage_buttons = QHBoxLayout()
+        self.new_scenario_button = QPushButton("新增场景")
+        self.new_scenario_button.setObjectName("secondaryButton")
+        self.new_scenario_button.clicked.connect(self._new_scenario)
+        manage_buttons.addWidget(self.new_scenario_button)
+        self.edit_scenario_button = QPushButton("编辑")
+        self.edit_scenario_button.setObjectName("secondaryButton")
+        self.edit_scenario_button.clicked.connect(self._edit_scenario)
+        manage_buttons.addWidget(self.edit_scenario_button)
+        self.delete_scenario_button = QPushButton("删除")
+        self.delete_scenario_button.setObjectName("stopButton")
+        self.delete_scenario_button.clicked.connect(self._delete_scenario)
+        manage_buttons.addWidget(self.delete_scenario_button)
+        list_layout.addLayout(manage_buttons)
+        main.addWidget(list_panel, 2)
+
+        execute_panel = QFrame()
+        execute_panel.setObjectName("settingsPanel")
+        execute_panel.setFixedWidth(390)
+        execute_layout = QVBoxLayout(execute_panel)
+        execute_layout.setContentsMargins(22, 20, 22, 20)
+        execute_layout.setSpacing(10)
+        execute_title = QLabel("执行场景")
+        execute_title.setObjectName("sectionTitle")
+        execute_layout.addWidget(execute_title)
+        selected_caption = QLabel("已选场景")
+        selected_caption.setObjectName("fieldLabel")
+        execute_layout.addWidget(selected_caption)
+        self.scenario_selected_title = QLabel("未选择")
+        self.scenario_selected_title.setObjectName("fieldHint")
+        self.scenario_selected_title.setWordWrap(True)
+        execute_layout.addWidget(self.scenario_selected_title)
+
+        environment_label = QLabel("运行环境")
+        environment_label.setObjectName("fieldLabel")
+        execute_layout.addWidget(environment_label)
+        self.scenario_environment = QComboBox()
+        self.scenario_environment.addItems(list(SUPPORTED_ENVIRONMENTS))
+        execute_layout.addWidget(self.scenario_environment)
+
+        parameters_label = QLabel("初始变量（JSON 对象）")
+        parameters_label.setObjectName("fieldLabel")
+        execute_layout.addWidget(parameters_label)
+        self.scenario_parameters = QPlainTextEdit()
+        self.scenario_parameters.setPlaceholderText(
+            '{"userid":123,"token":"xxx","email":"test@cc.cc"}'
+        )
+        self.scenario_parameters.setPlainText("{}")
+        self.scenario_parameters.setMaximumHeight(150)
+        execute_layout.addWidget(self.scenario_parameters)
+        context_hint = QLabel(
+            "账号绑定运行时会自动提供 userid、token、email；独立运行需手动填写。"
+        )
+        context_hint.setObjectName("fieldHint")
+        context_hint.setWordWrap(True)
+        execute_layout.addWidget(context_hint)
+        execute_layout.addStretch()
+
+        execute_buttons = QHBoxLayout()
+        self.scenario_execute_button = QPushButton("执行场景")
+        self.scenario_execute_button.setObjectName("primaryButton")
+        self.scenario_execute_button.clicked.connect(self._start)
+        execute_buttons.addWidget(self.scenario_execute_button, 1)
+        self.scenario_stop_button = QPushButton("停止")
+        self.scenario_stop_button.setObjectName("stopButton")
+        self.scenario_stop_button.setEnabled(False)
+        self.scenario_stop_button.clicked.connect(self._stop)
+        execute_buttons.addWidget(self.scenario_stop_button)
+        execute_layout.addLayout(execute_buttons)
+        main.addWidget(execute_panel)
+        layout.addLayout(main, 1)
+
+        log_panel = QFrame()
+        log_panel.setObjectName("terminalPanel")
+        log_panel.setFixedHeight(170)
+        log_layout = QVBoxLayout(log_panel)
+        log_layout.setContentsMargins(16, 10, 16, 12)
+        log_layout.setSpacing(6)
+        log_header = QHBoxLayout()
+        log_title = QLabel("场景结果")
+        log_title.setObjectName("sessionTitle")
+        log_header.addWidget(log_title)
+        log_header.addStretch()
+        clear_log_button = QPushButton("清空")
+        clear_log_button.setObjectName("secondaryButton")
+        clear_log_button.clicked.connect(lambda: self.scenario_log.clear())
+        log_header.addWidget(clear_log_button)
+        log_layout.addLayout(log_header)
+        self.scenario_log = QPlainTextEdit()
+        self.scenario_log.setObjectName("terminal")
+        self.scenario_log.setReadOnly(True)
+        self.scenario_log.setUndoRedoEnabled(False)
+        self.scenario_log.document().setMaximumBlockCount(800)
+        compact_font = QFontDatabase.systemFont(
+            QFontDatabase.SystemFont.FixedFont
+        )
+        compact_font.setPointSize(9)
+        self.scenario_log.setFont(compact_font)
+        log_layout.addWidget(self.scenario_log, 1)
+        layout.addWidget(log_panel)
+
+        self.config_widgets.extend(
+            [
+                self.scenario_search,
+                self.scenario_list,
+                self.scenario_environment,
+                self.scenario_parameters,
+                self.new_scenario_button,
+                self.edit_scenario_button,
+                self.delete_scenario_button,
+                self.scenario_execute_button,
+            ]
+        )
+        self._refresh_scenario_views()
         return page
 
     # 通用表单组件
@@ -2000,6 +2537,42 @@ class WorkflowWindow(QMainWindow):
             combo.addItem(template.title, template.template_id)
         return combo
 
+    def _scenario_binding_combo(self) -> QComboBox:
+        combo = SearchableComboBox()
+        combo.addItem("不绑定场景", None)
+        for scenario in self.feature_scenarios:
+            combo.addItem(scenario.title, scenario.scenario_id)
+        return combo
+
+    def _scenario_by_id(self, scenario_id: object) -> Optional[FeatureScenario]:
+        return next(
+            (
+                scenario
+                for scenario in self.feature_scenarios
+                if scenario.scenario_id == scenario_id
+            ),
+            None,
+        )
+
+    def _selected_scenario_from_combo(
+        self,
+        combo: QComboBox,
+    ) -> Optional[FeatureScenario]:
+        selected_text = combo.currentText().strip()
+        if not selected_text or selected_text == "不绑定场景":
+            return None
+        scenario = next(
+            (
+                candidate
+                for candidate in self.feature_scenarios
+                if candidate.title.casefold() == selected_text.casefold()
+            ),
+            None,
+        )
+        if scenario is None:
+            raise ValueError("请从检索结果中选择完整的功能场景标题")
+        return scenario
+
     def _template_by_id(self, template_id: object) -> Optional[SqlTemplate]:
         return next(
             (
@@ -2164,6 +2737,14 @@ class WorkflowWindow(QMainWindow):
         if template is None:
             QMessageBox.information(self, "选择 SQL", "请先选择要删除的 SQL 模板")
             return
+        used_by = self._scenarios_using_template("sql", template.template_id)
+        if used_by:
+            QMessageBox.warning(
+                self,
+                "模板正在使用",
+                f"该 SQL 被以下场景引用，需先移除对应步骤：{', '.join(used_by)}",
+            )
+            return
         answer = QMessageBox.question(
             self,
             "删除 SQL 模板",
@@ -2267,9 +2848,28 @@ class WorkflowWindow(QMainWindow):
                 if names
                 else "当前模板无需运行参数"
             )
+        self._on_api_environment_changed(self.api_environment.currentText())
         self.edit_api_button.setEnabled(has_template and not self._is_running())
         self.delete_api_button.setEnabled(has_template and not self._is_running())
         self.api_send_button.setEnabled(has_template and not self._is_running())
+
+    @Slot(str)
+    def _on_api_environment_changed(self, environment: str) -> None:
+        if not hasattr(self, "api_domain_hint"):
+            return
+        template = self._selected_api_template()
+        if template and template.url.startswith(("http://", "https://")):
+            self.api_domain_hint.setText(
+                f"固定 URL：{template.url}（不随环境切换）"
+            )
+            return
+        try:
+            base_url = load_environment_api_base_url(environment)
+        except ValueError as error:
+            self.api_domain_hint.setText(str(error))
+            return
+        path = template.url if template else ""
+        self.api_domain_hint.setText(f"域名：{base_url}    路径：{path}")
 
     @Slot()
     def _new_api_template(self) -> None:
@@ -2307,6 +2907,14 @@ class WorkflowWindow(QMainWindow):
         if template is None:
             QMessageBox.information(self, "选择 API", "请先选择要删除的 API 模板")
             return
+        used_by = self._scenarios_using_template("api", template.template_id)
+        if used_by:
+            QMessageBox.warning(
+                self,
+                "模板正在使用",
+                f"该 API 被以下场景引用，需先移除对应步骤：{', '.join(used_by)}",
+            )
+            return
         answer = QMessageBox.question(
             self,
             "删除 API 模板",
@@ -2324,6 +2932,180 @@ class WorkflowWindow(QMainWindow):
         self.api_templates = load_api_templates()
         self._refresh_api_templates()
         self._append_log(f"[api-config] deleted: {template.title}\n")
+
+    def _scenarios_using_template(
+        self,
+        step_type: str,
+        template_id: str,
+    ) -> list[str]:
+        return [
+            scenario.title
+            for scenario in self.feature_scenarios
+            if any(
+                step.step_type == step_type
+                and step.config.get("template_id") == template_id
+                for step in scenario.steps
+            )
+        ]
+
+    def _selected_feature_scenario(self) -> Optional[FeatureScenario]:
+        if not hasattr(self, "scenario_list"):
+            return None
+        item = self.scenario_list.currentItem()
+        if item is None or item.isHidden():
+            return None
+        return self._scenario_by_id(item.data(Qt.ItemDataRole.UserRole))
+
+    def _refresh_scenario_views(
+        self,
+        selected_scenario_id: Optional[str] = None,
+    ) -> None:
+        for combo in (
+            getattr(self, "account_scenario", None),
+            getattr(self, "tournament_scenario", None),
+        ):
+            if combo is None:
+                continue
+            selected = combo.currentData()
+            combo.clear()
+            combo.addItem("不绑定场景", None)
+            for scenario in self.feature_scenarios:
+                combo.addItem(scenario.title, scenario.scenario_id)
+            self._restore_combo_selection(combo, selected)
+
+        if not hasattr(self, "scenario_list"):
+            return
+        current = self.scenario_list.currentItem()
+        selected_id = selected_scenario_id or (
+            current.data(Qt.ItemDataRole.UserRole) if current is not None else None
+        )
+        self.scenario_list.blockSignals(True)
+        self.scenario_list.clear()
+        selected_row = -1
+        for row, scenario in enumerate(self.feature_scenarios):
+            item = QListWidgetItem(
+                f"{scenario.title}  ·  {len(scenario.steps)} 步"
+            )
+            item.setData(Qt.ItemDataRole.UserRole, scenario.scenario_id)
+            self.scenario_list.addItem(item)
+            if scenario.scenario_id == selected_id:
+                selected_row = row
+        self.scenario_list.blockSignals(False)
+        if self.scenario_list.count():
+            self.scenario_list.setCurrentRow(max(0, selected_row))
+        self._filter_scenarios(self.scenario_search.text())
+        self._on_scenario_selection_changed()
+
+    @Slot(str)
+    def _filter_scenarios(self, query: str) -> None:
+        if not hasattr(self, "scenario_list"):
+            return
+        normalized = query.strip().casefold()
+        first_visible = None
+        for row in range(self.scenario_list.count()):
+            item = self.scenario_list.item(row)
+            visible = not normalized or normalized in item.text().casefold()
+            item.setHidden(not visible)
+            if visible and first_visible is None:
+                first_visible = item
+        current = self.scenario_list.currentItem()
+        if current is None or current.isHidden():
+            self.scenario_list.setCurrentItem(first_visible)
+        self._on_scenario_selection_changed()
+
+    def _on_scenario_selection_changed(self, *_args) -> None:
+        if not hasattr(self, "scenario_selected_title"):
+            return
+        scenario = self._selected_feature_scenario()
+        has_scenario = scenario is not None
+        if scenario is None:
+            self.scenario_selected_title.setText("未选择")
+        else:
+            sql_count = sum(
+                step.step_type == "sql" for step in scenario.steps
+            )
+            api_count = sum(
+                step.step_type == "api" for step in scenario.steps
+            )
+            assertion_count = sum(
+                step.step_type == "assert" for step in scenario.steps
+            )
+            self.scenario_selected_title.setText(
+                f"{scenario.title} · {len(scenario.steps)} 步 "
+                f"(SQL {sql_count} / API {api_count} / 断言 {assertion_count})"
+            )
+        self.edit_scenario_button.setEnabled(
+            has_scenario and not self._is_running()
+        )
+        self.delete_scenario_button.setEnabled(
+            has_scenario and not self._is_running()
+        )
+        self.scenario_execute_button.setEnabled(
+            has_scenario and not self._is_running()
+        )
+
+    @Slot()
+    def _new_scenario(self) -> None:
+        dialog = FeatureScenarioDialog(
+            self,
+            self.sql_templates,
+            self.api_templates,
+        )
+        if (
+            dialog.exec() == QDialog.DialogCode.Accepted
+            and dialog.saved_scenario is not None
+        ):
+            self.feature_scenarios = load_feature_scenarios()
+            self._refresh_scenario_views(dialog.saved_scenario.scenario_id)
+            self._append_log(
+                f"[scenario-config] created: {dialog.saved_scenario.title}\n"
+            )
+
+    @Slot()
+    def _edit_scenario(self) -> None:
+        scenario = self._selected_feature_scenario()
+        if scenario is None:
+            QMessageBox.information(self, "选择场景", "请先选择要编辑的功能场景")
+            return
+        dialog = FeatureScenarioDialog(
+            self,
+            self.sql_templates,
+            self.api_templates,
+            scenario,
+        )
+        if (
+            dialog.exec() == QDialog.DialogCode.Accepted
+            and dialog.saved_scenario is not None
+        ):
+            self.feature_scenarios = load_feature_scenarios()
+            self._refresh_scenario_views(dialog.saved_scenario.scenario_id)
+            self._append_log(
+                f"[scenario-config] updated: {dialog.saved_scenario.title}\n"
+            )
+
+    @Slot()
+    def _delete_scenario(self) -> None:
+        scenario = self._selected_feature_scenario()
+        if scenario is None:
+            QMessageBox.information(self, "选择场景", "请先选择要删除的功能场景")
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除功能场景",
+            f"确定删除「{scenario.title}」？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            delete_feature_scenario(scenario.scenario_id)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "删除失败", str(error))
+            return
+        self.feature_scenarios = load_feature_scenarios()
+        self._refresh_scenario_views()
+        self._append_log(f"[scenario-config] deleted: {scenario.title}\n")
 
     def _output_field(self, line_edit: QLineEdit) -> tuple[QWidget, QPushButton]:
         row = QHBoxLayout()
@@ -2702,6 +3484,9 @@ class WorkflowWindow(QMainWindow):
         elif index == 3:
             self.content_stack.setCurrentIndex(3)
             self.eyebrow.setText("$ api-request / send")
+        elif index == 4:
+            self.content_stack.setCurrentIndex(4)
+            self.eyebrow.setText("$ feature-scenario / run")
         else:
             self.content_stack.setCurrentIndex(1)
             self.eyebrow.setText("$ settings / parameters")
@@ -2880,6 +3665,28 @@ class WorkflowWindow(QMainWindow):
             "database_connection": connection,
         }
 
+    def _scenario_binding_parameters(
+        self,
+        environment: str,
+        combo: QComboBox,
+    ) -> dict:
+        scenario = self._selected_scenario_from_combo(combo)
+        if scenario is None:
+            return {}
+        connection = self.database_connections_by_environment[environment]
+        if scenario_needs_database(scenario) and not is_database_connection_configured(
+            connection
+        ):
+            raise ValueError(
+                f"绑定场景包含 SQL，请先完成 {environment} 环境的数据库配置"
+            )
+        return {
+            "feature_scenario": scenario,
+            "scenario_database_connection": (
+                connection if scenario_needs_database(scenario) else None
+            ),
+        }
+
     def _parameters(self) -> tuple[Callable[..., int], dict, str]:
         """校验当前页面并生成任务参数。"""
         if self.current_section == 0:
@@ -2895,6 +3702,10 @@ class WorkflowWindow(QMainWindow):
                 **self._sql_binding_parameters(
                     self.account_environment.currentText(),
                     self.account_sql_template,
+                ),
+                **self._scenario_binding_parameters(
+                    self.account_environment.currentText(),
+                    self.account_scenario,
                 ),
             }
             if self.account_custom_mode_button.isChecked():
@@ -2953,8 +3764,39 @@ class WorkflowWindow(QMainWindow):
                     "parameters": parse_runtime_parameters(
                         self.api_parameters.toPlainText()
                     ),
+                    "environment": self.api_environment.currentText(),
                 },
                 "send-api-request",
+            )
+
+        if self.current_section == 4:
+            scenario = self._selected_feature_scenario()
+            if scenario is None:
+                raise ValueError("请先从列表选择功能场景")
+            environment = self.scenario_environment.currentText()
+            connection = self.database_connections_by_environment[environment]
+            if scenario_needs_database(scenario) and not is_database_connection_configured(
+                connection
+            ):
+                raise ValueError(
+                    f"场景包含 SQL，请先完成 {environment} 环境的数据库配置"
+                )
+            runtime_parameters = parse_runtime_parameters(
+                self.scenario_parameters.toPlainText()
+            )
+            if scenario_needs_database(scenario) and "userid" not in runtime_parameters:
+                raise ValueError("场景包含 SQL，初始变量中必须填写 userid")
+            return (
+                run_feature_scenario,
+                {
+                    "scenario": scenario,
+                    "environment": environment,
+                    "runtime_parameters": runtime_parameters,
+                    "database_connection": (
+                        connection if scenario_needs_database(scenario) else None
+                    ),
+                },
+                "run-feature-scenario",
             )
 
         if self.current_section != 1:
@@ -2986,6 +3828,10 @@ class WorkflowWindow(QMainWindow):
             **self._sql_binding_parameters(
                 self.environment.currentText(),
                 self.tournament_sql_template,
+            ),
+            **self._scenario_binding_parameters(
+                self.environment.currentText(),
+                self.tournament_scenario,
             ),
         }
         if self.random_spins.isChecked():
@@ -3048,8 +3894,12 @@ class WorkflowWindow(QMainWindow):
         self.stop_button.setEnabled(False)
         self.feature_stop_button.setEnabled(False)
         self.api_stop_button.setEnabled(False)
+        self.scenario_stop_button.setEnabled(False)
         self._set_status("●  STOPPING", "#a66b13")
-        self._append_log("\n[signal] stop requested; waiting for active requests\n")
+        self._append_log(
+            "\n[signal] stop requested; no new tasks will start; "
+            "waiting only for active requests\n"
+        )
 
     @Slot(int, int, int)
     def _on_progress(self, completed: int, total: int, successful: int) -> None:
@@ -3091,6 +3941,8 @@ class WorkflowWindow(QMainWindow):
             target = self.feature_log
         elif self.current_section == 3:
             target = self.api_log
+        elif self.current_section == 4:
+            target = self.scenario_log
         else:
             target = self.log
         cursor = target.textCursor()
@@ -3105,6 +3957,8 @@ class WorkflowWindow(QMainWindow):
             self.feature_log.clear()
         elif self.current_section == 3:
             self.api_log.clear()
+        elif self.current_section == 4:
+            self.scenario_log.clear()
         else:
             self.log.clear()
 
@@ -3113,6 +3967,7 @@ class WorkflowWindow(QMainWindow):
         self.stop_button.setEnabled(running)
         self.feature_stop_button.setEnabled(running)
         self.api_stop_button.setEnabled(running)
+        self.scenario_stop_button.setEnabled(running)
         for button in self.navigation_buttons:
             button.setEnabled(not running)
         for widget in self.config_widgets:
@@ -3120,6 +3975,7 @@ class WorkflowWindow(QMainWindow):
         if not running:
             self._on_feature_sql_selection_changed()
             self._on_api_selection_changed()
+            self._on_scenario_selection_changed()
             self._toggle_random_inputs(self.random_spins.isChecked())
             self._sync_account_creation_mode_inputs()
             self._sync_execution_mode_inputs()

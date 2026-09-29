@@ -16,7 +16,7 @@ GAME_URL_API = "https://ceshigeren-ush-api.szhdev.top/v1/gamehall/self_game_url"
 SPIN_API = "https://h5gz-api.szhdev.top/v1/slot/spin"
 WEB_ORIGIN = "https://webnew.hotspin777.com"
 SPIN_ORIGIN = "https://h5gz.szhdev.top"
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = 10
 ERROR_BODY_LIMIT = 300
 TOKEN_EXPIRY_LEEWAY = 5
 DEFAULT_BET_CENTS = 1_000
@@ -51,6 +51,11 @@ SPIN_ENVIRONMENT_CONFIGS = {
             "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 "
             "Mobile/15E148 Safari/604.1"
         ),
+        version=None,
+    ),
+    "yy": SpinEnvironmentConfig(
+        game_url_api="https://yyapi.ushdev.top/v1/gamehall/self_game_url",
+        web_origin="https://yyres.ushdev.top",
         version=None,
     ),
 }
@@ -88,13 +93,45 @@ def _game_url_headers(
 
 def _extract_game_token(result: Dict[str, Any]) -> str:
     """解码游戏地址响应并提取 sign token。"""
-    encoded_data = result["data"]
-    decoded_data = base64.b64decode(encoded_data).decode("utf-8")
-    game_info = json.loads(decoded_data)
+    game_info = _decode_base64_value(result.get("data"))
 
-    game_url = unquote(game_info["url"])
+    def find_url(value: Any) -> Optional[str]:
+        if isinstance(value, dict):
+            url = value.get("url")
+            if isinstance(url, str) and url:
+                return url
+            for nested in value.values():
+                found = find_url(nested)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for nested in value:
+                found = find_url(nested)
+                if found:
+                    return found
+        return None
+
+    raw_url = find_url(game_info)
+    if not raw_url:
+        message = _decode_base64_value(result.get("msg"))
+        compact_data = json.dumps(
+            game_info,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if len(compact_data) > ERROR_BODY_LIMIT:
+            compact_data = f"{compact_data[:ERROR_BODY_LIMIT]}..."
+        raise ValueError(
+            f"接口未返回游戏地址 url（code={result.get('code')!r}, "
+            f"msg={message!r}, data={compact_data}）"
+        )
+
+    game_url = unquote(raw_url)
     query_params = parse_qs(urlparse(game_url).query)
-    return query_params["sign"][0]
+    signs = query_params.get("sign")
+    if not signs or not signs[0]:
+        raise ValueError("游戏地址缺少 sign 参数")
+    return signs[0]
 
 
 def _decode_base64_value(value: Any) -> Any:
@@ -103,7 +140,8 @@ def _decode_base64_value(value: Any) -> Any:
         return value
 
     try:
-        decoded_text = base64.b64decode(value, validate=True).decode("utf-8")
+        padded = value + "=" * (-len(value) % 4)
+        decoded_text = base64.b64decode(padded, validate=True).decode("utf-8")
     except (binascii.Error, UnicodeDecodeError, ValueError):
         return value
 

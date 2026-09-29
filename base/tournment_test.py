@@ -4,7 +4,14 @@ import json
 import random
 import sys
 import threading
-from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    CancelledError,
+    Future,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+)
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple, Union
@@ -13,6 +20,7 @@ try:  # Support ``python -m base.tournment_test``.
     from . import add_money, spin
     from .database_config import DatabaseConnectionConfig
     from .enums import Platform
+    from .feature_scenario import FeatureScenario, execute_feature_scenario
     from .sql_data import SqlTemplate, execute_sql_template
     from .user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD, User
 except ImportError:  # Support ``python base/tournment_test.py``.
@@ -23,6 +31,7 @@ except ImportError:  # Support ``python base/tournment_test.py``.
     import spin
     from database_config import DatabaseConnectionConfig
     from enums import Platform
+    from feature_scenario import FeatureScenario, execute_feature_scenario
     from sql_data import SqlTemplate, execute_sql_template
     from user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD, User
 
@@ -40,6 +49,10 @@ class SpinWorkflowError(RuntimeError):
 
 class BatchCancelled(RuntimeError):
     """调用方请求安全停止。"""
+
+
+class BatchCriticalError(RuntimeError):
+    """数据库、场景等系统性错误，需要停止整个批量任务。"""
 
 
 @dataclass(frozen=True)
@@ -145,6 +158,8 @@ def _create_account_and_bet(
     stop_requested: Callable[[], bool],
     sql_template: Optional[SqlTemplate] = None,
     database_connection: Optional[DatabaseConnectionConfig] = None,
+    feature_scenario: Optional[FeatureScenario] = None,
+    scenario_database_connection: Optional[DatabaseConnectionConfig] = None,
 ) -> AccountResult:
     """执行单个账号的注册、加钱和初始下注流程。"""
     if stop_requested():
@@ -171,11 +186,16 @@ def _create_account_and_bet(
     if sql_template is not None:
         if database_connection is None:
             raise ValueError("绑定 SQL 时必须配置当前环境数据库")
-        execute_sql_template(
-            sql_template,
-            account.uid,
-            database_connection,
-        )
+        try:
+            execute_sql_template(
+                sql_template,
+                account.uid,
+                database_connection,
+            )
+        except Exception as error:
+            if stop_requested():
+                raise BatchCancelled("用户已停止任务") from error
+            raise BatchCriticalError(f"绑定 SQL 执行失败：{error}") from error
         print(f"[{index}/{count}] SQL OK · {sql_template.title}")
 
     money_result = add_money.add_money(
@@ -200,6 +220,27 @@ def _create_account_and_bet(
         verbose=verbose,
         stop_requested=stop_requested,
     )
+
+    if feature_scenario is not None:
+        try:
+            execute_feature_scenario(
+                feature_scenario,
+                environment=environment,
+                runtime_parameters={
+                    "userid": account.uid,
+                    "token": account.token,
+                    "email": account.email,
+                    "platform": platform,
+                    "channel_code": channel_code,
+                },
+                database_connection=scenario_database_connection,
+                stop_requested=stop_requested,
+            )
+        except Exception as error:
+            if stop_requested():
+                raise BatchCancelled("用户已停止任务") from error
+            raise BatchCriticalError(f"功能场景执行失败：{error}") from error
+        print(f"[{index}/{count}] 场景 PASS · {feature_scenario.title}")
 
     print(
         f"[{index}/{count}] 数据生成完成："
@@ -234,6 +275,8 @@ def create_accounts_and_bet(
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
     sql_template: Optional[SqlTemplate] = None,
     database_connection: Optional[DatabaseConnectionConfig] = None,
+    feature_scenario: Optional[FeatureScenario] = None,
+    scenario_database_connection: Optional[DatabaseConnectionConfig] = None,
 ) -> int:
     """按账号并发和下注并发配置批量生成测试数据。"""
     if count <= 0:
@@ -250,8 +293,10 @@ def create_accounts_and_bet(
     output_path = Path(output_file)
     success_count = 0
     completed_count = 0
+    failed_count = 0
     admin_base_url = add_money.base_url_for_environment(environment)
     internal_stop = threading.Event()
+    fatal_error: Optional[Exception] = None
 
     def should_stop() -> bool:
         """合并流程错误和界面停止信号。"""
@@ -264,61 +309,105 @@ def create_accounts_and_bet(
             max_workers=worker_count,
             thread_name_prefix="account",
         )
-        futures: Dict[Future[AccountResult], int] = {
-            executor.submit(
-                _create_account_and_bet,
-                index,
-                count,
-                environment=environment,
-                platform=platform,
-                channel_code=channel_code,
-                admin_base_url=admin_base_url,
-                initial_balance=initial_balance,
-                spin_count=spin_count,
-                spin_count_range=spin_count_range,
-                bet_amount=bet_amount,
-                spin_workers=spin_workers,
-                verbose=verbose,
-                stop_requested=should_stop,
-                sql_template=sql_template,
-                database_connection=database_connection,
-            ): index
-            for index in range(1, count + 1)
-        }
+        futures: Dict[Future[AccountResult], int] = {}
+        next_index = 1
+
+        def submit_account(index: int) -> None:
+            futures[
+                executor.submit(
+                    _create_account_and_bet,
+                    index,
+                    count,
+                    environment=environment,
+                    platform=platform,
+                    channel_code=channel_code,
+                    admin_base_url=admin_base_url,
+                    initial_balance=initial_balance,
+                    spin_count=spin_count,
+                    spin_count_range=spin_count_range,
+                    bet_amount=bet_amount,
+                    spin_workers=spin_workers,
+                    verbose=verbose,
+                    stop_requested=should_stop,
+                    sql_template=sql_template,
+                    database_connection=database_connection,
+                    feature_scenario=feature_scenario,
+                    scenario_database_connection=scenario_database_connection,
+                )
+            ] = index
+
+        while next_index <= count and len(futures) < worker_count:
+            submit_account(next_index)
+            next_index += 1
 
         try:
-            for future in as_completed(futures):
-                index = futures[future]
-                try:
-                    result = future.result()
-                    account_file.write(result.output_line)
-                    account_file.flush()
-                    success_count += 1
-                except (BatchCancelled, CancelledError):
-                    pass
-                except SpinWorkflowError as error:
-                    print(f"[{index}/{count}] 创建账号失败: {error}")
-                    print("检测到下注业务错误，正在停止剩余批量任务")
-                    internal_stop.set()
-                except Exception as error:
-                    print(f"[{index}/{count}] 创建账号失败: {error}")
-                finally:
-                    completed_count += 1
-                    if progress_callback:
-                        progress_callback(completed_count, count, success_count)
+            while futures:
+                done, _ = wait(tuple(futures), return_when=FIRST_COMPLETED)
+                for future in done:
+                    index = futures.pop(future)
+                    processed = True
+                    try:
+                        result = future.result()
+                        account_file.write(result.output_line)
+                        account_file.flush()
+                        success_count += 1
+                    except (BatchCancelled, CancelledError):
+                        processed = False
+                    except (SpinWorkflowError, BatchCriticalError) as error:
+                        failed_count += 1
+                        first_fatal = fatal_error is None
+                        fatal_error = fatal_error or error
+                        print(f"[{index}/{count}] 创建账号失败: {error}")
+                        if first_fatal:
+                            print("检测到关键业务错误，正在停止剩余批量任务")
+                        internal_stop.set()
+                    except Exception as error:
+                        failed_count += 1
+                        print(f"[{index}/{count}] 创建账号失败: {error}")
+                    finally:
+                        if processed:
+                            completed_count += 1
+                            if progress_callback:
+                                progress_callback(
+                                    completed_count,
+                                    count,
+                                    success_count,
+                                )
 
                 if should_stop():
                     internal_stop.set()
-                    for pending_future in futures:
-                        if not pending_future.done():
-                            pending_future.cancel()
+                    for pending_future in tuple(futures):
+                        pending_future.cancel()
+                    continue
+
+                while next_index <= count and len(futures) < worker_count:
+                    submit_account(next_index)
+                    next_index += 1
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
 
     if stop_requested and stop_requested():
-        print("用户已停止任务")
+        print(
+            f"批量任务已停止：成功 {success_count}，失败 {failed_count}，"
+            f"实际完成 {completed_count}/{count}，输出文件：{output_path}"
+        )
+        return success_count
+    if fatal_error is not None:
+        raise RuntimeError(
+            f"批量任务因关键业务错误终止：{fatal_error}；"
+            f"成功 {success_count}，失败 {failed_count}，"
+            f"实际完成 {completed_count}/{count}"
+        ) from fatal_error
+    if failed_count:
+        raise RuntimeError(
+            f"批量任务部分失败：成功 {success_count}，失败 {failed_count}，"
+            f"实际完成 {completed_count}/{count}，输出文件：{output_path}"
+        )
 
-    print(f"批量任务结束：成功 {success_count}/{count}，输出文件：{output_path}")
+    print(
+        f"批量任务结束：成功 {success_count}，失败 {failed_count}，"
+        f"实际完成 {completed_count}/{count}，输出文件：{output_path}"
+    )
     return success_count
 
 

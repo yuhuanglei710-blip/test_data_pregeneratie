@@ -43,8 +43,8 @@ Channel Code，而是选择是否进入 B 面及是否启用新手套路：不�
 `cache/channel_sources.json`。“锦标赛数据”会注册
 账号、加钱并完成固定或随机次数的下注。账号处理和下注都能分别选择串行或并行；串行
 模式会固定使用一个执行线程，并禁用对应的并发数。界面会实时显示运行日志及完成进度，
-注册平台可选择 Android 或 iOS。左侧导航可在创建账号、锦标赛数据、功能数据、API 请求
-和参数配置之间切换；参数配置页维护的 Channel Code 作为两个账号任务页的渠道匹配优先级，页面也可
+注册平台可选择 Android 或 iOS。左侧导航可在创建账号、锦标赛数据、功能数据、API 请求、
+功能场景和参数配置之间切换；参数配置页维护的 Channel Code 作为两个账号任务页的渠道匹配优先级，页面也可
 维护 SSH 数据库连接。两类配置都按运行环境
 隔离，切换环境时会自动加载对应参数。数据库连接通过 SSH 隧道访问 MySQL，SSH 只允许
 使用界面导入的私钥文件，不使用密码、SSH Agent 或自动密钥搜索，并可在界面中测试连接。
@@ -54,7 +54,11 @@ Channel Code，而是选择是否进入 B 面及是否启用新手套路：不�
 每个环境可分别设置业务库和日志库名称，更新渠道参数时会读取当前环境配置的日志库。
 连接信息保存在本机 `cache/database_connections.json`（已排除版本控制），数据库密码不会
 输出到运行日志。
-点击“停止”后会在当前网络请求结束时安全停止。
+批量任务只维持当前并发数的待执行账号，不会一次性创建全部任务。点击“停止”后会立即
+停止派发新账号并取消尚未开始的任务；当前正在进行的网络请求使用 10 秒超时，退出后
+界面恢复操作。进度仅统计实际执行完成的账号，不把取消任务显示成完成。绑定 SQL 或
+包含 SQL 的功能场景会复用同一环境的 SSH 隧道，并限制并发数据库连接，避免批量任务
+为每个账号同时建立 SSH 握手。
 
 注册单个开发环境用户：
 
@@ -78,6 +82,9 @@ python -m base.tournment_test
 可以分别设置，默认都是 5。
 选择 `huidu` 灰度环境时，游戏 token 会从灰度 `self_game_url` 获取，网页 Origin、token
 缓存和游戏 session 也会按环境隔离，不会与测试环境混用。
+选择 `yy` 环境时，游戏 token 使用
+`https://yyapi.ushdev.top/v1/gamehall/self_game_url`，请求 Origin 和退出/收银地址使用
+`https://yyres.ushdev.top`，不会回退到个人服接口。
 默认单次下注金额为 `1000` 美分，可通过 `bet_amount` 参数调整。
 
 ## 功能数据 SQL
@@ -101,13 +108,16 @@ SQL 模板选择框支持按标题模糊检索；执行日志只输出模板名�
 ## API 请求模板
 
 “API 请求”页可按标题保存、检索、编辑和删除 HTTP 请求模板。模板支持
-`GET`、`POST`、`PUT`、`PATCH` 和 `DELETE`，可配置完整 URL、JSON 格式的 Headers、
+`GET`、`POST`、`PUT`、`PATCH` 和 `DELETE`，可配置接口路径、JSON 格式的 Headers、
 Body 与请求超时时间。模板保存在本机 `cache/api_templates.json`（已排除版本控制）。
+发送页选择 `dev`、`huidu`、`prod`、`yy` 或 `individual` 后，会读取对应 `.env` 文件中的
+`domain` 并自动拼接以 `/` 开头的接口路径；例如 `yy` 会使用 `https://yyapi.ushdev.top`。
+模板也可保存以 `http://` 或 `https://` 开头的完整 URL，此时域名固定，不随环境切换。
 
 URL、Headers 和 Body 均支持 `{{参数名}}` 占位符，例如：
 
 ```text
-https://example.test/v1/user/{{userid}}
+/v1/user/{{userid}}
 ```
 
 发送前在右侧运行参数中填写 JSON 对象：
@@ -118,6 +128,24 @@ https://example.test/v1/user/{{userid}}
 
 界面会提示当前模板需要的参数；发送操作在后台线程中执行，底部响应日志显示状态码、
 耗时和响应正文。超长响应会自动截断，避免日志区域持续膨胀。
+
+API 响应按 `{code, data, msg}` 协议处理。字符串类型的 `data` 和 `msg` 会自动进行
+Base64 解码；`data` 解码后若为 JSON，会继续解析成对象。独立请求日志显示解码后的响应，
+功能场景可直接断言 `response.code`、`response.data.xxx` 和 `response.msg`。
+
+## 功能场景
+
+“功能场景”页将已有 SQL 和 API 模板编排为有序步骤，支持以下步骤类型：
+
+- SQL：修改或查询数据，最后一个查询结果可通过 `sql`（首行）和 `sql_rows`（全部行）读取。
+- API：发送请求，响应写入 `response`，并提供 `http_status`、`elapsed_ms` 等字段。
+- 提取变量：例如将 `response.data.order_id` 保存为 `order_id`，供后续 `{{order_id}}` 使用。
+- 断言：支持等于、不等于、存在、不存在、包含、大于和小于。
+
+步骤可标记为清理步骤，主流程失败或停止后仍会尝试执行。场景独立运行时可填写初始变量；
+绑定到“创建账号”或“锦标赛数据”后，会自动提供 `userid`、`token`、`email`、`platform`
+和 `channel_code`。场景保存在本机 `cache/feature_scenarios.json`，引用中的模板使用固定 ID，
+被场景引用的 SQL/API 模板不能直接删除。
 
 ## 测试
 

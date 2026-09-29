@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import select
 import socketserver
@@ -11,7 +12,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Iterator, Union
+from typing import Dict, Iterator, Tuple, Union
 
 from .user import SUPPORTED_ENVIRONMENTS
 
@@ -19,6 +20,12 @@ from .user import SUPPORTED_ENVIRONMENTS
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATABASE_CONNECTIONS_FILE = PROJECT_ROOT / "cache" / "database_connections.json"
 SSH_PRIVATE_KEYS_FILE = PROJECT_ROOT / "cache" / "ssh_private_keys.json"
+MAX_CONCURRENT_DATABASE_CONNECTIONS = 8
+_database_connection_slots = threading.BoundedSemaphore(
+    MAX_CONCURRENT_DATABASE_CONNECTIONS
+)
+_shared_tunnels: Dict[Tuple[object, ...], tuple[object, "_ForwardServer"]] = {}
+_shared_tunnels_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -313,6 +320,7 @@ class _ForwardServer(socketserver.ThreadingTCPServer):
 
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = 64
 
 
 def _forward_handler(transport, remote_address):
@@ -375,6 +383,73 @@ def _ssh_tunnel(connection: DatabaseConnectionConfig) -> Iterator[int]:
         client.close()
 
 
+def _tunnel_key(connection: DatabaseConnectionConfig) -> Tuple[object, ...]:
+    return (
+        connection.ssh_host,
+        connection.ssh_port,
+        connection.ssh_username,
+        connection.ssh_private_key_id,
+        connection.database_host,
+        connection.database_port,
+    )
+
+
+def _close_shared_tunnel(resources: tuple[object, _ForwardServer]) -> None:
+    client, server = resources
+    try:
+        server.shutdown()
+        server.server_close()
+    finally:
+        client.close()  # type: ignore[attr-defined]
+
+
+def close_shared_database_tunnels() -> None:
+    """关闭进程内复用的 SSH 隧道。"""
+    with _shared_tunnels_lock:
+        resources = list(_shared_tunnels.values())
+        _shared_tunnels.clear()
+    for tunnel in resources:
+        try:
+            _close_shared_tunnel(tunnel)
+        except Exception:
+            pass
+
+
+atexit.register(close_shared_database_tunnels)
+
+
+def _shared_tunnel_port(connection: DatabaseConnectionConfig) -> int:
+    """为相同 SSH/数据库地址复用一个进程级转发隧道。"""
+    key = _tunnel_key(connection)
+    with _shared_tunnels_lock:
+        existing = _shared_tunnels.get(key)
+        if existing is not None:
+            client, server = existing
+            transport = client.get_transport()  # type: ignore[attr-defined]
+            if transport is not None and transport.is_active():
+                return int(server.server_address[1])
+            _shared_tunnels.pop(key, None)
+            _close_shared_tunnel(existing)
+
+        client = _connect_ssh_client(connection)
+        transport = client.get_transport()
+        if transport is None or not transport.is_active():
+            client.close()
+            raise ConnectionError("SSH 连接未建立")
+        transport.set_keepalive(30)
+        server = _ForwardServer(
+            ("127.0.0.1", 0),
+            _forward_handler(
+                transport,
+                (connection.database_host, connection.database_port),
+            ),
+        )
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        _shared_tunnels[key] = (client, server)
+        return int(server.server_address[1])
+
+
 @contextmanager
 def open_database_connection(
     connection: DatabaseConnectionConfig,
@@ -389,7 +464,8 @@ def open_database_connection(
     except ImportError as error:  # pragma: no cover - depends on installation
         raise RuntimeError("缺少 PyMySQL，请先安装项目依赖") from error
 
-    with _ssh_tunnel(connection) as local_port:
+    with _database_connection_slots:
+        local_port = _shared_tunnel_port(connection)
         database = pymysql.connect(
             host="127.0.0.1",
             port=local_port,
