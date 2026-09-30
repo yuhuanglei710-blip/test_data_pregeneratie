@@ -1535,12 +1535,15 @@ class WorkflowWindow(QMainWindow):
             ("安装包", "MD5 / 备注", "归因链接", "操作")
         )
         self.apk_table.setAlternatingRowColors(True)
+        self.apk_table.setWordWrap(False)
+        self.apk_table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.apk_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.apk_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.apk_table.verticalHeader().setVisible(False)
         self.apk_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.ResizeToContents
+            0, QHeaderView.ResizeMode.Interactive
         )
+        self.apk_table.horizontalHeader().resizeSection(0, 195)
         self.apk_table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
         )
@@ -3758,13 +3761,25 @@ class WorkflowWindow(QMainWindow):
         for row, package in enumerate(self.cached_apks):
             name_item = QTableWidgetItem(package.name)
             name_item.setToolTip(package.path)
+            name_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
             self.apk_table.setItem(row, 0, name_item)
-            detail = package.md5 + (f"\n{package.note}" if package.note else "")
+            detail = package.md5 + (f" · {package.note}" if package.note else "")
             detail_item = QTableWidgetItem(detail)
-            detail_item.setToolTip(f"文件：{package.path}\nMD5：{package.md5}")
+            detail_tooltip = f"文件：{package.path}\nMD5：{package.md5}"
+            if package.note:
+                detail_tooltip += f"\n备注：{package.note}"
+            detail_item.setToolTip(detail_tooltip)
+            detail_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
             self.apk_table.setItem(row, 1, detail_item)
             attribution_item = QTableWidgetItem(package.attribution or "—")
             attribution_item.setToolTip(package.attribution)
+            attribution_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
             self.apk_table.setItem(row, 2, attribution_item)
 
             actions = QWidget()
@@ -3787,7 +3802,7 @@ class WorkflowWindow(QMainWindow):
                 button.clicked.connect(lambda _checked=False, fn=callback: fn())
                 action_layout.addWidget(button)
             self.apk_table.setCellWidget(row, 3, actions)
-            self.apk_table.setRowHeight(row, 62)
+            self.apk_table.setRowHeight(row, 54)
 
     def _cached_apk_by_id(self, package_id: str) -> Optional[CachedApk]:
         return next(
