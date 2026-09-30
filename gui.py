@@ -8,6 +8,7 @@ from typing import Callable, Dict, Optional
 from PySide6.QtCore import QObject, QSize, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QFontDatabase, QTextCursor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QAbstractSpinBox,
     QApplication,
     QButtonGroup,
@@ -32,6 +33,9 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
     QVBoxLayout,
     QWidget,
 )
@@ -41,6 +45,20 @@ from base.account_batch import (
     create_accounts,
     create_custom_account,
     validate_custom_email,
+)
+from base.apk_manager import (
+    AndroidDevice,
+    ApkInstallResult,
+    CachedApk,
+    attribute_and_install,
+    cache_apk,
+    install_apk,
+    list_android_devices,
+    load_cached_apks,
+    open_attribution_url,
+    reinstall_apk,
+    remove_cached_apk,
+    update_cached_apk,
 )
 from base.api_request import (
     ApiTemplate,
@@ -221,6 +239,17 @@ QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {
     background: #f0f2f4;
     border-color: #e2e5e9;
 }
+QPlainTextEdit#longTextInput {
+    color: #20242a;
+    background: #ffffff;
+    border: 1px solid #cfd4db;
+    border-radius: 7px;
+    padding: 8px 10px;
+    selection-color: #ffffff;
+    selection-background-color: #343a42;
+}
+QPlainTextEdit#longTextInput:hover { border-color: #9fa7b2; }
+QPlainTextEdit#longTextInput:focus { border-color: #343a42; }
 QComboBox::drop-down {
     width: 24px;
     background: #f3f5f7;
@@ -243,6 +272,24 @@ QListWidget#channelCodeList, QPlainTextEdit#terminal {
 }
 QListWidget#channelCodeList::item { min-height: 32px; padding: 4px 8px; }
 QListWidget#channelCodeList::item:selected { color: #17191d; background: #e8ebef; }
+QTableWidget#apkTable {
+    color: #30363d;
+    background: #ffffff;
+    alternate-background-color: #f8f9fa;
+    border: 1px solid #d6dbe1;
+    border-radius: 7px;
+    gridline-color: #e4e7eb;
+}
+QTableWidget#apkTable::item { padding: 6px; }
+QTableWidget#apkTable QHeaderView::section {
+    color: #5d6470;
+    background: #f3f5f7;
+    border: 0;
+    border-bottom: 1px solid #d6dbe1;
+    padding: 8px;
+    font-size: 12px;
+    font-weight: 600;
+}
 QPlainTextEdit#terminal {
     padding: 12px;
     font-family: "Cascadia Mono", "Consolas";
@@ -405,6 +452,27 @@ class ChannelSourceUpdateWorker(QObject):
             self.succeeded.emit(self.environment, saved_sources)
         except Exception as error:
             self.failed.emit(self.environment, str(error))
+        finally:
+            self.done.emit()
+
+
+class ApkActionWorker(QObject):
+    """在后台执行单个 APK/ADB 操作，避免阻塞界面。"""
+
+    succeeded = Signal(object)
+    failed = Signal(str)
+    done = Signal()
+
+    def __init__(self, action: Callable[[], object]) -> None:
+        super().__init__()
+        self.action = action
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.succeeded.emit(self.action())
+        except Exception as error:
+            self.failed.emit(str(error))
         finally:
             self.done.emit()
 
@@ -1165,6 +1233,59 @@ class FeatureScenarioDialog(QDialog):
         self.accept()
 
 
+class CachedApkDialog(QDialog):
+    """编辑缓存安装包的名称、归因链接和备注。"""
+
+    def __init__(self, package: CachedApk, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("编辑缓存安装包")
+        self.setModal(True)
+        self.resize(560, 330)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(12)
+
+        title = QLabel("编辑缓存安装包")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
+        self.name_input = QLineEdit(package.name)
+        self.attribution_input = QPlainTextEdit(package.attribution)
+        self.attribution_input.setObjectName("longTextInput")
+        self.attribution_input.setFixedHeight(90)
+        self.attribution_input.setPlaceholderText("https://...")
+        self.note_input = QLineEdit(package.note)
+        self.note_input.setPlaceholderText("例如：渠道、环境或版本说明")
+        WorkflowWindow._add_form_row(form, 0, "安装包名称", self.name_input)
+        WorkflowWindow._add_form_row(form, 1, "归因链接", self.attribution_input)
+        WorkflowWindow._add_form_row(form, 2, "备注", self.note_input)
+        layout.addLayout(form)
+        layout.addStretch()
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = QPushButton("取消")
+        cancel.setObjectName("secondaryButton")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        save = QPushButton("保存修改")
+        save.setObjectName("primaryButton")
+        save.clicked.connect(self.accept)
+        buttons.addWidget(save)
+        layout.addLayout(buttons)
+
+    def values(self) -> tuple[str, str, str]:
+        return (
+            self.name_input.text().strip(),
+            self.attribution_input.toPlainText().strip(),
+            self.note_input.text().strip(),
+        )
+
+
 # 主窗口
 class WorkflowWindow(QMainWindow):
     """Termius 风格的自动化控制台主窗口。"""
@@ -1180,6 +1301,11 @@ class WorkflowWindow(QMainWindow):
         self.worker: Optional[WorkflowWorker] = None
         self.channel_source_thread: Optional[QThread] = None
         self.channel_source_worker: Optional[ChannelSourceUpdateWorker] = None
+        self.apk_action_thread: Optional[QThread] = None
+        self.apk_action_worker: Optional[ApkActionWorker] = None
+        self.pending_apk_action: Optional[
+            tuple[str, Callable[[], object], Callable[[object], None]]
+        ] = None
         self.close_after_stop = False
         self.current_section = 0
         self.config_widgets: list[QWidget] = []
@@ -1193,6 +1319,9 @@ class WorkflowWindow(QMainWindow):
         self.sql_templates = load_sql_templates()
         self.api_templates = load_api_templates()
         self.feature_scenarios = load_feature_scenarios()
+        self.cached_apks = load_cached_apks()
+        self.android_devices: Dict[str, AndroidDevice] = {}
+        self.last_apk_device_error = ""
 
         root = QWidget()
         root.setObjectName("root")
@@ -1213,6 +1342,7 @@ class WorkflowWindow(QMainWindow):
         self.content_stack.addWidget(self._build_feature_workspace())
         self.content_stack.addWidget(self._build_api_workspace())
         self.content_stack.addWidget(self._build_scenario_workspace())
+        self.content_stack.addWidget(self._build_apk_workspace())
         workspace.addWidget(self.content_stack, 1)
         page.addLayout(workspace, 1)
 
@@ -1272,6 +1402,7 @@ class WorkflowWindow(QMainWindow):
                 "功能数据",
                 "API 请求",
                 "功能场景",
+                "设备安装",
                 "参数配置",
             )
         ):
@@ -1289,7 +1420,7 @@ class WorkflowWindow(QMainWindow):
             layout.addWidget(button)
         layout.addStretch()
 
-        version = QLabel("LOCAL  ·  v2.1")
+        version = QLabel("LOCAL  ·  v2.2")
         version.setObjectName("navigationMeta")
         layout.addWidget(version)
         return navigation
@@ -1318,6 +1449,129 @@ class WorkflowWindow(QMainWindow):
         panel_layout.addWidget(title)
         panel_layout.addWidget(self._build_config_tab(), 1)
         layout.addWidget(panel)
+        return page
+
+    def _build_apk_workspace(self) -> QWidget:
+        """构建设备检测、APK 缓存、归因和安装页面。"""
+        page = QWidget()
+        page.setObjectName("settingsPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(14)
+
+        device_card = QFrame()
+        device_card.setObjectName("configCard")
+        device_layout = QVBoxLayout(device_card)
+        device_layout.setContentsMargins(20, 18, 20, 18)
+        device_title = QLabel("Android 设备")
+        device_title.setObjectName("sectionTitle")
+        device_layout.addWidget(device_title)
+        device_row = QHBoxLayout()
+        self.apk_device_combo = QComboBox()
+        self.apk_device_combo.addItem("正在检测 ADB 设备…", "")
+        device_row.addWidget(self.apk_device_combo, 1)
+        self.apk_refresh_button = QPushButton("刷新")
+        self.apk_refresh_button.setObjectName("secondaryButton")
+        self.apk_refresh_button.clicked.connect(self._refresh_android_devices)
+        device_row.addWidget(self.apk_refresh_button)
+        device_layout.addLayout(device_row)
+        self.apk_device_hint = QLabel("请开启 USB 调试并允许当前电脑调试。")
+        self.apk_device_hint.setObjectName("fieldHint")
+        self.apk_device_hint.setWordWrap(True)
+        device_layout.addWidget(self.apk_device_hint)
+        top_row.addWidget(device_card, 1)
+
+        import_card = QFrame()
+        import_card.setObjectName("configCard")
+        import_layout = QVBoxLayout(import_card)
+        import_layout.setContentsMargins(20, 18, 20, 18)
+        import_title = QLabel("添加安装包缓存")
+        import_title.setObjectName("sectionTitle")
+        import_layout.addWidget(import_title)
+        file_row = QHBoxLayout()
+        self.apk_source_path = QLineEdit()
+        self.apk_source_path.setReadOnly(True)
+        self.apk_source_path.setPlaceholderText("选择一个 APK 文件")
+        file_row.addWidget(self.apk_source_path, 1)
+        self.apk_choose_button = QPushButton("选择 APK")
+        self.apk_choose_button.setObjectName("secondaryButton")
+        self.apk_choose_button.clicked.connect(self._choose_apk)
+        file_row.addWidget(self.apk_choose_button)
+        import_layout.addLayout(file_row)
+        attribution_row = QHBoxLayout()
+        self.apk_attribution_input = QPlainTextEdit()
+        self.apk_attribution_input.setObjectName("longTextInput")
+        self.apk_attribution_input.setFixedHeight(58)
+        self.apk_attribution_input.setPlaceholderText("关联归因链接（可选）")
+        attribution_row.addWidget(self.apk_attribution_input, 1)
+        self.apk_cache_button = QPushButton("缓存并添加")
+        self.apk_cache_button.setObjectName("primaryButton")
+        self.apk_cache_button.clicked.connect(self._cache_selected_apk)
+        attribution_row.addWidget(self.apk_cache_button)
+        import_layout.addLayout(attribution_row)
+        top_row.addWidget(import_card, 1)
+        layout.addLayout(top_row)
+
+        package_card = QFrame()
+        package_card.setObjectName("configCard")
+        package_layout = QVBoxLayout(package_card)
+        package_layout.setContentsMargins(20, 18, 20, 18)
+        package_header = QHBoxLayout()
+        package_title = QLabel("已缓存安装包")
+        package_title.setObjectName("sectionTitle")
+        package_header.addWidget(package_title)
+        package_header.addStretch()
+        self.apk_package_count = QLabel("0 个")
+        self.apk_package_count.setObjectName("fieldHint")
+        package_header.addWidget(self.apk_package_count)
+        package_layout.addLayout(package_header)
+
+        self.apk_table = QTableWidget(0, 4)
+        self.apk_table.setObjectName("apkTable")
+        self.apk_table.setHorizontalHeaderLabels(
+            ("安装包", "MD5 / 备注", "归因链接", "操作")
+        )
+        self.apk_table.setAlternatingRowColors(True)
+        self.apk_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.apk_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.apk_table.verticalHeader().setVisible(False)
+        self.apk_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.apk_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.apk_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.Stretch
+        )
+        self.apk_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.apk_table.setMinimumHeight(260)
+        package_layout.addWidget(self.apk_table, 1)
+
+        self.apk_log = QPlainTextEdit()
+        self.apk_log.setObjectName("terminal")
+        self.apk_log.setReadOnly(True)
+        self.apk_log.setMaximumHeight(115)
+        self.apk_log.document().setMaximumBlockCount(1000)
+        self.apk_log.setPlainText("runner@local:~$ adb ready\n")
+        package_layout.addWidget(self.apk_log)
+        layout.addWidget(package_card, 1)
+
+        self.apk_controls = (
+            self.apk_device_combo,
+            self.apk_refresh_button,
+            self.apk_choose_button,
+            self.apk_source_path,
+            self.apk_attribution_input,
+            self.apk_cache_button,
+            self.apk_table,
+        )
+        self._refresh_apk_table()
         return page
 
     def _build_settings_panel(self) -> QFrame:
@@ -3458,6 +3712,339 @@ class WorkflowWindow(QMainWindow):
             self.session_title.setText("ACCOUNT BATCH CREATE")
             self.eyebrow.setText("$ account / create-batch")
 
+    # Android 设备、APK 缓存和归因安装
+    def _append_apk_log(self, text: str) -> None:
+        cursor = self.apk_log.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(text.rstrip() + "\n")
+        self.apk_log.setTextCursor(cursor)
+        self.apk_log.ensureCursorVisible()
+
+    def _choose_apk(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self, "选择 Android 安装包", "", "Android 安装包 (*.apk)"
+        )
+        if selected:
+            self.apk_source_path.setText(selected)
+
+    def _cache_selected_apk(self) -> None:
+        source = self.apk_source_path.text().strip()
+        if not source:
+            QMessageBox.information(self, "选择安装包", "请先选择 APK 文件。")
+            return
+        attribution = self.apk_attribution_input.toPlainText().strip()
+        self._run_apk_action(
+            "缓存安装包",
+            lambda: cache_apk(source, attribution),
+            self._on_apk_cached,
+        )
+
+    def _on_apk_cached(self, value: object) -> None:
+        self.cached_apks = load_cached_apks()
+        self._refresh_apk_table()
+        self.apk_source_path.clear()
+        self.apk_attribution_input.clear()
+        if getattr(value, "duplicate", False):
+            self._append_apk_log("[cache] 相同 MD5 已存在，已复用缓存并更新归因链接")
+        else:
+            package = getattr(value, "package", None)
+            self._append_apk_log(f"[cache] 已缓存：{getattr(package, 'name', 'APK')}")
+
+    def _refresh_apk_table(self) -> None:
+        if not hasattr(self, "apk_table"):
+            return
+        self.apk_table.setRowCount(len(self.cached_apks))
+        self.apk_package_count.setText(f"{len(self.cached_apks)} 个")
+        for row, package in enumerate(self.cached_apks):
+            name_item = QTableWidgetItem(package.name)
+            name_item.setToolTip(package.path)
+            self.apk_table.setItem(row, 0, name_item)
+            detail = package.md5 + (f"\n{package.note}" if package.note else "")
+            detail_item = QTableWidgetItem(detail)
+            detail_item.setToolTip(f"文件：{package.path}\nMD5：{package.md5}")
+            self.apk_table.setItem(row, 1, detail_item)
+            attribution_item = QTableWidgetItem(package.attribution or "—")
+            attribution_item.setToolTip(package.attribution)
+            self.apk_table.setItem(row, 2, attribution_item)
+
+            actions = QWidget()
+            action_layout = QHBoxLayout(actions)
+            action_layout.setContentsMargins(4, 3, 4, 3)
+            action_layout.setSpacing(5)
+            specs = (
+                ("安装", lambda pid=package.package_id: self._install_cached_apk(pid, False), True),
+                ("归因", lambda pid=package.package_id: self._attribute_cached_apk(pid), bool(package.attribution)),
+                ("归因+安装", lambda pid=package.package_id: self._install_cached_apk(pid, True), bool(package.attribution)),
+                ("编辑", lambda pid=package.package_id: self._edit_cached_apk(pid), True),
+                ("移除", lambda pid=package.package_id: self._remove_cached_apk(pid), True),
+            )
+            for label, callback, enabled in specs:
+                button = QPushButton(label)
+                button.setObjectName(
+                    "primaryButton" if label == "归因+安装" else "secondaryButton"
+                )
+                button.setEnabled(enabled)
+                button.clicked.connect(lambda _checked=False, fn=callback: fn())
+                action_layout.addWidget(button)
+            self.apk_table.setCellWidget(row, 3, actions)
+            self.apk_table.setRowHeight(row, 62)
+
+    def _cached_apk_by_id(self, package_id: str) -> Optional[CachedApk]:
+        return next(
+            (item for item in self.cached_apks if item.package_id == package_id),
+            None,
+        )
+
+    def _edit_cached_apk(self, package_id: str) -> None:
+        package = self._cached_apk_by_id(package_id)
+        if package is None:
+            QMessageBox.critical(self, "编辑失败", "未找到缓存安装包。")
+            return
+        dialog = CachedApkDialog(package, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            name, attribution, note = dialog.values()
+            update_cached_apk(
+                package.package_id,
+                name=name,
+                attribution=attribution,
+                note=note,
+            )
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "保存失败", str(error))
+            return
+        self.cached_apks = load_cached_apks()
+        self._refresh_apk_table()
+        self._append_apk_log(f"[cache] 已更新：{name or package.name}")
+
+    def _remove_cached_apk(self, package_id: str) -> None:
+        package = self._cached_apk_by_id(package_id)
+        if package is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "移除缓存记录",
+            f"确定从列表移除「{package.name}」？\n\n缓存 APK 文件将保留。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            remove_cached_apk(package.package_id)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "移除失败", str(error))
+            return
+        self.cached_apks = load_cached_apks()
+        self._refresh_apk_table()
+        self._append_apk_log(f"[cache] 已移除记录：{package.name}（文件保留）")
+
+    def _selected_android_serial(self) -> str:
+        serial = str(self.apk_device_combo.currentData() or "").strip()
+        device = self.android_devices.get(serial)
+        if not serial or device is None:
+            raise ValueError("请先连接并选择 Android 设备")
+        if device.status != "device":
+            raise ValueError(
+                f"设备 {serial} 当前状态为 {device.status}，请先完成 USB 调试授权"
+            )
+        return serial
+
+    @Slot()
+    def _refresh_android_devices(self) -> None:
+        if self.current_section != 5 or self._is_apk_busy():
+            return
+        current_serial = str(self.apk_device_combo.currentData() or "")
+        self._run_apk_action(
+            "检测 Android 设备",
+            list_android_devices,
+            lambda value: self._on_android_devices_refreshed(value, current_serial),
+            quiet=True,
+        )
+
+    def _on_android_devices_refreshed(
+        self, value: object, preferred_serial: str
+    ) -> None:
+        devices = [item for item in value if isinstance(item, AndroidDevice)]
+        self.android_devices = {device.serial: device for device in devices}
+        self.apk_device_combo.clear()
+        if not devices:
+            self.apk_device_combo.addItem("未检测到设备", "")
+            self.apk_device_hint.setText("未检测到设备，请检查数据线和 USB 调试设置。")
+        else:
+            for device in devices:
+                detail = f" · {device.detail}" if device.detail else ""
+                self.apk_device_combo.addItem(
+                    f"{device.serial} · {device.status}{detail}", device.serial
+                )
+            preferred_index = self.apk_device_combo.findData(preferred_serial)
+            if preferred_index >= 0:
+                self.apk_device_combo.setCurrentIndex(preferred_index)
+            ready_count = sum(device.status == "device" for device in devices)
+            self.apk_device_hint.setText(
+                f"ADB 已发现 {len(devices)} 台设备，其中 {ready_count} 台可安装。"
+            )
+        self.last_apk_device_error = ""
+
+    def _install_cached_apk(self, package_id: str, with_attribution: bool) -> None:
+        package = self._cached_apk_by_id(package_id)
+        if package is None:
+            QMessageBox.critical(self, "安装失败", "未找到缓存安装包。")
+            return
+        try:
+            serial = self._selected_android_serial()
+        except ValueError as error:
+            QMessageBox.information(self, "选择设备", str(error))
+            return
+        if with_attribution and not package.attribution:
+            QMessageBox.information(self, "缺少归因链接", "请先编辑并填写归因链接。")
+            return
+        if with_attribution:
+            description = f"归因并安装 {package.name}"
+            action = lambda: attribute_and_install(
+                serial, package.attribution, package.path
+            )
+        else:
+            description = f"安装 {package.name}"
+            action = lambda: install_apk(serial, package.path)
+        self._append_apk_log(f"[adb:{serial}] {description}…")
+        self._run_apk_action(
+            description,
+            action,
+            lambda value: self._on_apk_install_result(value, package, serial),
+        )
+
+    def _attribute_cached_apk(self, package_id: str) -> None:
+        package = self._cached_apk_by_id(package_id)
+        if package is None:
+            return
+        try:
+            serial = self._selected_android_serial()
+        except ValueError as error:
+            QMessageBox.information(self, "选择设备", str(error))
+            return
+        if not package.attribution:
+            QMessageBox.information(self, "缺少归因链接", "请先编辑并填写归因链接。")
+            return
+        self._run_apk_action(
+            f"打开 {package.name} 的归因链接",
+            lambda: open_attribution_url(serial, package.attribution),
+            lambda _value: self._append_apk_log(
+                f"[adb:{serial}] 已在设备浏览器打开归因链接"
+            ),
+        )
+
+    def _on_apk_install_result(
+        self, value: object, package: CachedApk, serial: str
+    ) -> None:
+        if not isinstance(value, ApkInstallResult):
+            raise TypeError("ADB 返回了无法识别的安装结果")
+        if value.status != "signature-conflict":
+            self._append_apk_log(f"[adb:{serial}] 安装完成：{package.name}")
+            return
+        answer = QMessageBox.question(
+            self,
+            "检测到同包名旧应用",
+            (
+                f"设备上已存在「{value.package_name}」，但签名与当前 APK 不一致，"
+                "无法直接覆盖。\n\n是否卸载旧应用后安装当前 APK？"
+                "此操作会清空旧应用的本地数据。"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self._append_apk_log(
+                f"[adb:{serial}] 已取消替换；旧应用 {value.package_name} 未改动"
+            )
+            return
+        self.pending_apk_action = (
+            f"替换旧应用 {value.package_name}",
+            lambda: reinstall_apk(serial, package.path, value.package_name),
+            lambda _result: self._append_apk_log(
+                f"[adb:{serial}] 替换完成：旧应用已卸载，{package.name} 已安装"
+            ),
+        )
+
+    def _run_apk_action(
+        self,
+        description: str,
+        action: Callable[[], object],
+        on_success: Callable[[object], None],
+        *,
+        quiet: bool = False,
+    ) -> None:
+        if self._is_apk_busy():
+            return
+        self.apk_action_description = description
+        self.apk_action_quiet = quiet
+        if quiet:
+            self._set_apk_refreshing(True)
+        else:
+            self._set_apk_busy(True)
+        self._set_status("●  ADB RUNNING", "#228653")
+        self.apk_action_thread = QThread(self)
+        self.apk_action_worker = ApkActionWorker(action)
+        self.apk_action_worker.moveToThread(self.apk_action_thread)
+        self.apk_action_thread.started.connect(self.apk_action_worker.run)
+        self.apk_action_worker.succeeded.connect(on_success)
+        self.apk_action_worker.failed.connect(self._on_apk_action_failed)
+        self.apk_action_worker.done.connect(self.apk_action_thread.quit)
+        self.apk_action_worker.done.connect(self.apk_action_worker.deleteLater)
+        self.apk_action_thread.finished.connect(self._on_apk_action_finished)
+        self.apk_action_thread.finished.connect(self.apk_action_thread.deleteLater)
+        self.apk_action_thread.start()
+
+    @Slot(str)
+    def _on_apk_action_failed(self, message: str) -> None:
+        if self.apk_action_quiet:
+            self.apk_device_combo.clear()
+            self.apk_device_combo.addItem("ADB 不可用", "")
+            self.apk_device_hint.setText(message)
+            if message != self.last_apk_device_error:
+                self._append_apk_log(f"[adb] 设备检测失败：{message}")
+                self.last_apk_device_error = message
+        else:
+            self._append_apk_log(
+                f"[adb] {self.apk_action_description}失败：{message}"
+            )
+            QMessageBox.critical(self, "ADB 操作失败", message)
+
+    @Slot()
+    def _on_apk_action_finished(self) -> None:
+        pending = self.pending_apk_action
+        was_quiet = self.apk_action_quiet
+        self.pending_apk_action = None
+        self.apk_action_worker = None
+        self.apk_action_thread = None
+        if was_quiet:
+            self._set_apk_refreshing(False)
+        else:
+            self._set_apk_busy(False)
+        self._set_status("●  READY", "#228653")
+        if pending is not None:
+            description, action, on_success = pending
+            QTimer.singleShot(
+                0, lambda: self._run_apk_action(description, action, on_success)
+            )
+
+    def _set_apk_busy(self, busy: bool) -> None:
+        for control in self.apk_controls:
+            control.setEnabled(not busy)
+        for button in self.navigation_buttons:
+            button.setEnabled(not busy)
+
+    def _set_apk_refreshing(self, refreshing: bool) -> None:
+        """设备检测只锁定会发起其他后台操作的控件，不刷新整个页面。"""
+        self.apk_device_combo.setEnabled(not refreshing)
+        self.apk_refresh_button.setEnabled(not refreshing)
+        self.apk_cache_button.setEnabled(not refreshing)
+        self.apk_table.setEnabled(not refreshing)
+
+    def _is_apk_busy(self) -> bool:
+        return bool(self.apk_action_thread and self.apk_action_thread.isRunning())
+
     # 参数维护
     def _switch_section(self, index: int) -> None:
         self.current_section = index
@@ -3487,6 +4074,10 @@ class WorkflowWindow(QMainWindow):
         elif index == 4:
             self.content_stack.setCurrentIndex(4)
             self.eyebrow.setText("$ feature-scenario / run")
+        elif index == 5:
+            self.content_stack.setCurrentIndex(5)
+            self.eyebrow.setText("$ android / attribution-install")
+            QTimer.singleShot(0, self._refresh_android_devices)
         else:
             self.content_stack.setCurrentIndex(1)
             self.eyebrow.setText("$ settings / parameters")
@@ -3989,6 +4580,14 @@ class WorkflowWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """任务运行时确认停止后再关闭窗口。"""
+        if self._is_apk_busy():
+            QMessageBox.information(
+                self,
+                "ADB 操作进行中",
+                "当前安装或设备操作结束后才能退出。",
+            )
+            event.ignore()
+            return
         if self._is_channel_source_updating():
             QMessageBox.information(
                 self,

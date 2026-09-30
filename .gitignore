@@ -10,5 +10,7 @@ cache/ssh_private_keys.json
 cache/sql_templates.json
 cache/api_templates.json
 cache/feature_scenarios.json
+cache/apk_packages.json
+cache/apks/
 
 cache/bgtoken.json

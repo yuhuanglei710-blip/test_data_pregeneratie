@@ -8,6 +8,7 @@ import threading
 import time
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import ANY, Mock, call, patch
 
 import jwt
@@ -15,6 +16,7 @@ import jwt
 from base import (
     account_batch,
     add_money,
+    apk_manager,
     api_request,
     channel_source,
     database_config,
@@ -94,6 +96,87 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(dev_codes, ["dev-code"])
         self.assertEqual(prod_codes, ["prod-code"])
         self.assertEqual(huidu_codes, [DEFAULT_CHANNEL_CODE])
+
+
+class ApkManagerTests(unittest.TestCase):
+    def test_cache_apk_deduplicates_by_md5_and_updates_attribution(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "demo.apk"
+            source.write_bytes(b"apk-content")
+            config_file = Path(temp_dir) / "apk_packages.json"
+            cache_dir = Path(temp_dir) / "apks"
+
+            first = apk_manager.cache_apk(
+                source,
+                "https://example.test/first",
+                config_path=config_file,
+                cache_dir=cache_dir,
+            )
+            second = apk_manager.cache_apk(
+                source,
+                "https://example.test/second",
+                config_path=config_file,
+                cache_dir=cache_dir,
+            )
+
+            self.assertFalse(first.duplicate)
+            self.assertTrue(second.duplicate)
+            self.assertEqual(first.package.package_id, second.package.package_id)
+            self.assertEqual(
+                apk_manager.load_cached_apks(config_file)[0].attribution,
+                "https://example.test/second",
+            )
+            self.assertTrue(Path(second.package.path).is_file())
+
+    def test_install_reports_signature_conflict_package(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            apk_file = Path(temp_dir) / "demo.apk"
+            apk_file.write_bytes(b"apk-content")
+            message = (
+                "Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Package "
+                "com.example.demo signatures do not match previously installed version]"
+            )
+            with patch.object(
+                apk_manager,
+                "_run_adb",
+                side_effect=apk_manager.AdbCommandError(message, message),
+            ):
+                result = apk_manager.install_apk("device-1", apk_file)
+
+        self.assertEqual(result.status, "signature-conflict")
+        self.assertEqual(result.package_name, "com.example.demo")
+
+    def test_list_devices_parses_status_and_details(self):
+        output = (
+            "List of devices attached\n"
+            "serial-1 device product:test model:Pixel\n"
+            "serial-2 unauthorized usb:1-1\n"
+        )
+        with patch.object(apk_manager, "_run_adb", return_value=output):
+            devices = apk_manager.list_android_devices()
+
+        self.assertEqual(
+            devices,
+            [
+                apk_manager.AndroidDevice(
+                    "serial-1", "device", "product:test model:Pixel"
+                ),
+                apk_manager.AndroidDevice("serial-2", "unauthorized", "usb:1-1"),
+            ],
+        )
+
+    def test_attribution_url_must_be_http(self):
+        with self.assertRaisesRegex(ValueError, "http"):
+            apk_manager.open_attribution_url("device-1", "javascript:alert(1)")
+
+    def test_long_attribution_url_is_sent_through_adb_stdin(self):
+        url = "https://example.test/attribute?payload=" + ("x" * 100_000)
+        with patch.object(apk_manager, "_run_adb") as run_adb:
+            apk_manager.open_attribution_url("device-1", url)
+
+        arguments = run_adb.call_args.args[0]
+        self.assertEqual(arguments, ["-s", "device-1", "shell"])
+        self.assertIn(url, run_adb.call_args.kwargs["input_text"])
 
 
 class SqlDataTests(unittest.TestCase):
