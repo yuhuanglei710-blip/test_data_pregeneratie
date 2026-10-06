@@ -60,6 +60,26 @@ from base.apk_manager import (
     remove_cached_apk,
     update_cached_apk,
 )
+from base.android_log import (
+    AndroidLogCapture,
+    LogcatCaptureConfig,
+    list_installed_packages,
+)
+from base.ipa_manager import (
+    CachedIpa,
+    IosDevice,
+    IpaInstallResult,
+    attribute_and_install_ipa,
+    cache_ipa,
+    download_and_cache_ipa,
+    install_ipa,
+    list_ios_devices,
+    load_cached_ipas,
+    open_ios_attribution_url,
+    remove_cached_ipa,
+    update_cached_ipa,
+    verify_ipa_signature,
+)
 from base.api_request import (
     ApiTemplate,
     delete_api_template,
@@ -457,7 +477,7 @@ class ChannelSourceUpdateWorker(QObject):
 
 
 class ApkActionWorker(QObject):
-    """在后台执行单个 APK/ADB 操作，避免阻塞界面。"""
+    """在后台执行单个移动设备操作，避免阻塞界面。"""
 
     succeeded = Signal(object)
     failed = Signal(str)
@@ -473,6 +493,31 @@ class ApkActionWorker(QObject):
             self.succeeded.emit(self.action())
         except Exception as error:
             self.failed.emit(str(error))
+        finally:
+            self.done.emit()
+
+
+class AndroidLogWorker(QObject):
+    """在独立线程中持续转发 ADB Logcat 输出。"""
+
+    output = Signal(str)
+    failed = Signal(str)
+    done = Signal()
+
+    def __init__(self, config: LogcatCaptureConfig) -> None:
+        super().__init__()
+        self.capture = AndroidLogCapture(config, self.output.emit)
+
+    def request_stop(self) -> None:
+        self.capture.request_stop()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.capture.run()
+        except Exception as error:
+            if not self.capture.cancel_requested.is_set():
+                self.failed.emit(str(error))
         finally:
             self.done.emit()
 
@@ -1236,7 +1281,7 @@ class FeatureScenarioDialog(QDialog):
 class CachedApkDialog(QDialog):
     """编辑缓存安装包的名称、归因链接和备注。"""
 
-    def __init__(self, package: CachedApk, parent: QWidget) -> None:
+    def __init__(self, package: CachedApk | CachedIpa, parent: QWidget) -> None:
         super().__init__(parent)
         self.setWindowTitle("编辑缓存安装包")
         self.setModal(True)
@@ -1306,7 +1351,17 @@ class WorkflowWindow(QMainWindow):
         self.pending_apk_action: Optional[
             tuple[str, Callable[[], object], Callable[[object], None]]
         ] = None
+        self.ios_action_thread: Optional[QThread] = None
+        self.ios_action_worker: Optional[ApkActionWorker] = None
+        self.app_log_query_thread: Optional[QThread] = None
+        self.app_log_query_worker: Optional[ApkActionWorker] = None
+        self.app_log_thread: Optional[QThread] = None
+        self.app_log_worker: Optional[AndroidLogWorker] = None
+        self.app_log_stop_requested = False
+        self.app_log_capture_failed = False
+        self.close_after_log_stop = False
         self.close_after_stop = False
+        self.exit_after_workers_stop = False
         self.current_section = 0
         self.config_widgets: list[QWidget] = []
         self.navigation_buttons: list[QPushButton] = []
@@ -1322,6 +1377,10 @@ class WorkflowWindow(QMainWindow):
         self.cached_apks = load_cached_apks()
         self.android_devices: Dict[str, AndroidDevice] = {}
         self.last_apk_device_error = ""
+        self.cached_ipas = load_cached_ipas()
+        self.ios_devices: Dict[str, IosDevice] = {}
+        self.last_ios_device_error = ""
+        self.app_log_devices: Dict[str, AndroidDevice] = {}
 
         root = QWidget()
         root.setObjectName("root")
@@ -1343,6 +1402,8 @@ class WorkflowWindow(QMainWindow):
         self.content_stack.addWidget(self._build_api_workspace())
         self.content_stack.addWidget(self._build_scenario_workspace())
         self.content_stack.addWidget(self._build_apk_workspace())
+        self.content_stack.addWidget(self._build_ipa_workspace())
+        self.content_stack.addWidget(self._build_app_log_workspace())
         workspace.addWidget(self.content_stack, 1)
         page.addLayout(workspace, 1)
 
@@ -1403,6 +1464,8 @@ class WorkflowWindow(QMainWindow):
                 "API 请求",
                 "功能场景",
                 "设备安装",
+                "iOS 安装",
+                "Android 日志",
                 "参数配置",
             )
         ):
@@ -1420,7 +1483,7 @@ class WorkflowWindow(QMainWindow):
             layout.addWidget(button)
         layout.addStretch()
 
-        version = QLabel("LOCAL  ·  v2.2")
+        version = QLabel("LOCAL  ·  v2.3")
         version.setObjectName("navigationMeta")
         layout.addWidget(version)
         return navigation
@@ -1575,6 +1638,290 @@ class WorkflowWindow(QMainWindow):
             self.apk_table,
         )
         self._refresh_apk_table()
+        return page
+
+    def _build_ipa_workspace(self) -> QWidget:
+        """构建 IPA 下载、签名预检、归因和真机安装页面。"""
+        page = QWidget()
+        page.setObjectName("settingsPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(14)
+
+        device_card = QFrame()
+        device_card.setObjectName("configCard")
+        device_layout = QVBoxLayout(device_card)
+        device_layout.setContentsMargins(20, 18, 20, 18)
+        device_title = QLabel("iOS 设备")
+        device_title.setObjectName("sectionTitle")
+        device_layout.addWidget(device_title)
+        device_row = QHBoxLayout()
+        self.ios_device_combo = QComboBox()
+        self.ios_device_combo.addItem("正在检测 iOS 设备…", "")
+        device_row.addWidget(self.ios_device_combo, 1)
+        self.ios_refresh_button = QPushButton("刷新")
+        self.ios_refresh_button.setObjectName("secondaryButton")
+        self.ios_refresh_button.clicked.connect(self._refresh_ios_devices)
+        device_row.addWidget(self.ios_refresh_button)
+        device_layout.addLayout(device_row)
+        self.ios_device_hint = QLabel(
+            "请连接并解锁 iPhone，在设备上信任此电脑；Windows 需可用的 Apple Mobile Device 服务。"
+        )
+        self.ios_device_hint.setObjectName("fieldHint")
+        self.ios_device_hint.setWordWrap(True)
+        device_layout.addWidget(self.ios_device_hint)
+        top_row.addWidget(device_card, 1)
+
+        import_card = QFrame()
+        import_card.setObjectName("configCard")
+        import_layout = QVBoxLayout(import_card)
+        import_layout.setContentsMargins(20, 18, 20, 18)
+        import_title = QLabel("下载或导入 IPA")
+        import_title.setObjectName("sectionTitle")
+        import_layout.addWidget(import_title)
+        file_row = QHBoxLayout()
+        self.ipa_source_path = QLineEdit()
+        self.ipa_source_path.setReadOnly(True)
+        self.ipa_source_path.setPlaceholderText("选择本地 IPA，或在下方填写下载地址")
+        file_row.addWidget(self.ipa_source_path, 1)
+        self.ipa_choose_button = QPushButton("选择 IPA")
+        self.ipa_choose_button.setObjectName("secondaryButton")
+        self.ipa_choose_button.clicked.connect(self._choose_ipa)
+        file_row.addWidget(self.ipa_choose_button)
+        import_layout.addLayout(file_row)
+        self.ipa_download_url = QLineEdit()
+        self.ipa_download_url.setPlaceholderText("https://.../package.ipa（与本地文件二选一）")
+        import_layout.addWidget(self.ipa_download_url)
+        attribution_row = QHBoxLayout()
+        self.ipa_attribution_input = QPlainTextEdit()
+        self.ipa_attribution_input.setObjectName("longTextInput")
+        self.ipa_attribution_input.setFixedHeight(52)
+        self.ipa_attribution_input.setPlaceholderText("关联归因链接（可选）")
+        attribution_row.addWidget(self.ipa_attribution_input, 1)
+        self.ipa_cache_button = QPushButton("预检并添加")
+        self.ipa_cache_button.setObjectName("primaryButton")
+        self.ipa_cache_button.clicked.connect(self._cache_selected_ipa)
+        attribution_row.addWidget(self.ipa_cache_button)
+        import_layout.addLayout(attribution_row)
+        top_row.addWidget(import_card, 1)
+        layout.addLayout(top_row)
+
+        package_card = QFrame()
+        package_card.setObjectName("configCard")
+        package_layout = QVBoxLayout(package_card)
+        package_layout.setContentsMargins(20, 18, 20, 18)
+        package_header = QHBoxLayout()
+        package_title = QLabel("已通过预检的 IPA")
+        package_title.setObjectName("sectionTitle")
+        package_header.addWidget(package_title)
+        package_header.addStretch()
+        self.ipa_package_count = QLabel("0 个")
+        self.ipa_package_count.setObjectName("fieldHint")
+        package_header.addWidget(self.ipa_package_count)
+        package_layout.addLayout(package_header)
+
+        self.ipa_table = QTableWidget(0, 4)
+        self.ipa_table.setObjectName("apkTable")
+        self.ipa_table.setHorizontalHeaderLabels(
+            ("安装包", "签名 / 备注", "归因链接", "操作")
+        )
+        self.ipa_table.setAlternatingRowColors(True)
+        self.ipa_table.setWordWrap(False)
+        self.ipa_table.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.ipa_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.ipa_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.ipa_table.verticalHeader().setVisible(False)
+        self.ipa_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Interactive
+        )
+        self.ipa_table.horizontalHeader().resizeSection(0, 195)
+        self.ipa_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.ipa_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.Stretch
+        )
+        self.ipa_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.ipa_table.setMinimumHeight(250)
+        package_layout.addWidget(self.ipa_table, 1)
+
+        self.ipa_log = QPlainTextEdit()
+        self.ipa_log.setObjectName("terminal")
+        self.ipa_log.setReadOnly(True)
+        self.ipa_log.setMaximumHeight(115)
+        self.ipa_log.document().setMaximumBlockCount(1000)
+        self.ipa_log.setPlainText("runner@local:~$ tidevice ready\n")
+        package_layout.addWidget(self.ipa_log)
+        layout.addWidget(package_card, 1)
+
+        self.ipa_controls = (
+            self.ios_device_combo,
+            self.ios_refresh_button,
+            self.ipa_choose_button,
+            self.ipa_source_path,
+            self.ipa_download_url,
+            self.ipa_attribution_input,
+            self.ipa_cache_button,
+            self.ipa_table,
+        )
+        self._refresh_ipa_table()
+        return page
+
+    def _build_app_log_workspace(self) -> QWidget:
+        """构建 Android 设备与应用 Logcat 实时抓取页面。"""
+        page = QWidget()
+        page.setObjectName("settingsPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+
+        settings_card = QFrame()
+        settings_card.setObjectName("configCard")
+        settings_layout = QGridLayout(settings_card)
+        settings_layout.setContentsMargins(20, 18, 20, 18)
+        settings_layout.setHorizontalSpacing(12)
+        settings_layout.setVerticalSpacing(10)
+
+        title = QLabel("Android 应用日志")
+        title.setObjectName("sectionTitle")
+        settings_layout.addWidget(title, 0, 0, 1, 4)
+
+        device_label = QLabel("设备")
+        device_label.setObjectName("fieldLabel")
+        settings_layout.addWidget(device_label, 1, 0)
+        self.app_log_device_combo = QComboBox()
+        self.app_log_device_combo.addItem("正在检测 ADB 设备…", "")
+        settings_layout.addWidget(self.app_log_device_combo, 1, 1)
+        self.app_log_refresh_button = QPushButton("刷新设备")
+        self.app_log_refresh_button.setObjectName("secondaryButton")
+        self.app_log_refresh_button.clicked.connect(self._refresh_app_log_devices)
+        settings_layout.addWidget(self.app_log_refresh_button, 1, 2)
+        self.app_log_load_packages_button = QPushButton("读取应用列表")
+        self.app_log_load_packages_button.setObjectName("secondaryButton")
+        self.app_log_load_packages_button.clicked.connect(
+            self._load_app_log_packages
+        )
+        settings_layout.addWidget(self.app_log_load_packages_button, 1, 3)
+
+        package_label = QLabel("应用")
+        package_label.setObjectName("fieldLabel")
+        settings_layout.addWidget(package_label, 2, 0)
+        self.app_log_package_combo = QComboBox()
+        self.app_log_package_combo.setEditable(True)
+        self.app_log_package_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.app_log_package_combo.addItem("全部日志（不按应用过滤）", "")
+        package_line_edit = self.app_log_package_combo.lineEdit()
+        if package_line_edit is not None:
+            package_line_edit.setPlaceholderText("选择应用，或输入 com.example.app")
+        settings_layout.addWidget(self.app_log_package_combo, 2, 1, 1, 3)
+        self.app_log_device_combo.currentIndexChanged.connect(
+            self._on_app_log_device_changed
+        )
+
+        level_label = QLabel("最低级别")
+        level_label.setObjectName("fieldLabel")
+        settings_layout.addWidget(level_label, 3, 0)
+        self.app_log_level_combo = QComboBox()
+        for label, value in (
+            ("Verbose", "V"),
+            ("Debug", "D"),
+            ("Info", "I"),
+            ("Warning", "W"),
+            ("Error", "E"),
+            ("Fatal", "F"),
+        ):
+            self.app_log_level_combo.addItem(label, value)
+        self.app_log_level_combo.setCurrentIndex(2)
+        settings_layout.addWidget(self.app_log_level_combo, 3, 1)
+
+        keyword_label = QLabel("关键字")
+        keyword_label.setObjectName("fieldLabel")
+        settings_layout.addWidget(keyword_label, 3, 2)
+        self.app_log_keyword = QLineEdit()
+        self.app_log_keyword.setPlaceholderText("可选，不区分大小写")
+        settings_layout.addWidget(self.app_log_keyword, 3, 3)
+
+        output_label = QLabel("完整日志")
+        output_label.setObjectName("fieldLabel")
+        settings_layout.addWidget(output_label, 4, 0)
+        self.app_log_output_path = QLineEdit()
+        self.app_log_output_path.setPlaceholderText("可选：抓取时同步保存完整 .log 文件")
+        settings_layout.addWidget(self.app_log_output_path, 4, 1, 1, 2)
+        self.app_log_choose_output_button = QPushButton("选择文件")
+        self.app_log_choose_output_button.setObjectName("secondaryButton")
+        self.app_log_choose_output_button.clicked.connect(
+            self._choose_app_log_output
+        )
+        settings_layout.addWidget(self.app_log_choose_output_button, 4, 3)
+
+        self.app_log_clear_device = QCheckBox("开始前清空手机 Logcat 缓冲区")
+        self.app_log_clear_device.setToolTip(
+            "会删除设备当前 Logcat 历史；默认不勾选。"
+        )
+        settings_layout.addWidget(self.app_log_clear_device, 5, 1, 1, 2)
+        settings_layout.setColumnStretch(1, 1)
+        settings_layout.setColumnStretch(3, 1)
+        layout.addWidget(settings_card)
+
+        output_card = QFrame()
+        output_card.setObjectName("configCard")
+        output_layout = QVBoxLayout(output_card)
+        output_layout.setContentsMargins(20, 18, 20, 18)
+        output_header = QHBoxLayout()
+        output_title = QLabel("实时日志")
+        output_title.setObjectName("sectionTitle")
+        output_header.addWidget(output_title)
+        self.app_log_state = QLabel("等待开始")
+        self.app_log_state.setObjectName("fieldHint")
+        output_header.addWidget(self.app_log_state)
+        output_header.addStretch()
+        self.app_log_clear_button = QPushButton("清空显示")
+        self.app_log_clear_button.setObjectName("secondaryButton")
+        self.app_log_clear_button.clicked.connect(self._clear_app_log_output)
+        output_header.addWidget(self.app_log_clear_button)
+        self.app_log_export_button = QPushButton("导出当前显示")
+        self.app_log_export_button.setObjectName("secondaryButton")
+        self.app_log_export_button.clicked.connect(self._export_app_log_output)
+        output_header.addWidget(self.app_log_export_button)
+        self.app_log_start_button = QPushButton("开始抓取")
+        self.app_log_start_button.setObjectName("primaryButton")
+        self.app_log_start_button.clicked.connect(self._start_app_log_capture)
+        output_header.addWidget(self.app_log_start_button)
+        self.app_log_stop_button = QPushButton("停止")
+        self.app_log_stop_button.setObjectName("stopButton")
+        self.app_log_stop_button.setEnabled(False)
+        self.app_log_stop_button.clicked.connect(self._stop_app_log_capture)
+        output_header.addWidget(self.app_log_stop_button)
+        output_layout.addLayout(output_header)
+
+        self.app_log_output = QPlainTextEdit()
+        self.app_log_output.setObjectName("terminal")
+        self.app_log_output.setReadOnly(True)
+        self.app_log_output.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.app_log_output.document().setMaximumBlockCount(20_000)
+        self.app_log_output.setPlainText(
+            "runner@local:~$ adb logcat ready\n"
+            "# 选择设备后可读取第三方应用列表；留空应用将抓取整机日志。\n"
+        )
+        output_layout.addWidget(self.app_log_output, 1)
+        layout.addWidget(output_card, 1)
+
+        self.app_log_capture_controls = (
+            self.app_log_device_combo,
+            self.app_log_refresh_button,
+            self.app_log_load_packages_button,
+            self.app_log_package_combo,
+            self.app_log_level_combo,
+            self.app_log_keyword,
+            self.app_log_output_path,
+            self.app_log_choose_output_button,
+            self.app_log_clear_device,
+        )
         return page
 
     def _build_settings_panel(self) -> QFrame:
@@ -3990,7 +4337,7 @@ class WorkflowWindow(QMainWindow):
         *,
         quiet: bool = False,
     ) -> None:
-        if self._is_apk_busy():
+        if self._is_apk_busy() or self._is_ios_busy():
             return
         self.apk_action_description = description
         self.apk_action_quiet = quiet
@@ -4037,7 +4384,10 @@ class WorkflowWindow(QMainWindow):
             self._set_apk_refreshing(False)
         else:
             self._set_apk_busy(False)
-        self._set_status("●  READY", "#228653")
+        if self._is_app_log_running():
+            self._set_status("●  LOGCAT RUNNING", "#228653")
+        else:
+            self._set_status("●  READY", "#228653")
         if pending is not None:
             description, action, on_success = pending
             QTimer.singleShot(
@@ -4059,6 +4409,696 @@ class WorkflowWindow(QMainWindow):
 
     def _is_apk_busy(self) -> bool:
         return bool(self.apk_action_thread and self.apk_action_thread.isRunning())
+
+    # iOS 设备、IPA 下载、签名预检和归因安装
+    def _append_ipa_log(self, text: str) -> None:
+        cursor = self.ipa_log.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(text.rstrip() + "\n")
+        self.ipa_log.setTextCursor(cursor)
+        self.ipa_log.ensureCursorVisible()
+
+    def _choose_ipa(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self, "选择 iOS 安装包", "", "iOS 安装包 (*.ipa)"
+        )
+        if selected:
+            self.ipa_source_path.setText(selected)
+            self.ipa_download_url.clear()
+
+    def _cache_selected_ipa(self) -> None:
+        source = self.ipa_source_path.text().strip()
+        download_url = self.ipa_download_url.text().strip()
+        if bool(source) == bool(download_url):
+            QMessageBox.information(
+                self,
+                "选择安装包",
+                "请选择一个本地 IPA，或填写一个 IPA 下载地址（两者只能选一个）。",
+            )
+            return
+        attribution = self.ipa_attribution_input.toPlainText().strip()
+        if source:
+            description = "预检并缓存 IPA"
+            action = lambda: cache_ipa(source, attribution)
+        else:
+            description = "下载、预检并缓存 IPA"
+            action = lambda: download_and_cache_ipa(download_url, attribution)
+        self._append_ipa_log(f"[ipa] {description}…")
+        self._run_ios_action(description, action, self._on_ipa_cached)
+
+    def _on_ipa_cached(self, value: object) -> None:
+        self.cached_ipas = load_cached_ipas()
+        self._refresh_ipa_table()
+        self.ipa_source_path.clear()
+        self.ipa_download_url.clear()
+        self.ipa_attribution_input.clear()
+        package = getattr(value, "package", None)
+        signature = getattr(value, "signature", None)
+        prefix = "相同 MD5 已存在，已复用" if getattr(value, "duplicate", False) else "已缓存"
+        self._append_ipa_log(
+            f"[signature] {prefix}：{getattr(package, 'name', 'IPA')} · "
+            f"{getattr(signature, 'summary', '预检通过')}"
+        )
+
+    def _refresh_ipa_table(self) -> None:
+        if not hasattr(self, "ipa_table"):
+            return
+        self.ipa_table.setRowCount(len(self.cached_ipas))
+        self.ipa_package_count.setText(f"{len(self.cached_ipas)} 个")
+        for row, package in enumerate(self.cached_ipas):
+            name_item = QTableWidgetItem(package.name)
+            name_item.setToolTip(package.path)
+            name_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            self.ipa_table.setItem(row, 0, name_item)
+            expiration = package.expires_at[:10] if package.expires_at else "未知期限"
+            detail = f"{package.bundle_id} · {package.profile_name} · {expiration}"
+            if package.note:
+                detail += f" · {package.note}"
+            detail_item = QTableWidgetItem(detail)
+            detail_item.setToolTip(
+                f"文件：{package.path}\nMD5：{package.md5}\nBundle ID：{package.bundle_id}"
+                f"\n描述文件：{package.profile_name}\n到期：{package.expires_at}"
+                + (f"\n备注：{package.note}" if package.note else "")
+            )
+            detail_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            self.ipa_table.setItem(row, 1, detail_item)
+            attribution_item = QTableWidgetItem(package.attribution or "—")
+            attribution_item.setToolTip(package.attribution)
+            attribution_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            self.ipa_table.setItem(row, 2, attribution_item)
+
+            actions = QWidget()
+            action_layout = QHBoxLayout(actions)
+            action_layout.setContentsMargins(4, 3, 4, 3)
+            action_layout.setSpacing(5)
+            specs = (
+                ("安装", lambda pid=package.package_id: self._install_cached_ipa(pid, False), True),
+                ("归因", lambda pid=package.package_id: self._attribute_cached_ipa(pid), bool(package.attribution)),
+                ("归因+安装", lambda pid=package.package_id: self._install_cached_ipa(pid, True), bool(package.attribution)),
+                ("编辑", lambda pid=package.package_id: self._edit_cached_ipa(pid), True),
+                ("移除", lambda pid=package.package_id: self._remove_cached_ipa(pid), True),
+            )
+            for label, callback, enabled in specs:
+                button = QPushButton(label)
+                button.setObjectName(
+                    "primaryButton" if label == "归因+安装" else "secondaryButton"
+                )
+                button.setEnabled(enabled)
+                button.clicked.connect(lambda _checked=False, fn=callback: fn())
+                action_layout.addWidget(button)
+            self.ipa_table.setCellWidget(row, 3, actions)
+            self.ipa_table.setRowHeight(row, 54)
+
+    def _cached_ipa_by_id(self, package_id: str) -> Optional[CachedIpa]:
+        return next(
+            (item for item in self.cached_ipas if item.package_id == package_id),
+            None,
+        )
+
+    def _edit_cached_ipa(self, package_id: str) -> None:
+        package = self._cached_ipa_by_id(package_id)
+        if package is None:
+            QMessageBox.critical(self, "编辑失败", "未找到缓存 IPA。")
+            return
+        dialog = CachedApkDialog(package, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            name, attribution, note = dialog.values()
+            update_cached_ipa(
+                package.package_id,
+                name=name,
+                attribution=attribution,
+                note=note,
+            )
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "保存失败", str(error))
+            return
+        self.cached_ipas = load_cached_ipas()
+        self._refresh_ipa_table()
+        self._append_ipa_log(f"[cache] 已更新：{name or package.name}")
+
+    def _remove_cached_ipa(self, package_id: str) -> None:
+        package = self._cached_ipa_by_id(package_id)
+        if package is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "移除缓存记录",
+            f"确定从列表移除「{package.name}」？\n\n缓存 IPA 文件将保留。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            remove_cached_ipa(package.package_id)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "移除失败", str(error))
+            return
+        self.cached_ipas = load_cached_ipas()
+        self._refresh_ipa_table()
+        self._append_ipa_log(f"[cache] 已移除记录：{package.name}（文件保留）")
+
+    def _selected_ios_udid(self) -> str:
+        udid = str(self.ios_device_combo.currentData() or "").strip()
+        if not udid or udid not in self.ios_devices:
+            raise ValueError("请先连接并选择 iOS 设备")
+        return udid
+
+    @Slot()
+    def _refresh_ios_devices(self) -> None:
+        if self.current_section != 6 or self._is_ios_busy():
+            return
+        current_udid = str(self.ios_device_combo.currentData() or "")
+        self._run_ios_action(
+            "检测 iOS 设备",
+            list_ios_devices,
+            lambda value: self._on_ios_devices_refreshed(value, current_udid),
+            quiet=True,
+        )
+
+    def _on_ios_devices_refreshed(self, value: object, preferred_udid: str) -> None:
+        devices = [item for item in value if isinstance(item, IosDevice)]
+        self.ios_devices = {device.udid: device for device in devices}
+        self.ios_device_combo.clear()
+        if not devices:
+            self.ios_device_combo.addItem("未检测到设备", "")
+            self.ios_device_hint.setText(
+                "未检测到设备，请检查数据线、设备信任状态和 Apple Mobile Device 服务。"
+            )
+        else:
+            for device in devices:
+                details = " · ".join(
+                    value
+                    for value in (device.product_version, device.connection_type)
+                    if value
+                )
+                suffix = f" · {details}" if details else ""
+                self.ios_device_combo.addItem(
+                    f"{device.name or 'iPhone'} · {device.udid}{suffix}", device.udid
+                )
+            preferred_index = self.ios_device_combo.findData(preferred_udid)
+            if preferred_index >= 0:
+                self.ios_device_combo.setCurrentIndex(preferred_index)
+            self.ios_device_hint.setText(
+                f"tidevice 已发现 {len(devices)} 台设备；安装前会再次校验 UDID 和签名期限。"
+            )
+        self.last_ios_device_error = ""
+
+    def _install_cached_ipa(self, package_id: str, with_attribution: bool) -> None:
+        package = self._cached_ipa_by_id(package_id)
+        if package is None:
+            QMessageBox.critical(self, "安装失败", "未找到缓存 IPA。")
+            return
+        try:
+            udid = self._selected_ios_udid()
+        except ValueError as error:
+            QMessageBox.information(self, "选择设备", str(error))
+            return
+        signature = verify_ipa_signature(package.path, udid)
+        if not signature.valid:
+            QMessageBox.critical(
+                self,
+                "签名预检失败",
+                "该 IPA 不能安装到当前设备：\n\n" + "\n".join(signature.errors),
+            )
+            return
+        if with_attribution and not package.attribution:
+            QMessageBox.information(self, "缺少归因链接", "请先编辑并填写归因链接。")
+            return
+        if with_attribution:
+            description = f"归因并安装 {package.name}"
+            action = lambda: attribute_and_install_ipa(
+                udid, package.attribution, package.path
+            )
+        else:
+            description = f"安装 {package.name}"
+            action = lambda: install_ipa(udid, package.path)
+        self._append_ipa_log(
+            f"[tidevice:{udid}] 签名预检通过；{description}…"
+        )
+        self._run_ios_action(
+            description,
+            action,
+            lambda value: self._on_ipa_install_result(value, package, udid),
+        )
+
+    def _attribute_cached_ipa(self, package_id: str) -> None:
+        package = self._cached_ipa_by_id(package_id)
+        if package is None:
+            return
+        try:
+            udid = self._selected_ios_udid()
+        except ValueError as error:
+            QMessageBox.information(self, "选择设备", str(error))
+            return
+        if not package.attribution:
+            QMessageBox.information(self, "缺少归因链接", "请先编辑并填写归因链接。")
+            return
+        self._run_ios_action(
+            f"打开 {package.name} 的归因链接",
+            lambda: open_ios_attribution_url(udid, package.attribution),
+            lambda _value: self._append_ipa_log(
+                f"[tidevice:{udid}] 已在 Safari 打开归因链接"
+            ),
+        )
+
+    def _on_ipa_install_result(
+        self, value: object, package: CachedIpa, udid: str
+    ) -> None:
+        if not isinstance(value, IpaInstallResult):
+            raise TypeError("tidevice 返回了无法识别的安装结果")
+        self._append_ipa_log(
+            f"[tidevice:{udid}] 安装完成：{package.name}（{value.bundle_id}）"
+        )
+
+    def _run_ios_action(
+        self,
+        description: str,
+        action: Callable[[], object],
+        on_success: Callable[[object], None],
+        *,
+        quiet: bool = False,
+    ) -> None:
+        if self._is_ios_busy() or self._is_apk_busy():
+            return
+        self.ios_action_description = description
+        self.ios_action_quiet = quiet
+        if quiet:
+            self._set_ios_refreshing(True)
+        else:
+            self._set_ios_busy(True)
+        self._set_status("●  IOS RUNNING", "#228653")
+        self.ios_action_thread = QThread(self)
+        self.ios_action_worker = ApkActionWorker(action)
+        self.ios_action_worker.moveToThread(self.ios_action_thread)
+        self.ios_action_thread.started.connect(self.ios_action_worker.run)
+        self.ios_action_worker.succeeded.connect(on_success)
+        self.ios_action_worker.failed.connect(self._on_ios_action_failed)
+        self.ios_action_worker.done.connect(self.ios_action_thread.quit)
+        self.ios_action_worker.done.connect(self.ios_action_worker.deleteLater)
+        self.ios_action_thread.finished.connect(self._on_ios_action_finished)
+        self.ios_action_thread.finished.connect(self.ios_action_thread.deleteLater)
+        self.ios_action_thread.start()
+
+    @Slot(str)
+    def _on_ios_action_failed(self, message: str) -> None:
+        if self.ios_action_quiet:
+            self.ios_device_combo.clear()
+            self.ios_device_combo.addItem("tidevice 不可用", "")
+            self.ios_device_hint.setText(message)
+            if message != self.last_ios_device_error:
+                self._append_ipa_log(f"[tidevice] 设备检测失败：{message}")
+                self.last_ios_device_error = message
+        else:
+            self._append_ipa_log(
+                f"[tidevice] {self.ios_action_description}失败：{message}"
+            )
+            QMessageBox.critical(self, "iOS 操作失败", message)
+
+    @Slot()
+    def _on_ios_action_finished(self) -> None:
+        was_quiet = self.ios_action_quiet
+        self.ios_action_worker = None
+        self.ios_action_thread = None
+        if was_quiet:
+            self._set_ios_refreshing(False)
+        else:
+            self._set_ios_busy(False)
+        if self._is_app_log_running():
+            self._set_status("●  LOGCAT RUNNING", "#228653")
+        else:
+            self._set_status("●  READY", "#228653")
+
+    def _set_ios_busy(self, busy: bool) -> None:
+        for control in self.ipa_controls:
+            control.setEnabled(not busy)
+        for button in self.navigation_buttons:
+            button.setEnabled(not busy)
+
+    def _set_ios_refreshing(self, refreshing: bool) -> None:
+        self.ios_device_combo.setEnabled(not refreshing)
+        self.ios_refresh_button.setEnabled(not refreshing)
+        self.ipa_cache_button.setEnabled(not refreshing)
+        self.ipa_table.setEnabled(not refreshing)
+
+    def _is_ios_busy(self) -> bool:
+        return bool(self.ios_action_thread and self.ios_action_thread.isRunning())
+
+    # Android 应用日志
+    def _append_app_log_output(self, text: str) -> None:
+        cursor = self.app_log_output.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(text)
+        self.app_log_output.setTextCursor(cursor)
+        self.app_log_output.ensureCursorVisible()
+
+    def _append_app_log_message(self, text: str) -> None:
+        self._append_app_log_output(text.rstrip() + "\n")
+
+    def _clear_app_log_output(self) -> None:
+        self.app_log_output.clear()
+
+    def _choose_app_log_output(self) -> None:
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存完整 Android 日志",
+            "android-logcat.log",
+            "日志文件 (*.log *.txt);;所有文件 (*)",
+        )
+        if selected:
+            self.app_log_output_path.setText(selected)
+
+    def _export_app_log_output(self) -> None:
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出当前显示的日志",
+            "android-logcat-visible.log",
+            "日志文件 (*.log *.txt);;所有文件 (*)",
+        )
+        if not selected:
+            return
+        try:
+            Path(selected).write_text(
+                self.app_log_output.toPlainText(),
+                encoding="utf-8",
+            )
+        except OSError as error:
+            QMessageBox.critical(self, "导出失败", str(error))
+            return
+        self.app_log_state.setText(f"已导出：{selected}")
+
+    def _selected_app_log_serial(self) -> str:
+        serial = str(self.app_log_device_combo.currentData() or "").strip()
+        device = self.app_log_devices.get(serial)
+        if not serial or device is None:
+            raise ValueError("请先连接并选择 Android 设备")
+        if device.status != "device":
+            raise ValueError(
+                f"设备 {serial} 当前状态为 {device.status}，请先完成 USB 调试授权"
+            )
+        return serial
+
+    def _selected_app_log_package(self) -> str:
+        text = self.app_log_package_combo.currentText().strip()
+        if text == "全部日志（不按应用过滤）":
+            return ""
+        return text
+
+    @Slot()
+    def _on_app_log_device_changed(self) -> None:
+        """设备切换后丢弃旧设备的应用列表，避免抓错包名。"""
+        self.app_log_package_combo.clear()
+        self.app_log_package_combo.addItem("全部日志（不按应用过滤）", "")
+        if (
+            self.app_log_devices
+            and not self._is_app_log_query_busy()
+            and not self._is_app_log_running()
+        ):
+            self.app_log_state.setText("设备已切换，可重新读取应用列表")
+
+    def _run_app_log_query(
+        self,
+        description: str,
+        action: Callable[[], object],
+        on_success: Callable[[object], None],
+        *,
+        quiet: bool = False,
+    ) -> None:
+        if self._is_app_log_query_busy() or self._is_app_log_running():
+            return
+        self.app_log_query_description = description
+        self.app_log_query_quiet = quiet
+        self._set_app_log_query_busy(True)
+        self.app_log_query_thread = QThread(self)
+        self.app_log_query_worker = ApkActionWorker(action)
+        self.app_log_query_worker.moveToThread(self.app_log_query_thread)
+        self.app_log_query_thread.started.connect(self.app_log_query_worker.run)
+        self.app_log_query_worker.succeeded.connect(on_success)
+        self.app_log_query_worker.failed.connect(self._on_app_log_query_failed)
+        self.app_log_query_worker.done.connect(self.app_log_query_thread.quit)
+        self.app_log_query_worker.done.connect(
+            self.app_log_query_worker.deleteLater
+        )
+        self.app_log_query_thread.finished.connect(
+            self._on_app_log_query_finished
+        )
+        self.app_log_query_thread.finished.connect(
+            self.app_log_query_thread.deleteLater
+        )
+        self.app_log_query_thread.start()
+
+    @Slot()
+    def _refresh_app_log_devices(self) -> None:
+        if (
+            self.current_section != 7
+            or self._is_app_log_query_busy()
+            or self._is_app_log_running()
+        ):
+            return
+        current_serial = str(self.app_log_device_combo.currentData() or "")
+        self.app_log_state.setText("正在检测设备…")
+        self._run_app_log_query(
+            "检测 Android 设备",
+            list_android_devices,
+            lambda value: self._on_app_log_devices_refreshed(
+                value,
+                current_serial,
+            ),
+            quiet=True,
+        )
+
+    def _on_app_log_devices_refreshed(
+        self,
+        value: object,
+        preferred_serial: str,
+    ) -> None:
+        devices = [item for item in value if isinstance(item, AndroidDevice)]
+        self.app_log_devices = {device.serial: device for device in devices}
+        self.app_log_device_combo.clear()
+        if not devices:
+            self.app_log_device_combo.addItem("未检测到设备", "")
+            self.app_log_state.setText("未检测到设备，请检查 USB 调试设置")
+            return
+        for device in devices:
+            detail = f" · {device.detail}" if device.detail else ""
+            self.app_log_device_combo.addItem(
+                f"{device.serial} · {device.status}{detail}",
+                device.serial,
+            )
+        preferred_index = self.app_log_device_combo.findData(preferred_serial)
+        if preferred_index < 0:
+            preferred_index = next(
+                (
+                    index
+                    for index, device in enumerate(devices)
+                    if device.status == "device"
+                ),
+                0,
+            )
+        self.app_log_device_combo.setCurrentIndex(preferred_index)
+        ready_count = sum(device.status == "device" for device in devices)
+        self.app_log_state.setText(
+            f"已发现 {len(devices)} 台设备，{ready_count} 台可抓取日志"
+        )
+
+    @Slot()
+    def _load_app_log_packages(self) -> None:
+        try:
+            serial = self._selected_app_log_serial()
+        except ValueError as error:
+            QMessageBox.information(self, "选择设备", str(error))
+            return
+        current_package = self._selected_app_log_package()
+        self.app_log_state.setText("正在读取第三方应用列表…")
+        self._run_app_log_query(
+            "读取应用列表",
+            lambda: list_installed_packages(serial),
+            lambda value: self._on_app_log_packages_loaded(value, current_package),
+        )
+
+    def _on_app_log_packages_loaded(
+        self,
+        value: object,
+        preferred_package: str,
+    ) -> None:
+        packages = [item for item in value if isinstance(item, str)]
+        self.app_log_package_combo.clear()
+        self.app_log_package_combo.addItem("全部日志（不按应用过滤）", "")
+        for package_name in packages:
+            self.app_log_package_combo.addItem(package_name, package_name)
+        if preferred_package:
+            index = self.app_log_package_combo.findData(preferred_package)
+            if index >= 0:
+                self.app_log_package_combo.setCurrentIndex(index)
+            else:
+                self.app_log_package_combo.setCurrentText(preferred_package)
+        self.app_log_state.setText(f"已读取 {len(packages)} 个第三方应用")
+
+    @Slot(str)
+    def _on_app_log_query_failed(self, message: str) -> None:
+        self.app_log_state.setText(f"{self.app_log_query_description}失败")
+        self._append_app_log_message(
+            f"[adb] {self.app_log_query_description}失败：{message}"
+        )
+        if self.app_log_query_description == "检测 Android 设备":
+            self.app_log_devices = {}
+            self.app_log_device_combo.clear()
+            self.app_log_device_combo.addItem("ADB 不可用", "")
+        if not self.app_log_query_quiet:
+            QMessageBox.critical(self, "ADB 操作失败", message)
+
+    @Slot()
+    def _on_app_log_query_finished(self) -> None:
+        self.app_log_query_worker = None
+        self.app_log_query_thread = None
+        self._set_app_log_query_busy(False)
+
+    def _set_app_log_query_busy(self, busy: bool) -> None:
+        self.app_log_device_combo.setEnabled(not busy)
+        self.app_log_refresh_button.setEnabled(not busy)
+        self.app_log_load_packages_button.setEnabled(not busy)
+        self.app_log_package_combo.setEnabled(not busy)
+        self.app_log_start_button.setEnabled(not busy)
+
+    def _is_app_log_query_busy(self) -> bool:
+        return self.app_log_query_thread is not None
+
+    @Slot()
+    def _start_app_log_capture(self) -> None:
+        if self._is_app_log_running() or self._is_app_log_query_busy():
+            return
+        try:
+            serial = self._selected_app_log_serial()
+            config = LogcatCaptureConfig(
+                serial=serial,
+                package_name=self._selected_app_log_package(),
+                minimum_level=str(self.app_log_level_combo.currentData() or "I"),
+                keyword=self.app_log_keyword.text(),
+                clear_before_start=self.app_log_clear_device.isChecked(),
+                output_path=self.app_log_output_path.text(),
+            ).validated()
+        except ValueError as error:
+            QMessageBox.information(self, "日志参数", str(error))
+            return
+
+        output_file = (
+            Path(config.output_path).expanduser() if config.output_path else None
+        )
+        if output_file is not None:
+            if output_file.exists() and not output_file.is_file():
+                QMessageBox.information(self, "日志文件", "输出路径不是普通文件")
+                return
+            if not output_file.parent.is_dir():
+                QMessageBox.information(self, "日志文件", "输出文件夹不存在")
+                return
+            if output_file.exists():
+                answer = QMessageBox.question(
+                    self,
+                    "覆盖日志文件",
+                    f"{output_file}\n已存在，是否覆盖？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+
+        target = config.package_name or "全部进程"
+        self._append_app_log_message(
+            f"\n[logcat:{serial}] 开始抓取 · {target} · {config.minimum_level}+"
+        )
+        if config.keyword:
+            self._append_app_log_message(f"[filter] 关键字：{config.keyword}")
+        if config.output_path:
+            self._append_app_log_message(f"[file] 完整日志：{config.output_path}")
+        self.app_log_stop_requested = False
+        self.app_log_capture_failed = False
+        if config.clear_before_start:
+            self.app_log_clear_device.setChecked(False)
+        self._set_app_log_capture_running(True)
+        self._set_status("●  LOGCAT RUNNING", "#228653")
+        self.app_log_thread = QThread(self)
+        self.app_log_worker = AndroidLogWorker(config)
+        self.app_log_worker.moveToThread(self.app_log_thread)
+        self.app_log_thread.started.connect(self.app_log_worker.run)
+        self.app_log_worker.output.connect(self._append_app_log_output)
+        self.app_log_worker.failed.connect(self._on_app_log_capture_failed)
+        self.app_log_worker.done.connect(self.app_log_thread.quit)
+        self.app_log_worker.done.connect(self.app_log_worker.deleteLater)
+        self.app_log_thread.finished.connect(self._on_app_log_capture_finished)
+        self.app_log_thread.finished.connect(self.app_log_thread.deleteLater)
+        self.app_log_thread.start()
+
+    @Slot()
+    def _stop_app_log_capture(self) -> None:
+        if self.app_log_worker is None or not self._is_app_log_running():
+            return
+        self.app_log_stop_requested = True
+        self.app_log_state.setText("正在停止日志抓取…")
+        self.app_log_stop_button.setEnabled(False)
+        self.app_log_worker.request_stop()
+
+    @Slot(str)
+    def _on_app_log_capture_failed(self, message: str) -> None:
+        self.app_log_capture_failed = True
+        self._append_app_log_message(f"[logcat:error] {message}")
+        self.app_log_state.setText("抓取失败")
+        self._set_status("●  LOGCAT FAILED", "#c43d47")
+        if not self.close_after_log_stop:
+            QMessageBox.critical(self, "日志抓取失败", message)
+
+    @Slot()
+    def _on_app_log_capture_finished(self) -> None:
+        was_stopped = self.app_log_stop_requested
+        failed = self.app_log_capture_failed
+        self.app_log_worker = None
+        self.app_log_thread = None
+        self.app_log_stop_requested = False
+        self._set_app_log_capture_running(False)
+        if was_stopped:
+            self._append_app_log_message("[logcat] 日志抓取已停止")
+            self.app_log_state.setText("已停止")
+        elif failed:
+            self.app_log_state.setText("抓取失败")
+        else:
+            self._append_app_log_message("[logcat] ADB 日志流已结束")
+            self.app_log_state.setText("日志流已结束")
+        if (
+            not failed
+            and not self._is_running()
+            and not self._is_apk_busy()
+            and not self._is_ios_busy()
+        ):
+            self._set_status("●  READY", "#228653")
+        if self.close_after_log_stop:
+            self.close_after_log_stop = False
+        self._finish_deferred_close_if_idle()
+
+    def _set_app_log_capture_running(self, running: bool) -> None:
+        for control in self.app_log_capture_controls:
+            control.setEnabled(not running)
+        self.app_log_start_button.setEnabled(not running)
+        self.app_log_stop_button.setEnabled(running)
+        self.app_log_state.setText("正在抓取…" if running else "已停止")
+
+    def _is_app_log_running(self) -> bool:
+        return self.app_log_thread is not None
+
+    def _finish_deferred_close_if_idle(self) -> None:
+        if (
+            self.exit_after_workers_stop
+            and not self._is_running()
+            and not self._is_app_log_running()
+        ):
+            self.exit_after_workers_stop = False
+            QTimer.singleShot(0, self.close)
 
     # 参数维护
     def _switch_section(self, index: int) -> None:
@@ -4093,6 +5133,15 @@ class WorkflowWindow(QMainWindow):
             self.content_stack.setCurrentIndex(5)
             self.eyebrow.setText("$ android / attribution-install")
             QTimer.singleShot(0, self._refresh_android_devices)
+        elif index == 6:
+            self.content_stack.setCurrentIndex(6)
+            self.eyebrow.setText("$ ios / signature-attribution-install")
+            QTimer.singleShot(0, self._refresh_ios_devices)
+        elif index == 7:
+            self.content_stack.setCurrentIndex(7)
+            self.eyebrow.setText("$ android / logcat")
+            if not self.app_log_devices:
+                QTimer.singleShot(0, self._refresh_app_log_devices)
         else:
             self.content_stack.setCurrentIndex(1)
             self.eyebrow.setText("$ settings / parameters")
@@ -4452,6 +5501,13 @@ class WorkflowWindow(QMainWindow):
     @Slot()
     def _start(self) -> None:
         """在工作线程中启动当前任务。"""
+        if self._is_app_log_running():
+            QMessageBox.information(
+                self,
+                "日志正在抓取",
+                "请先在“Android 日志”页停止抓取，再启动数据任务。",
+            )
+            return
         try:
             workflow, parameters, command = self._parameters()
         except ValueError as error:
@@ -4539,7 +5595,7 @@ class WorkflowWindow(QMainWindow):
         self._set_running(False)
         if self.close_after_stop:
             self.close_after_stop = False
-            self.close()
+        self._finish_deferred_close_if_idle()
 
     @Slot(str)
     def _append_log(self, text: str) -> None:
@@ -4595,11 +5651,15 @@ class WorkflowWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """任务运行时确认停止后再关闭窗口。"""
-        if self._is_apk_busy():
+        if (
+            self._is_apk_busy()
+            or self._is_ios_busy()
+            or self._is_app_log_query_busy()
+        ):
             QMessageBox.information(
                 self,
-                "ADB 操作进行中",
-                "当前安装或设备操作结束后才能退出。",
+                "设备操作进行中",
+                "当前安装、设备检测或应用列表读取结束后才能退出。",
             )
             event.ignore()
             return
@@ -4611,19 +5671,32 @@ class WorkflowWindow(QMainWindow):
             )
             event.ignore()
             return
-        if self._is_running():
+        workflow_running = self._is_running()
+        log_running = self._is_app_log_running()
+        if workflow_running or log_running:
+            if workflow_running and log_running:
+                prompt = "任务和日志抓取仍在运行。停止它们并退出？"
+            elif log_running:
+                prompt = "手机日志仍在抓取。停止抓取并退出？"
+            else:
+                prompt = "任务仍在运行。停止任务并退出？"
             answer = QMessageBox.question(
                 self,
                 "退出",
-                "任务仍在运行。停止任务并退出？",
+                prompt,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
-            self.close_after_stop = True
-            self._stop()
+            self.exit_after_workers_stop = True
+            if workflow_running:
+                self.close_after_stop = True
+                self._stop()
+            if log_running:
+                self.close_after_log_stop = True
+                self._stop_app_log_capture()
             event.ignore()
             return
         event.accept()

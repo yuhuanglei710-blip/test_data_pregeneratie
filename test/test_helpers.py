@@ -3,24 +3,34 @@
 import base64
 import io
 import json
+import plistlib
+import subprocess
 import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import ANY, Mock, call, patch
 
 import jwt
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 from base import (
     account_batch,
     add_money,
+    android_log,
     apk_manager,
     api_request,
     channel_source,
     database_config,
     feature_scenario,
+    ipa_manager,
     sql_data,
     spin,
     tournment_test,
@@ -177,6 +187,492 @@ class ApkManagerTests(unittest.TestCase):
         arguments = run_adb.call_args.args[0]
         self.assertEqual(arguments, ["-s", "device-1", "shell"])
         self.assertIn(url, run_adb.call_args.kwargs["input_text"])
+
+
+class AndroidLogTests(unittest.TestCase):
+    def test_lists_only_valid_unique_user_packages(self):
+        output = (
+            "package:com.example.beta\n"
+            "package:com.example.alpha\n"
+            "package:invalid\n"
+            "package:com.example.alpha\n"
+        )
+        with patch.object(android_log, "_run_adb", return_value=output) as run_adb:
+            packages = android_log.list_installed_packages("device-1")
+
+        self.assertEqual(
+            packages,
+            ["com.example.alpha", "com.example.beta"],
+        )
+        run_adb.assert_called_once_with(
+            ["-s", "device-1", "shell", "pm", "list", "packages", "-3"],
+            timeout=30,
+        )
+
+    def test_resolves_running_application_pid_without_using_shell(self):
+        with patch.object(android_log, "_run_adb", return_value="4321\n") as run_adb:
+            pid = android_log.resolve_application_pid(
+                "device-1",
+                "com.example.app",
+            )
+
+        self.assertEqual(pid, 4321)
+        run_adb.assert_called_once_with(
+            ["-s", "device-1", "shell", "pidof", "com.example.app"],
+            timeout=15,
+        )
+
+    def test_reports_when_selected_application_is_not_running(self):
+        with patch.object(
+            android_log,
+            "_run_adb",
+            side_effect=apk_manager.AdbCommandError("not found"),
+        ):
+            with self.assertRaisesRegex(ValueError, "未运行"):
+                android_log.resolve_application_pid(
+                    "device-1",
+                    "com.example.app",
+                )
+
+    def test_builds_logcat_arguments_with_pid_and_level(self):
+        arguments = android_log.build_logcat_arguments(
+            "device-1",
+            "w",
+            pid=4321,
+        )
+
+        self.assertEqual(
+            arguments,
+            [
+                "-s",
+                "device-1",
+                "logcat",
+                "-v",
+                "threadtime",
+                "--pid=4321",
+                "*:W",
+            ],
+        )
+
+    def test_streams_filtered_display_and_writes_complete_log(self):
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.stdout = io.StringIO("Alpha first\nbeta second\n")
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+            def terminate(self):
+                return None
+
+            def kill(self):
+                return None
+
+        process = FakeProcess()
+        popen_factory = Mock(return_value=process)
+        displayed: list[str] = []
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            android_log,
+            "adb_executable",
+            return_value="adb",
+        ):
+            output_path = Path(temp_dir) / "capture.log"
+            capture = android_log.AndroidLogCapture(
+                android_log.LogcatCaptureConfig(
+                    serial="device-1",
+                    minimum_level="D",
+                    keyword="BETA",
+                    output_path=str(output_path),
+                ),
+                displayed.append,
+                popen_factory=popen_factory,
+            )
+
+            capture.run()
+
+            complete_output = output_path.read_text(encoding="utf-8")
+
+        self.assertEqual("".join(displayed), "beta second\n")
+        self.assertEqual(complete_output, "Alpha first\nbeta second\n")
+        command = popen_factory.call_args.args[0]
+        self.assertEqual(
+            command,
+            ["adb", "-s", "device-1", "logcat", "-v", "threadtime", "*:D"],
+        )
+        self.assertNotIn("shell", popen_factory.call_args.kwargs)
+
+    def test_stop_request_terminates_running_logcat_process(self):
+        process = Mock()
+        process.poll.return_value = None
+        capture = android_log.AndroidLogCapture(
+            android_log.LogcatCaptureConfig(serial="device-1"),
+            lambda _text: None,
+        )
+        capture._process = process
+
+        capture.request_stop()
+
+        self.assertTrue(capture.stop_event.is_set())
+        self.assertTrue(capture.cancel_requested.is_set())
+        process.terminate.assert_called_once_with()
+
+    def test_does_not_clear_history_when_selected_app_is_not_running(self):
+        capture = android_log.AndroidLogCapture(
+            android_log.LogcatCaptureConfig(
+                serial="device-1",
+                package_name="com.example.app",
+                clear_before_start=True,
+            ),
+            lambda _text: None,
+        )
+        with patch.object(
+            android_log,
+            "resolve_application_pid",
+            side_effect=ValueError("应用未运行"),
+        ), patch.object(android_log, "clear_logcat") as clear_logcat:
+            with self.assertRaisesRegex(ValueError, "未运行"):
+                capture.run()
+
+        clear_logcat.assert_not_called()
+
+    def test_does_not_clear_history_when_output_file_cannot_be_opened(self):
+        capture = android_log.AndroidLogCapture(
+            android_log.LogcatCaptureConfig(
+                serial="device-1",
+                clear_before_start=True,
+                output_path="capture.log",
+            ),
+            lambda _text: None,
+        )
+        with patch.object(
+            android_log,
+            "adb_executable",
+            return_value="adb",
+        ), patch.object(
+            android_log.Path,
+            "open",
+            side_effect=PermissionError("denied"),
+        ), patch.object(android_log, "clear_logcat") as clear_logcat:
+            with self.assertRaisesRegex(PermissionError, "denied"):
+                capture.run()
+
+        clear_logcat.assert_not_called()
+
+    def test_output_write_failure_is_not_treated_as_user_cancellation(self):
+        class FailingStream:
+            closed = False
+
+            def write(self, _text):
+                raise OSError("disk full")
+
+            def flush(self):
+                return None
+
+            def close(self):
+                self.closed = True
+
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.stdout = io.StringIO("one line\n")
+                self.return_code = None
+                self.terminated = False
+
+            def poll(self):
+                return self.return_code
+
+            def terminate(self):
+                self.terminated = True
+                self.return_code = -15
+
+            def wait(self, timeout=None):
+                return self.return_code
+
+            def kill(self):
+                self.return_code = -9
+
+        stream = FailingStream()
+        process = FakeProcess()
+        capture = android_log.AndroidLogCapture(
+            android_log.LogcatCaptureConfig(
+                serial="device-1",
+                output_path="capture.log",
+            ),
+            lambda _text: None,
+            popen_factory=Mock(return_value=process),
+        )
+        with patch.object(
+            android_log,
+            "adb_executable",
+            return_value="adb",
+        ), patch.object(android_log.Path, "open", return_value=stream):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                capture.run()
+
+        self.assertTrue(stream.closed)
+        self.assertTrue(process.terminated)
+        self.assertIsNone(capture._process)
+        self.assertTrue(capture.stop_event.is_set())
+        self.assertFalse(capture.cancel_requested.is_set())
+
+    def test_output_close_failure_still_cleans_up_logcat_process(self):
+        class CloseFailingStream:
+            def write(self, _text):
+                return None
+
+            def flush(self):
+                return None
+
+            def close(self):
+                raise OSError("close failed")
+
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.stdout = io.StringIO("")
+                self.return_code = None
+                self.terminated = False
+
+            def poll(self):
+                return self.return_code
+
+            def terminate(self):
+                self.terminated = True
+                self.return_code = -15
+
+            def wait(self, timeout=None):
+                return self.return_code
+
+            def kill(self):
+                self.return_code = -9
+
+        process = FakeProcess()
+        capture = android_log.AndroidLogCapture(
+            android_log.LogcatCaptureConfig(
+                serial="device-1",
+                output_path="capture.log",
+            ),
+            lambda _text: None,
+            popen_factory=Mock(return_value=process),
+        )
+        with patch.object(
+            android_log,
+            "adb_executable",
+            return_value="adb",
+        ), patch.object(
+            android_log.Path,
+            "open",
+            return_value=CloseFailingStream(),
+        ):
+            with self.assertRaisesRegex(OSError, "close failed"):
+                capture.run()
+
+        self.assertTrue(process.terminated)
+        self.assertIsNone(capture._process)
+
+    def test_stop_force_kills_logcat_when_terminate_does_not_finish(self):
+        release_reader = threading.Event()
+
+        class BlockingOutput:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                release_reader.wait()
+                raise StopIteration
+
+        class StubbornProcess:
+            def __init__(self) -> None:
+                self.stdout = BlockingOutput()
+                self.return_code = None
+                self.killed = False
+
+            def poll(self):
+                return self.return_code
+
+            def terminate(self):
+                return None
+
+            def kill(self):
+                self.killed = True
+                self.return_code = -9
+                release_reader.set()
+
+            def wait(self, timeout=None):
+                if self.return_code is None:
+                    raise subprocess.TimeoutExpired("adb", timeout)
+                return self.return_code
+
+        process = StubbornProcess()
+        capture = android_log.AndroidLogCapture(
+            android_log.LogcatCaptureConfig(serial="device-1"),
+            lambda _text: None,
+            popen_factory=Mock(return_value=process),
+            stop_timeout=0.1,
+        )
+        with patch.object(android_log, "adb_executable", return_value="adb"):
+            capture_thread = threading.Thread(target=capture.run)
+            capture_thread.start()
+            deadline = time.monotonic() + 1
+            while capture._process is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+            capture.request_stop()
+            capture_thread.join(timeout=1)
+
+        self.assertFalse(capture_thread.is_alive())
+        self.assertTrue(process.killed)
+
+
+class IpaManagerTests(unittest.TestCase):
+    @staticmethod
+    def _write_ipa(
+        path: Path,
+        *,
+        bundle_id: str = "com.example.demo",
+        devices: tuple[str, ...] = ("device-1",),
+        expired: bool = False,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        subject = issuer = x509.Name(
+            [x509.NameAttribute(NameOID.COMMON_NAME, "IPA Test Certificate")]
+        )
+        certificate = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(private_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(days=2))
+            .not_valid_after(now + timedelta(days=30))
+            .sign(private_key, hashes.SHA256())
+        )
+        expiration = now - timedelta(days=1) if expired else now + timedelta(days=20)
+        profile = {
+            "Name": "Test Ad Hoc",
+            "TeamIdentifier": ["TEAM123"],
+            "CreationDate": now - timedelta(days=1),
+            "ExpirationDate": expiration,
+            "ProvisionedDevices": list(devices),
+            "DeveloperCertificates": [
+                certificate.public_bytes(serialization.Encoding.DER)
+            ],
+            "Entitlements": {
+                "application-identifier": f"TEAM123.{bundle_id}",
+            },
+        }
+        info = {
+            "CFBundleIdentifier": bundle_id,
+            "CFBundleExecutable": "Demo",
+        }
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("Payload/Demo.app/Info.plist", plistlib.dumps(info))
+            archive.writestr("Payload/Demo.app/Demo", b"mach-o-placeholder")
+            archive.writestr("Payload/Demo.app/_CodeSignature/CodeResources", b"signed")
+            archive.writestr(
+                "Payload/Demo.app/embedded.mobileprovision",
+                b"CMS-prefix" + plistlib.dumps(profile) + b"CMS-suffix",
+            )
+
+    def test_signature_preflight_checks_device_allowlist(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ipa_file = Path(temp_dir) / "demo.ipa"
+            self._write_ipa(ipa_file)
+
+            allowed = ipa_manager.verify_ipa_signature(ipa_file, "device-1")
+            rejected = ipa_manager.verify_ipa_signature(ipa_file, "device-2")
+
+        self.assertTrue(allowed.valid)
+        self.assertEqual(allowed.bundle_id, "com.example.demo")
+        self.assertFalse(rejected.valid)
+        self.assertIn("不在描述文件白名单", "；".join(rejected.errors))
+
+    def test_cache_rejects_expired_profile_before_copy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ipa_file = Path(temp_dir) / "expired.ipa"
+            cache_dir = Path(temp_dir) / "cache"
+            config_file = Path(temp_dir) / "ipa_packages.json"
+            self._write_ipa(ipa_file, expired=True)
+
+            with self.assertRaisesRegex(ValueError, "描述文件已过期"):
+                ipa_manager.cache_ipa(
+                    ipa_file,
+                    config_path=config_file,
+                    cache_dir=cache_dir,
+                )
+
+            self.assertEqual(ipa_manager.load_cached_ipas(config_file), [])
+            self.assertFalse(cache_dir.exists())
+
+    def test_download_is_preflighted_then_cached_without_temp_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "source.ipa"
+            cache_dir = Path(temp_dir) / "cache"
+            config_file = Path(temp_dir) / "ipa_packages.json"
+            self._write_ipa(source)
+            payload = source.read_bytes()
+            response = Mock()
+            response.__enter__ = Mock(return_value=response)
+            response.__exit__ = Mock(return_value=False)
+            response.headers = {"Content-Length": str(len(payload))}
+            response.iter_content.return_value = [payload]
+
+            with patch.object(ipa_manager.requests, "get", return_value=response):
+                result = ipa_manager.download_and_cache_ipa(
+                    "https://example.test/releases/demo.ipa",
+                    "https://example.test/track",
+                    config_path=config_file,
+                    cache_dir=cache_dir,
+                )
+
+            cached_files = list(cache_dir.iterdir())
+
+        response.raise_for_status.assert_called_once_with()
+        self.assertEqual(result.package.name, "demo.ipa")
+        self.assertEqual(result.package.attribution, "https://example.test/track")
+        self.assertEqual(len(cached_files), 1)
+        self.assertFalse(cached_files[0].name.startswith("."))
+
+    def test_attribution_runs_before_install_after_preflight(self):
+        signature = ipa_manager.IpaSignatureCheck(
+            True,
+            bundle_id="com.example.demo",
+        )
+        with patch.object(
+            ipa_manager, "verify_ipa_signature", return_value=signature
+        ), patch.object(ipa_manager, "open_ios_attribution_url") as open_url, patch.object(
+            ipa_manager, "_run_tidevice"
+        ) as run_tidevice:
+            result = ipa_manager.attribute_and_install_ipa(
+                "device-1", "https://example.test/track", "demo.ipa"
+            )
+
+        open_url.assert_called_once_with("device-1", "https://example.test/track")
+        run_tidevice.assert_called_once_with(
+            ["install", "demo.ipa"], udid="device-1", timeout=600
+        )
+        self.assertEqual(result.bundle_id, "com.example.demo")
+
+    def test_list_ios_devices_parses_tidevice_json(self):
+        output = json.dumps(
+            [
+                {
+                    "udid": "device-1",
+                    "name": "QA iPhone",
+                    "product_version": "18.0",
+                    "conn_type": "USB",
+                }
+            ]
+        )
+        with patch.object(ipa_manager, "_run_tidevice", return_value=output):
+            devices = ipa_manager.list_ios_devices()
+
+        self.assertEqual(
+            devices,
+            [ipa_manager.IosDevice("device-1", "QA iPhone", "18.0", "USB")],
+        )
 
 
 class SqlDataTests(unittest.TestCase):

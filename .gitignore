@@ -12,5 +12,7 @@ cache/api_templates.json
 cache/feature_scenarios.json
 cache/apk_packages.json
 cache/apks/
+cache/ipa_packages.json
+cache/ipas/
 
 cache/bgtoken.json
