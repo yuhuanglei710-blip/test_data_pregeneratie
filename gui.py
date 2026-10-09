@@ -1,12 +1,14 @@
 """自动化测试数据桌面控制台。"""
 
+import os
 import threading
 from contextlib import redirect_stderr, redirect_stdout
+from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from PySide6.QtCore import QObject, QSize, QThread, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QFontDatabase, QTextCursor
+from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
@@ -79,6 +81,14 @@ from base.ipa_manager import (
     remove_cached_ipa,
     update_cached_ipa,
 )
+from base.player_tier import (
+    TARGET_PROFIT_RATES,
+    TIER_LABELS,
+    PlayerTierMetrics,
+    calculate_player_tier,
+    construct_player_tier,
+    fetch_player_tier,
+)
 from base.api_request import (
     ApiTemplate,
     delete_api_template,
@@ -142,11 +152,63 @@ from base.user import SUPPORTED_ENVIRONMENTS
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+WINDOWS_FONT_DIR = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+UI_FONT_CANDIDATES = (
+    "Noto Sans SC",
+    "Microsoft YaHei UI",
+    "DengXian",
+    "Segoe UI",
+)
+MONOSPACE_FONT_CANDIDATES = (
+    "Cascadia Mono",
+    "Consolas",
+)
+
+
+def _best_font_family(candidates: tuple[str, ...]) -> str:
+    available = set(QFontDatabase.families())
+    return next((family for family in candidates if family in available), candidates[-1])
+
+
+def _quality_font(family: str, point_size: float) -> QFont:
+    font = QFont(family)
+    font.setPointSizeF(point_size)
+    font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+    font.setStyleStrategy(
+        QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality
+    )
+    return font
+
+
+def configure_application_fonts(app: QApplication) -> tuple[str, str]:
+    """加载高清中文字体，并为所有 Qt 控件设置高质量矢量字体。"""
+    for filename in (
+        "Noto Sans SC (TrueType).otf",
+        "Noto Sans SC Medium (TrueType).otf",
+        "Noto Sans SC Bold (TrueType).otf",
+    ):
+        font_path = WINDOWS_FONT_DIR / filename
+        if font_path.is_file():
+            QFontDatabase.addApplicationFont(str(font_path))
+    ui_family = _best_font_family(UI_FONT_CANDIDATES)
+    monospace_family = _best_font_family(MONOSPACE_FONT_CANDIDATES)
+    app.setFont(_quality_font(ui_family, 10.0))
+    app.setProperty("uiFontFamily", ui_family)
+    app.setProperty("monospaceFontFamily", monospace_family)
+    return ui_family, monospace_family
+
+
+def application_monospace_font(point_size: float) -> QFont:
+    app = QApplication.instance()
+    configured = app.property("monospaceFontFamily") if app is not None else ""
+    family = str(configured or _best_font_family(MONOSPACE_FONT_CANDIDATES))
+    return _quality_font(family, point_size)
 
 
 SECTION_INFO = (
     ("数据准备", "账号生成", "批量生成测试账号，或使用指定邮箱创建单个账号。"),
     ("数据准备", "锦标赛造数", "创建参赛账号并完成充值、下注等锦标赛数据准备。"),
+    ("数据准备", "玩家分层", "按利润率识别玩家层级，并可按 UID 构造目标分层数据。"),
     ("接口与流程", "SQL 数据模板", "维护并执行可复用 SQL，用于快速准备业务测试数据。"),
     ("接口与流程", "API 请求模板", "保存、调试并复用环境化的 HTTP 请求。"),
     ("接口与流程", "自动化场景", "把 SQL、API、变量提取和断言编排为完整流程。"),
@@ -160,8 +222,8 @@ SECTION_INFO = (
 APP_STYLESHEET = """
 QWidget {
     color: #20242a;
-    font-family: "Microsoft YaHei UI", "Segoe UI";
-    font-size: 13px;
+    font-family: "Noto Sans SC", "Microsoft YaHei UI", "DengXian", "Segoe UI";
+    font-size: 10pt;
 }
 QWidget#root { background: #f3f5f8; }
 QDialog, QMessageBox { background: #ffffff; }
@@ -171,29 +233,47 @@ QFrame#topBar {
     border-radius: 12px;
 }
 
-QLabel#title { color: #17191d; font-size: 23px; font-weight: 700; }
-QLabel#sectionTitle { color: #20242a; font-size: 15px; font-weight: 650; }
-QLabel#fieldLabel { color: #5d6470; font-size: 12px; }
+QLabel#title { color: #17191d; font-size: 18pt; font-weight: 700; }
+QLabel#sectionTitle { color: #20242a; font-size: 11pt; font-weight: 600; }
+QLabel#fieldLabel { color: #5d6470; font-size: 9pt; }
 QLabel#pageDescription, QLabel#terminalMeta, QLabel#fieldHint,
 QLabel#navigationMeta {
     color: #808792;
-    font-size: 11px;
+    font-size: 9pt;
 }
-QLabel#pageDescription { font-size: 12px; }
+QLabel#pageDescription { font-size: 9pt; }
 QLabel#navigationMeta, QLabel#terminalMeta {
-    font-family: "Cascadia Mono", "Consolas";
+    font-family: "Cascadia Mono", "Consolas", monospace;
 }
 QLabel#navigationBrand, QLabel#sessionTitle {
     color: #17191d;
     font-weight: 700;
 }
-QLabel#navigationBrand { font-size: 17px; }
-QLabel#sessionTitle { font-family: "Cascadia Mono", "Consolas"; font-size: 13px; }
+QLabel#navigationBrand { font-size: 13pt; }
+QLabel#sessionTitle { font-family: "Cascadia Mono", "Consolas", monospace; font-size: 10pt; }
 QLabel#navigationGroup {
     color: #8a919c;
-    font-size: 10px;
+    font-size: 8pt;
     font-weight: 700;
     padding: 10px 10px 3px 10px;
+}
+QLabel#metricSummary {
+    color: #343a42;
+    background: #f7f8fa;
+    border: 1px solid #e0e4ea;
+    border-radius: 8px;
+    padding: 14px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    line-height: 1.5;
+}
+QLabel#tierBadge {
+    color: #2846a6;
+    background: #edf1ff;
+    border: 1px solid #d6defa;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 11pt;
+    font-weight: 700;
 }
 QLabel#online { color: #228653; font-weight: 700; }
 QLabel#statusPill, QLabel#connectionStatus {
@@ -204,8 +284,8 @@ QLabel#statusPill, QLabel#connectionStatus {
 }
 QLabel#statusPill {
     border-radius: 14px;
-    font-family: "Cascadia Mono", "Consolas";
-    font-size: 11px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 9pt;
     font-weight: 600;
 }
 
@@ -336,13 +416,13 @@ QTableWidget#apkTable QHeaderView::section {
     border: 0;
     border-bottom: 1px solid #d6dbe1;
     padding: 8px;
-    font-size: 12px;
+    font-size: 9pt;
     font-weight: 600;
 }
 QPlainTextEdit#terminal {
     padding: 12px;
-    font-family: "Cascadia Mono", "Consolas";
-    font-size: 12px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 9pt;
 }
 
 QCheckBox { color: #4d545e; spacing: 8px; }
@@ -1377,11 +1457,15 @@ class WorkflowWindow(QMainWindow):
         self.channel_source_worker: Optional[ChannelSourceUpdateWorker] = None
         self.apk_action_thread: Optional[QThread] = None
         self.apk_action_worker: Optional[ApkActionWorker] = None
+        self.apk_action_success_callback: Optional[Callable[[object], None]] = None
         self.pending_apk_action: Optional[
             tuple[str, Callable[[], object], Callable[[object], None]]
         ] = None
+        self.apk_conflict_prompt: Optional[QMessageBox] = None
         self.ios_action_thread: Optional[QThread] = None
         self.ios_action_worker: Optional[ApkActionWorker] = None
+        self.player_tier_thread: Optional[QThread] = None
+        self.player_tier_worker: Optional[ApkActionWorker] = None
         self.app_log_query_thread: Optional[QThread] = None
         self.app_log_query_worker: Optional[ApkActionWorker] = None
         self.app_log_thread: Optional[QThread] = None
@@ -1433,6 +1517,7 @@ class WorkflowWindow(QMainWindow):
         self.content_stack.addWidget(self._build_apk_workspace())
         self.content_stack.addWidget(self._build_ipa_workspace())
         self.content_stack.addWidget(self._build_app_log_workspace())
+        self.content_stack.addWidget(self._build_player_tier_workspace())
         workspace.addWidget(self.content_stack, 1)
         page.addLayout(workspace, 1)
 
@@ -1536,6 +1621,144 @@ class WorkflowWindow(QMainWindow):
         panel_layout.addWidget(title)
         panel_layout.addWidget(self._build_config_tab(), 1)
         layout.addWidget(panel)
+        return page
+
+    def _build_player_tier_workspace(self) -> QWidget:
+        """构建按 UID 查询/构造与手动预览玩家分层的页面。"""
+        page = QWidget()
+        page.setObjectName("settingsPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+
+        formula_card = QFrame()
+        formula_card.setObjectName("configCard")
+        formula_layout = QVBoxLayout(formula_card)
+        formula_layout.setContentsMargins(20, 16, 20, 16)
+        formula_layout.setSpacing(5)
+        formula_title = QLabel("分层规则")
+        formula_title.setObjectName("sectionTitle")
+        formula_layout.addWidget(formula_title)
+        formula = QLabel(
+            "净利润 = 累计充值 − 累计提现 − 7% × 累计充值 − 3.5% × 累计提现 − 当前余额\n"
+            "利润率 = 净利润 ÷ 累计充值    ·    套利 < −1%    ·    普通 [−1%, 10%)    ·    "
+            "核心 [10%, 20%)    ·    顶级 ≥ 20%"
+        )
+        formula.setObjectName("fieldHint")
+        formula.setWordWrap(True)
+        formula_layout.addWidget(formula)
+        layout.addWidget(formula_card)
+
+        columns = QHBoxLayout()
+        columns.setSpacing(14)
+
+        uid_card = QFrame()
+        uid_card.setObjectName("settingsPanel")
+        uid_layout = QVBoxLayout(uid_card)
+        uid_layout.setContentsMargins(22, 20, 22, 20)
+        uid_layout.setSpacing(11)
+        uid_title = QLabel("按 UID 查询与构造")
+        uid_title.setObjectName("sectionTitle")
+        uid_layout.addWidget(uid_title)
+        uid_hint = QLabel("从所选环境的 user 表读取数据；构造时保持 money 不变。")
+        uid_hint.setObjectName("fieldHint")
+        uid_hint.setWordWrap(True)
+        uid_layout.addWidget(uid_hint)
+
+        uid_form = self._form_layout()
+        self.player_tier_environment = QComboBox()
+        self.player_tier_environment.addItems(list(SUPPORTED_ENVIRONMENTS))
+        self._add_form_row(uid_form, 0, "运行环境", self.player_tier_environment)
+        self.player_tier_uid = self._spin_box(1, maximum=2_147_483_647)
+        self.player_tier_uid.setMinimum(1)
+        self._add_form_row(uid_form, 1, "玩家 UID", self.player_tier_uid)
+        uid_layout.addLayout(uid_form)
+
+        self.player_tier_query_button = QPushButton("读取当前分层")
+        self.player_tier_query_button.setObjectName("secondaryButton")
+        self.player_tier_query_button.clicked.connect(self._query_player_tier)
+        uid_layout.addWidget(self.player_tier_query_button)
+
+        self.player_tier_result = QLabel("尚未读取玩家数据")
+        self.player_tier_result.setObjectName("metricSummary")
+        self.player_tier_result.setWordWrap(True)
+        uid_layout.addWidget(self.player_tier_result)
+
+        target_label = QLabel("目标分层")
+        target_label.setObjectName("fieldLabel")
+        uid_layout.addWidget(target_label)
+        self.player_tier_target = QComboBox()
+        for tier in TARGET_PROFIT_RATES:
+            rate = TARGET_PROFIT_RATES[tier] * 100
+            self.player_tier_target.addItem(
+                f"{TIER_LABELS[tier]}（目标 {rate:.0f}%）",
+                tier,
+            )
+        uid_layout.addWidget(self.player_tier_target)
+        construct_hint = QLabel(
+            "仅更新 charge_total 与 withdraw_total，执行前会再次确认；金额均为数据库原值（分）。"
+        )
+        construct_hint.setObjectName("fieldHint")
+        construct_hint.setWordWrap(True)
+        uid_layout.addWidget(construct_hint)
+        self.player_tier_construct_button = QPushButton("一键构造目标分层")
+        self.player_tier_construct_button.setObjectName("primaryButton")
+        self.player_tier_construct_button.clicked.connect(
+            self._construct_player_tier_data
+        )
+        uid_layout.addWidget(self.player_tier_construct_button)
+        uid_layout.addStretch()
+        columns.addWidget(uid_card, 1)
+
+        preview_card = QFrame()
+        preview_card.setObjectName("settingsPanel")
+        preview_layout = QVBoxLayout(preview_card)
+        preview_layout.setContentsMargins(22, 20, 22, 20)
+        preview_layout.setSpacing(11)
+        preview_title = QLabel("手动输入预览")
+        preview_title.setObjectName("sectionTitle")
+        preview_layout.addWidget(preview_title)
+        preview_hint = QLabel("只计算、不连接数据库，也不会修改玩家数据。金额单位为分。")
+        preview_hint.setObjectName("fieldHint")
+        preview_hint.setWordWrap(True)
+        preview_layout.addWidget(preview_hint)
+
+        preview_form = self._form_layout()
+        self.player_preview_charge = QLineEdit()
+        self.player_preview_charge.setPlaceholderText("例如：100000")
+        self._add_form_row(preview_form, 0, "累计充值", self.player_preview_charge)
+        self.player_preview_withdraw = QLineEdit()
+        self.player_preview_withdraw.setPlaceholderText("例如：80000")
+        self._add_form_row(preview_form, 1, "累计提现", self.player_preview_withdraw)
+        self.player_preview_balance = QLineEdit()
+        self.player_preview_balance.setPlaceholderText("例如：5000")
+        self._add_form_row(preview_form, 2, "当前余额", self.player_preview_balance)
+        preview_layout.addLayout(preview_form)
+        for field in (
+            self.player_preview_charge,
+            self.player_preview_withdraw,
+            self.player_preview_balance,
+        ):
+            field.textChanged.connect(self._update_manual_tier_preview)
+
+        self.player_preview_tier = QLabel("等待输入")
+        self.player_preview_tier.setObjectName("tierBadge")
+        preview_layout.addWidget(self.player_preview_tier)
+        self.player_preview_result = QLabel("填写三个金额后自动计算。")
+        self.player_preview_result.setObjectName("metricSummary")
+        self.player_preview_result.setWordWrap(True)
+        preview_layout.addWidget(self.player_preview_result)
+        preview_layout.addStretch()
+        columns.addWidget(preview_card, 1)
+
+        layout.addLayout(columns, 1)
+        self.player_tier_controls = (
+            self.player_tier_environment,
+            self.player_tier_uid,
+            self.player_tier_query_button,
+            self.player_tier_target,
+            self.player_tier_construct_button,
+        )
         return page
 
     def _build_apk_workspace(self) -> QWidget:
@@ -2609,11 +2832,7 @@ class WorkflowWindow(QMainWindow):
         self.feature_log.setReadOnly(True)
         self.feature_log.setUndoRedoEnabled(False)
         self.feature_log.document().setMaximumBlockCount(500)
-        compact_font = QFontDatabase.systemFont(
-            QFontDatabase.SystemFont.FixedFont
-        )
-        compact_font.setPointSize(9)
-        self.feature_log.setFont(compact_font)
+        self.feature_log.setFont(application_monospace_font(9.5))
         log_layout.addWidget(self.feature_log, 1)
         layout.addWidget(log_panel)
 
@@ -2767,11 +2986,7 @@ class WorkflowWindow(QMainWindow):
         self.api_log.setReadOnly(True)
         self.api_log.setUndoRedoEnabled(False)
         self.api_log.document().setMaximumBlockCount(500)
-        compact_font = QFontDatabase.systemFont(
-            QFontDatabase.SystemFont.FixedFont
-        )
-        compact_font.setPointSize(9)
-        self.api_log.setFont(compact_font)
+        self.api_log.setFont(application_monospace_font(9.5))
         log_layout.addWidget(self.api_log, 1)
         layout.addWidget(log_panel)
 
@@ -2917,11 +3132,7 @@ class WorkflowWindow(QMainWindow):
         self.scenario_log.setReadOnly(True)
         self.scenario_log.setUndoRedoEnabled(False)
         self.scenario_log.document().setMaximumBlockCount(800)
-        compact_font = QFontDatabase.systemFont(
-            QFontDatabase.SystemFont.FixedFont
-        )
-        compact_font.setPointSize(9)
-        self.scenario_log.setFont(compact_font)
+        self.scenario_log.setFont(application_monospace_font(9.5))
         log_layout.addWidget(self.scenario_log, 1)
         layout.addWidget(log_panel)
 
@@ -3799,9 +4010,7 @@ class WorkflowWindow(QMainWindow):
         self.log.setUndoRedoEnabled(False)
         self.log.document().setMaximumBlockCount(20_000)
         self.log.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        fixed_font.setPointSize(10)
-        self.log.setFont(fixed_font)
+        self.log.setFont(application_monospace_font(10.0))
         layout.addWidget(self.log, 1)
         return panel
 
@@ -4088,6 +4297,153 @@ class WorkflowWindow(QMainWindow):
             self.session_title.setText("ACCOUNT BATCH CREATE")
             self.page_description.setText(SECTION_INFO[0][2])
 
+    # 玩家利润与分层
+    @staticmethod
+    def _player_tier_summary(metrics: PlayerTierMetrics) -> str:
+        profit = metrics.net_profit.quantize(Decimal("0.01"))
+        rate = (
+            "无法计算（累计充值为 0）"
+            if metrics.profit_rate is None
+            else f"{metrics.profit_rate * 100:.2f}%"
+        )
+        return (
+            f"累计充值    {metrics.charge_total:,} 分\n"
+            f"累计提现    {metrics.withdraw_total:,} 分\n"
+            f"当前余额    {metrics.balance:,} 分\n"
+            f"净利润      {profit:,} 分\n"
+            f"利润率      {rate}\n"
+            f"玩家分层    {metrics.tier_label}"
+        )
+
+    def _update_manual_tier_preview(self) -> None:
+        values = (
+            self.player_preview_charge.text().replace(",", "").strip(),
+            self.player_preview_withdraw.text().replace(",", "").strip(),
+            self.player_preview_balance.text().replace(",", "").strip(),
+        )
+        if not all(values):
+            self.player_preview_tier.setText("等待输入")
+            self.player_preview_result.setText("填写三个金额后自动计算。")
+            return
+        try:
+            if any(not value.isdigit() for value in values):
+                raise ValueError("累计充值、累计提现和当前余额必须是非负整数")
+            metrics = calculate_player_tier(*(int(value) for value in values))
+        except ValueError as error:
+            self.player_preview_tier.setText("输入无效")
+            self.player_preview_result.setText(str(error))
+            return
+        self.player_preview_tier.setText(metrics.tier_label)
+        self.player_preview_result.setText(self._player_tier_summary(metrics))
+
+    def _player_tier_database_parameters(
+        self,
+    ) -> tuple[str, int, DatabaseConnectionConfig]:
+        environment = self.player_tier_environment.currentText()
+        connection = self.database_connections_by_environment[environment]
+        if not is_database_connection_configured(connection):
+            raise ValueError(
+                f"请先在“环境与参数”页完成 {environment} 环境的数据库连接配置。"
+            )
+        return environment, self.player_tier_uid.value(), connection
+
+    def _query_player_tier(self) -> None:
+        try:
+            environment, user_id, connection = self._player_tier_database_parameters()
+        except ValueError as error:
+            QMessageBox.information(self, "无法读取", str(error))
+            return
+        self._run_player_tier_action(
+            f"读取 {environment} · UID {user_id}",
+            lambda: fetch_player_tier(user_id, connection),
+            self._on_player_tier_loaded,
+        )
+
+    def _construct_player_tier_data(self) -> None:
+        try:
+            environment, user_id, connection = self._player_tier_database_parameters()
+        except ValueError as error:
+            QMessageBox.information(self, "无法构造", str(error))
+            return
+        target_tier = str(self.player_tier_target.currentData() or "")
+        target_label = TIER_LABELS.get(target_tier, target_tier)
+        answer = QMessageBox.question(
+            self,
+            "确认构造玩家分层",
+            (
+                f"将在 {environment} 环境把 UID {user_id} 构造为“{target_label}”。\n\n"
+                "操作会更新 user.charge_total 和 user.withdraw_total，当前余额 money 保持不变。"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._run_player_tier_action(
+            f"构造 {environment} · UID {user_id} · {target_label}",
+            lambda: construct_player_tier(user_id, target_tier, connection),
+            self._on_player_tier_constructed,
+        )
+
+    def _on_player_tier_loaded(self, value: object) -> None:
+        if not isinstance(value, PlayerTierMetrics):
+            raise TypeError("数据库返回了无法识别的玩家分层数据")
+        self.player_tier_result.setText(self._player_tier_summary(value))
+
+    def _on_player_tier_constructed(self, value: object) -> None:
+        if not isinstance(value, PlayerTierMetrics):
+            raise TypeError("数据库返回了无法识别的玩家分层数据")
+        self.player_tier_result.setText(
+            f"构造完成 · UID {value.user_id} · {value.tier_label}\n\n"
+            + self._player_tier_summary(value)
+        )
+
+    def _run_player_tier_action(
+        self,
+        description: str,
+        action: Callable[[], object],
+        on_success: Callable[[object], None],
+    ) -> None:
+        if self._is_player_tier_busy():
+            return
+        self.player_tier_action_description = description
+        for control in self.player_tier_controls:
+            control.setEnabled(False)
+        for button in self.navigation_buttons:
+            button.setEnabled(False)
+        self._set_status("●  DATABASE RUNNING", "#228653")
+        self.player_tier_thread = QThread(self)
+        self.player_tier_worker = ApkActionWorker(action)
+        self.player_tier_worker.moveToThread(self.player_tier_thread)
+        self.player_tier_thread.started.connect(self.player_tier_worker.run)
+        self.player_tier_worker.succeeded.connect(on_success)
+        self.player_tier_worker.failed.connect(self._on_player_tier_failed)
+        self.player_tier_worker.done.connect(self.player_tier_thread.quit)
+        self.player_tier_worker.done.connect(self.player_tier_worker.deleteLater)
+        self.player_tier_thread.finished.connect(self._on_player_tier_finished)
+        self.player_tier_thread.finished.connect(self.player_tier_thread.deleteLater)
+        self.player_tier_thread.start()
+
+    @Slot(str)
+    def _on_player_tier_failed(self, message: str) -> None:
+        self.player_tier_result.setText(
+            f"{self.player_tier_action_description}失败\n{message}"
+        )
+        self._set_status("●  DATABASE FAILED", "#c43d47")
+
+    @Slot()
+    def _on_player_tier_finished(self) -> None:
+        self.player_tier_worker = None
+        self.player_tier_thread = None
+        for control in self.player_tier_controls:
+            control.setEnabled(True)
+        for button in self.navigation_buttons:
+            button.setEnabled(True)
+        self._set_status("●  READY", "#228653")
+
+    def _is_player_tier_busy(self) -> bool:
+        return bool(self.player_tier_thread and self.player_tier_thread.isRunning())
+
     # Android 设备、APK 缓存和归因安装
     def _append_apk_log(self, text: str) -> None:
         cursor = self.apk_log.textCursor()
@@ -4241,7 +4597,7 @@ class WorkflowWindow(QMainWindow):
 
     @Slot()
     def _refresh_android_devices(self) -> None:
-        if self.current_section != 5 or self._is_apk_busy():
+        if self.current_section != 6 or self._is_apk_busy():
             return
         current_serial = str(self.apk_device_combo.currentData() or "")
         self._run_apk_action(
@@ -4331,29 +4687,72 @@ class WorkflowWindow(QMainWindow):
         if value.status != "signature-conflict":
             self._append_apk_log(f"[adb:{serial}] 安装完成：{package.name}")
             return
-        answer = QMessageBox.question(
-            self,
-            "检测到同包名旧应用",
-            (
-                f"设备上已存在「{value.package_name}」，但签名与当前 APK 不一致，"
-                "无法直接覆盖。\n\n是否卸载旧应用后安装当前 APK？"
-                "此操作会清空旧应用的本地数据。"
-            ),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        prompt = QMessageBox(self)
+        prompt.setIcon(QMessageBox.Icon.Warning)
+        prompt.setWindowTitle("检测到同包名旧应用")
+        prompt.setText(
+            f"设备上已存在「{value.package_name}」，但签名与当前 APK 不一致，"
+            "无法直接覆盖。"
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        prompt.setInformativeText(
+            "是否卸载旧应用后安装当前 APK？\n\n此操作会清空旧应用的本地数据。"
+        )
+        prompt.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        prompt.setDefaultButton(QMessageBox.StandardButton.No)
+        prompt.setWindowModality(Qt.WindowModality.WindowModal)
+        prompt.finished.connect(
+            lambda result, current_package=package, current_serial=serial,
+            package_name=value.package_name: self._on_apk_conflict_answered(
+                result,
+                current_package,
+                current_serial,
+                package_name,
+            )
+        )
+        self.apk_conflict_prompt = prompt
+        prompt.open()
+
+    def _on_apk_conflict_answered(
+        self,
+        result: int,
+        package: CachedApk,
+        serial: str,
+        package_name: str,
+    ) -> None:
+        """确认框关闭后，在线程退出完成时安全地启动替换安装。"""
+        # 不要在 ``QMessageBox.finished`` 的 C++ 信号栈内释放最后一个
+        # Python 引用；PySide 在真实线程回调路径中可能因此提前销毁对话框。
+        QTimer.singleShot(0, self._release_apk_conflict_prompt)
+        if QMessageBox.StandardButton(result) != QMessageBox.StandardButton.Yes:
             self._append_apk_log(
-                f"[adb:{serial}] 已取消替换；旧应用 {value.package_name} 未改动"
+                f"[adb:{serial}] 已取消替换；旧应用 {package_name} 未改动"
             )
             return
-        self.pending_apk_action = (
-            f"替换旧应用 {value.package_name}",
-            lambda: reinstall_apk(serial, package.path, value.package_name),
+        follow_up = (
+            f"替换旧应用 {package_name}",
+            lambda: reinstall_apk(serial, package.path, package_name),
             lambda _result: self._append_apk_log(
                 f"[adb:{serial}] 替换完成：旧应用已卸载，{package.name} 已安装"
             ),
         )
+        # ``isRunning()`` may already be false before Qt delivers ``finished``.
+        # Wait for our cleanup slot to clear the thread reference so a new
+        # action cannot be overwritten by the old thread's late signal.
+        if self.apk_action_thread is not None:
+            self.pending_apk_action = follow_up
+            return
+        description, action, on_success = follow_up
+        QTimer.singleShot(
+            0, lambda: self._run_apk_action(description, action, on_success)
+        )
+
+    def _release_apk_conflict_prompt(self) -> None:
+        prompt = self.apk_conflict_prompt
+        self.apk_conflict_prompt = None
+        if prompt is not None:
+            prompt.deleteLater()
 
     def _run_apk_action(
         self,
@@ -4367,6 +4766,7 @@ class WorkflowWindow(QMainWindow):
             return
         self.apk_action_description = description
         self.apk_action_quiet = quiet
+        self.apk_action_success_callback = on_success
         if quiet:
             self._set_apk_refreshing(True)
         else:
@@ -4376,13 +4776,20 @@ class WorkflowWindow(QMainWindow):
         self.apk_action_worker = ApkActionWorker(action)
         self.apk_action_worker.moveToThread(self.apk_action_thread)
         self.apk_action_thread.started.connect(self.apk_action_worker.run)
-        self.apk_action_worker.succeeded.connect(on_success)
+        self.apk_action_worker.succeeded.connect(self._on_apk_action_succeeded)
         self.apk_action_worker.failed.connect(self._on_apk_action_failed)
         self.apk_action_worker.done.connect(self.apk_action_thread.quit)
         self.apk_action_worker.done.connect(self.apk_action_worker.deleteLater)
         self.apk_action_thread.finished.connect(self._on_apk_action_finished)
         self.apk_action_thread.finished.connect(self.apk_action_thread.deleteLater)
         self.apk_action_thread.start()
+
+    @Slot(object)
+    def _on_apk_action_succeeded(self, value: object) -> None:
+        """始终在主窗口线程中分发结果，避免工作线程直接操作 Qt UI。"""
+        callback = self.apk_action_success_callback
+        if callback is not None:
+            callback(value)
 
     @Slot(str)
     def _on_apk_action_failed(self, message: str) -> None:
@@ -4404,6 +4811,7 @@ class WorkflowWindow(QMainWindow):
         pending = self.pending_apk_action
         was_quiet = self.apk_action_quiet
         self.pending_apk_action = None
+        self.apk_action_success_callback = None
         self.apk_action_worker = None
         self.apk_action_thread = None
         if was_quiet:
@@ -4599,7 +5007,7 @@ class WorkflowWindow(QMainWindow):
 
     @Slot()
     def _refresh_ios_devices(self) -> None:
-        if self.current_section != 6 or self._is_ios_busy():
+        if self.current_section != 7 or self._is_ios_busy():
             return
         current_udid = str(self.ios_device_combo.currentData() or "")
         self._run_ios_action(
@@ -4875,7 +5283,7 @@ class WorkflowWindow(QMainWindow):
     @Slot()
     def _refresh_app_log_devices(self) -> None:
         if (
-            self.current_section != 7
+            self.current_section != 8
             or self._is_app_log_query_busy()
             or self._is_app_log_running()
         ):
@@ -5140,18 +5548,20 @@ class WorkflowWindow(QMainWindow):
             self.start_button.setText("生成锦标赛数据")
             self.session_title.setText("TOURNAMENT DATA")
         elif index == 2:
-            self.content_stack.setCurrentIndex(2)
+            self.content_stack.setCurrentIndex(8)
         elif index == 3:
-            self.content_stack.setCurrentIndex(3)
+            self.content_stack.setCurrentIndex(2)
         elif index == 4:
-            self.content_stack.setCurrentIndex(4)
+            self.content_stack.setCurrentIndex(3)
         elif index == 5:
+            self.content_stack.setCurrentIndex(4)
+        elif index == 6:
             self.content_stack.setCurrentIndex(5)
             QTimer.singleShot(0, self._refresh_android_devices)
-        elif index == 6:
+        elif index == 7:
             self.content_stack.setCurrentIndex(6)
             QTimer.singleShot(0, self._refresh_ios_devices)
-        elif index == 7:
+        elif index == 8:
             self.content_stack.setCurrentIndex(7)
             if not self.app_log_devices:
                 QTimer.singleShot(0, self._refresh_app_log_devices)
@@ -5400,7 +5810,7 @@ class WorkflowWindow(QMainWindow):
                 "create-accounts-batch",
             )
 
-        if self.current_section == 2:
+        if self.current_section == 3:
             environment = self.feature_environment.currentText()
             template = self._selected_feature_sql_template()
             if template is None:
@@ -5420,7 +5830,7 @@ class WorkflowWindow(QMainWindow):
                 "generate-feature-data",
             )
 
-        if self.current_section == 3:
+        if self.current_section == 4:
             template = self._selected_api_template()
             if template is None:
                 raise ValueError("请先从列表选择 API 模板")
@@ -5436,7 +5846,7 @@ class WorkflowWindow(QMainWindow):
                 "send-api-request",
             )
 
-        if self.current_section == 4:
+        if self.current_section == 5:
             scenario = self._selected_feature_scenario()
             if scenario is None:
                 raise ValueError("请先从列表选择自动化场景")
@@ -5611,11 +6021,11 @@ class WorkflowWindow(QMainWindow):
 
     @Slot(str)
     def _append_log(self, text: str) -> None:
-        if self.current_section == 2:
+        if self.current_section == 3:
             target = self.feature_log
-        elif self.current_section == 3:
-            target = self.api_log
         elif self.current_section == 4:
+            target = self.api_log
+        elif self.current_section == 5:
             target = self.scenario_log
         else:
             target = self.log
@@ -5627,11 +6037,11 @@ class WorkflowWindow(QMainWindow):
 
     @Slot()
     def _clear_log(self) -> None:
-        if self.current_section == 2:
+        if self.current_section == 3:
             self.feature_log.clear()
-        elif self.current_section == 3:
-            self.api_log.clear()
         elif self.current_section == 4:
+            self.api_log.clear()
+        elif self.current_section == 5:
             self.scenario_log.clear()
         else:
             self.log.clear()
@@ -5667,11 +6077,12 @@ class WorkflowWindow(QMainWindow):
             self._is_apk_busy()
             or self._is_ios_busy()
             or self._is_app_log_query_busy()
+            or self._is_player_tier_busy()
         ):
             QMessageBox.information(
                 self,
-                "设备操作进行中",
-                "当前安装、设备检测或应用列表读取结束后才能退出。",
+                "后台操作进行中",
+                "当前安装、设备检测、应用列表读取或玩家分层操作结束后才能退出。",
             )
             event.ignore()
             return
@@ -5716,9 +6127,15 @@ class WorkflowWindow(QMainWindow):
 
 def main() -> None:
     """创建并运行 Qt 桌面应用。"""
-    app = QApplication.instance() or QApplication([])
+    app = QApplication.instance()
+    if app is None:
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+        app = QApplication([])
     app.setApplicationName("Automation Console")
     app.setStyle("Fusion")
+    configure_application_fonts(app)
     window = WorkflowWindow()
     window.show()
     app.exec()
