@@ -78,7 +78,6 @@ from base.ipa_manager import (
     open_ios_attribution_url,
     remove_cached_ipa,
     update_cached_ipa,
-    verify_ipa_signature,
 )
 from base.api_request import (
     ApiTemplate,
@@ -145,35 +144,57 @@ from base.user import SUPPORTED_ENVIRONMENTS
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 
+SECTION_INFO = (
+    ("数据准备", "账号生成", "批量生成测试账号，或使用指定邮箱创建单个账号。"),
+    ("数据准备", "锦标赛造数", "创建参赛账号并完成充值、下注等锦标赛数据准备。"),
+    ("接口与流程", "SQL 数据模板", "维护并执行可复用 SQL，用于快速准备业务测试数据。"),
+    ("接口与流程", "API 请求模板", "保存、调试并复用环境化的 HTTP 请求。"),
+    ("接口与流程", "自动化场景", "把 SQL、API、变量提取和断言编排为完整流程。"),
+    ("设备工具", "Android 安装", "管理 APK 缓存，并对 Android 设备执行归因与安装。"),
+    ("设备工具", "iOS 安装", "管理 IPA 缓存，并对 iPhone 执行归因与安装。"),
+    ("设备工具", "Android 日志", "按应用、级别和关键词抓取并导出设备日志。"),
+    ("系统", "环境与参数", "维护环境渠道参数、数据库连接和 SSH 私钥。"),
+)
+
+
 APP_STYLESHEET = """
 QWidget {
     color: #20242a;
     font-family: "Microsoft YaHei UI", "Segoe UI";
     font-size: 13px;
 }
-QWidget#root { background: #f4f5f7; }
+QWidget#root { background: #f3f5f8; }
 QDialog, QMessageBox { background: #ffffff; }
 QFrame#topBar {
-    background: #f4f5f7;
-    border-bottom: 1px solid #dfe3e8;
+    background: #ffffff;
+    border: 1px solid #dfe3e8;
+    border-radius: 12px;
 }
 
-QLabel#title { color: #17191d; font-size: 24px; font-weight: 700; }
+QLabel#title { color: #17191d; font-size: 23px; font-weight: 700; }
 QLabel#sectionTitle { color: #20242a; font-size: 15px; font-weight: 650; }
 QLabel#fieldLabel { color: #5d6470; font-size: 12px; }
-QLabel#eyebrow, QLabel#terminalMeta, QLabel#fieldHint,
+QLabel#pageDescription, QLabel#terminalMeta, QLabel#fieldHint,
 QLabel#navigationMeta {
     color: #808792;
-    font-family: "Cascadia Mono", "Consolas";
     font-size: 11px;
+}
+QLabel#pageDescription { font-size: 12px; }
+QLabel#navigationMeta, QLabel#terminalMeta {
+    font-family: "Cascadia Mono", "Consolas";
 }
 QLabel#navigationBrand, QLabel#sessionTitle {
     color: #17191d;
-    font-family: "Cascadia Mono", "Consolas";
     font-weight: 700;
 }
-QLabel#navigationBrand { font-size: 15px; }
-QLabel#sessionTitle { font-size: 13px; }
+QLabel#navigationBrand { font-size: 17px; }
+QLabel#sessionTitle { font-family: "Cascadia Mono", "Consolas"; font-size: 13px; }
+QLabel#navigationGroup {
+    color: #8a919c;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 10px 10px 3px 10px;
+}
 QLabel#online { color: #228653; font-weight: 700; }
 QLabel#statusPill, QLabel#connectionStatus {
     background: #ffffff;
@@ -203,16 +224,24 @@ QPushButton {
     font-weight: 600;
 }
 QPushButton#navigationButton {
-    min-height: 42px;
+    min-height: 38px;
     color: #656c76;
     background: transparent;
     border: 0;
-    padding: 0 14px;
+    border-left: 3px solid transparent;
+    border-radius: 6px;
+    padding: 0 12px;
     text-align: left;
 }
-QPushButton#navigationButton:hover, QPushButton#navigationButton:checked {
+QPushButton#navigationButton:hover {
     color: #17191d;
-    background: #eceff2;
+    background: #f2f4f7;
+}
+QPushButton#navigationButton:checked {
+    color: #2846a6;
+    background: #edf1ff;
+    border-left: 3px solid #4b67d1;
+    font-weight: 700;
 }
 QPushButton#primaryButton, QPushButton#modeButton:checked {
     color: #ffffff;
@@ -577,7 +606,7 @@ class DatabaseConnectionDialog(QDialog):
         for key in private_keys.values():
             self.ssh_private_key.addItem(key.name, key.key_id)
         if self.ssh_private_key.count() == 0:
-            self.ssh_private_key.addItem("请先在参数配置中导入私钥", None)
+            self.ssh_private_key.addItem("请先在“环境与参数”中导入私钥", None)
             self.ssh_private_key.setEnabled(False)
         selected_key = self.ssh_private_key.findData(
             connection.ssh_private_key_id
@@ -1139,7 +1168,7 @@ class FeatureScenarioDialog(QDialog):
         self.api_templates = api_templates
         self.steps = list(scenario.steps) if scenario else []
         self.saved_scenario: Optional[FeatureScenario] = None
-        self.setWindowTitle("编辑功能场景" if scenario else "新增功能场景")
+        self.setWindowTitle("编辑自动化场景" if scenario else "新增自动化场景")
         self.resize(760, 610)
         self.setMinimumSize(650, 500)
 
@@ -1387,14 +1416,14 @@ class WorkflowWindow(QMainWindow):
         self.setCentralWidget(root)
         self.setStyleSheet(APP_STYLESHEET)
 
-        page = QVBoxLayout(root)
-        page.setContentsMargins(22, 0, 22, 22)
+        page = QHBoxLayout(root)
+        page.setContentsMargins(18, 18, 18, 18)
         page.setSpacing(18)
-        page.addWidget(self._build_top_bar())
+        page.addWidget(self._build_navigation())
 
-        workspace = QHBoxLayout()
+        workspace = QVBoxLayout()
         workspace.setSpacing(14)
-        workspace.addWidget(self._build_navigation())
+        workspace.addWidget(self._build_top_bar())
         self.content_stack = QStackedWidget()
         self.content_stack.addWidget(self._build_task_workspace())
         self.content_stack.addWidget(self._build_config_workspace())
@@ -1418,18 +1447,19 @@ class WorkflowWindow(QMainWindow):
     def _build_top_bar(self) -> QFrame:
         bar = QFrame()
         bar.setObjectName("topBar")
-        bar.setFixedHeight(88)
+        bar.setFixedHeight(94)
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(4, 12, 4, 12)
+        layout.setContentsMargins(24, 15, 20, 15)
 
         titles = QVBoxLayout()
-        titles.setSpacing(3)
-        title = QLabel("自动化控制台")
-        title.setObjectName("title")
-        self.eyebrow = QLabel("$ account / create-batch")
-        self.eyebrow.setObjectName("eyebrow")
-        titles.addWidget(title)
-        titles.addWidget(self.eyebrow)
+        titles.setSpacing(4)
+        self.page_title = QLabel(SECTION_INFO[0][1])
+        self.page_title.setObjectName("title")
+        self.page_description = QLabel(SECTION_INFO[0][2])
+        self.page_description.setObjectName("pageDescription")
+        self.page_description.setWordWrap(True)
+        titles.addWidget(self.page_title)
+        titles.addWidget(self.page_description)
         layout.addLayout(titles)
         layout.addStretch()
 
@@ -1441,34 +1471,28 @@ class WorkflowWindow(QMainWindow):
     def _build_navigation(self) -> QFrame:
         navigation = QFrame()
         navigation.setObjectName("navigation")
-        navigation.setFixedWidth(180)
+        navigation.setFixedWidth(214)
         layout = QVBoxLayout(navigation)
-        layout.setContentsMargins(12, 20, 12, 14)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 22, 12, 14)
+        layout.setSpacing(3)
 
-        brand = QLabel("AUTOMATION")
+        brand = QLabel("自动化控制台")
         brand.setObjectName("navigationBrand")
         layout.addWidget(brand)
-        meta = QLabel("CONTROL PANEL")
+        meta = QLabel("TEST OPERATIONS")
         meta.setObjectName("navigationMeta")
         layout.addWidget(meta)
-        layout.addSpacing(22)
+        layout.addSpacing(12)
 
         group = QButtonGroup(navigation)
         group.setExclusive(True)
-        for index, label in enumerate(
-            (
-                "创建账号",
-                "锦标赛数据",
-                "功能数据",
-                "API 请求",
-                "功能场景",
-                "设备安装",
-                "iOS 安装",
-                "Android 日志",
-                "参数配置",
-            )
-        ):
+        current_group = None
+        for index, (group_name, label, _description) in enumerate(SECTION_INFO):
+            if group_name != current_group:
+                group_label = QLabel(group_name)
+                group_label.setObjectName("navigationGroup")
+                layout.addWidget(group_label)
+                current_group = group_name
             button = QPushButton(label)
             button.setObjectName("navigationButton")
             button.setCheckable(True)
@@ -1507,7 +1531,7 @@ class WorkflowWindow(QMainWindow):
         panel_layout = QVBoxLayout(panel)
         panel_layout.setContentsMargins(26, 24, 26, 24)
         panel_layout.setSpacing(14)
-        title = QLabel("参数配置")
+        title = QLabel("环境参数")
         title.setObjectName("sectionTitle")
         panel_layout.addWidget(title)
         panel_layout.addWidget(self._build_config_tab(), 1)
@@ -1641,7 +1665,7 @@ class WorkflowWindow(QMainWindow):
         return page
 
     def _build_ipa_workspace(self) -> QWidget:
-        """构建 IPA 下载、签名预检、归因和真机安装页面。"""
+        """构建 IPA 下载、缓存、归因和真机安装页面。"""
         page = QWidget()
         page.setObjectName("settingsPage")
         layout = QVBoxLayout(page)
@@ -1668,7 +1692,7 @@ class WorkflowWindow(QMainWindow):
         device_row.addWidget(self.ios_refresh_button)
         device_layout.addLayout(device_row)
         self.ios_device_hint = QLabel(
-            "请连接并解锁 iPhone，在设备上信任此电脑；Windows 需可用的 Apple Mobile Device 服务。"
+            "请连接并解锁 iPhone、信任此电脑；归因需开启 Safari 高级设置中的 Web 检查器，并打开普通网页标签页。"
         )
         self.ios_device_hint.setObjectName("fieldHint")
         self.ios_device_hint.setWordWrap(True)
@@ -1701,7 +1725,7 @@ class WorkflowWindow(QMainWindow):
         self.ipa_attribution_input.setFixedHeight(52)
         self.ipa_attribution_input.setPlaceholderText("关联归因链接（可选）")
         attribution_row.addWidget(self.ipa_attribution_input, 1)
-        self.ipa_cache_button = QPushButton("预检并添加")
+        self.ipa_cache_button = QPushButton("添加缓存")
         self.ipa_cache_button.setObjectName("primaryButton")
         self.ipa_cache_button.clicked.connect(self._cache_selected_ipa)
         attribution_row.addWidget(self.ipa_cache_button)
@@ -1714,7 +1738,7 @@ class WorkflowWindow(QMainWindow):
         package_layout = QVBoxLayout(package_card)
         package_layout.setContentsMargins(20, 18, 20, 18)
         package_header = QHBoxLayout()
-        package_title = QLabel("已通过预检的 IPA")
+        package_title = QLabel("已缓存的 IPA")
         package_title.setObjectName("sectionTitle")
         package_header.addWidget(package_title)
         package_header.addStretch()
@@ -1726,7 +1750,7 @@ class WorkflowWindow(QMainWindow):
         self.ipa_table = QTableWidget(0, 4)
         self.ipa_table.setObjectName("apkTable")
         self.ipa_table.setHorizontalHeaderLabels(
-            ("安装包", "签名 / 备注", "归因链接", "操作")
+            ("安装包", "包信息 / 备注", "归因链接", "操作")
         )
         self.ipa_table.setAlternatingRowColors(True)
         self.ipa_table.setWordWrap(False)
@@ -1932,7 +1956,7 @@ class WorkflowWindow(QMainWindow):
         layout.setContentsMargins(22, 22, 22, 20)
         layout.setSpacing(16)
 
-        self.settings_title = QLabel("创建账号")
+        self.settings_title = QLabel("账号生成设置")
         self.settings_title.setObjectName("sectionTitle")
         layout.addWidget(self.settings_title)
 
@@ -2468,11 +2492,12 @@ class WorkflowWindow(QMainWindow):
         list_layout = QVBoxLayout(list_panel)
         list_layout.setContentsMargins(22, 20, 22, 20)
         list_layout.setSpacing(10)
-        list_title = QLabel("SQL 模板")
+        list_title = QLabel("SQL 数据模板")
         list_title.setObjectName("sectionTitle")
         list_layout.addWidget(list_title)
-        list_hint = QLabel("按命名标题管理和检索功能数据 SQL。")
+        list_hint = QLabel("保存可复用 SQL；可单独执行，也可绑定到账号任务或自动化场景。")
         list_hint.setObjectName("fieldHint")
+        list_hint.setWordWrap(True)
         list_layout.addWidget(list_hint)
 
         self.feature_sql_search = QLineEdit()
@@ -2515,7 +2540,7 @@ class WorkflowWindow(QMainWindow):
         execute_layout = QVBoxLayout(execute_panel)
         execute_layout.setContentsMargins(22, 20, 22, 20)
         execute_layout.setSpacing(12)
-        execute_title = QLabel("执行功能数据")
+        execute_title = QLabel("单次执行")
         execute_title.setObjectName("sectionTitle")
         execute_layout.addWidget(execute_title)
 
@@ -2621,11 +2646,12 @@ class WorkflowWindow(QMainWindow):
         list_layout = QVBoxLayout(list_panel)
         list_layout.setContentsMargins(22, 20, 22, 20)
         list_layout.setSpacing(10)
-        list_title = QLabel("API 模板")
+        list_title = QLabel("API 请求模板")
         list_title.setObjectName("sectionTitle")
         list_layout.addWidget(list_title)
-        list_hint = QLabel("按标题保存、检索和管理 HTTP 请求。")
+        list_hint = QLabel("保存可复用 HTTP 请求；可单独调试，也可加入自动化场景。")
         list_hint.setObjectName("fieldHint")
+        list_hint.setWordWrap(True)
         list_layout.addWidget(list_hint)
 
         self.api_search = QLineEdit()
@@ -2778,7 +2804,7 @@ class WorkflowWindow(QMainWindow):
         list_layout = QVBoxLayout(list_panel)
         list_layout.setContentsMargins(22, 20, 22, 20)
         list_layout.setSpacing(10)
-        list_title = QLabel("功能场景")
+        list_title = QLabel("自动化场景")
         list_title.setObjectName("sectionTitle")
         list_layout.addWidget(list_title)
         list_hint = QLabel("将 SQL、API、变量提取和断言编排成可复用流程。")
@@ -2820,7 +2846,7 @@ class WorkflowWindow(QMainWindow):
         execute_layout = QVBoxLayout(execute_panel)
         execute_layout.setContentsMargins(22, 20, 22, 20)
         execute_layout.setSpacing(10)
-        execute_title = QLabel("执行场景")
+        execute_title = QLabel("运行场景")
         execute_title.setObjectName("sectionTitle")
         execute_layout.addWidget(execute_title)
         selected_caption = QLabel("已选场景")
@@ -2857,7 +2883,7 @@ class WorkflowWindow(QMainWindow):
         execute_layout.addStretch()
 
         execute_buttons = QHBoxLayout()
-        self.scenario_execute_button = QPushButton("执行场景")
+        self.scenario_execute_button = QPushButton("运行场景")
         self.scenario_execute_button.setObjectName("primaryButton")
         self.scenario_execute_button.clicked.connect(self._start)
         execute_buttons.addWidget(self.scenario_execute_button, 1)
@@ -3174,7 +3200,7 @@ class WorkflowWindow(QMainWindow):
             None,
         )
         if scenario is None:
-            raise ValueError("请从检索结果中选择完整的功能场景标题")
+            raise ValueError("请从检索结果中选择完整的自动化场景标题")
         return scenario
 
     def _template_by_id(self, template_id: object) -> Optional[SqlTemplate]:
@@ -3669,7 +3695,7 @@ class WorkflowWindow(QMainWindow):
     def _edit_scenario(self) -> None:
         scenario = self._selected_feature_scenario()
         if scenario is None:
-            QMessageBox.information(self, "选择场景", "请先选择要编辑的功能场景")
+            QMessageBox.information(self, "选择场景", "请先选择要编辑的自动化场景")
             return
         dialog = FeatureScenarioDialog(
             self,
@@ -3691,11 +3717,11 @@ class WorkflowWindow(QMainWindow):
     def _delete_scenario(self) -> None:
         scenario = self._selected_feature_scenario()
         if scenario is None:
-            QMessageBox.information(self, "选择场景", "请先选择要删除的功能场景")
+            QMessageBox.information(self, "选择场景", "请先选择要删除的自动化场景")
             return
         answer = QMessageBox.question(
             self,
-            "删除功能场景",
+            "删除自动化场景",
             f"确定删除「{scenario.title}」？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -3970,7 +3996,7 @@ class WorkflowWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "数据库未配置",
-                f"请先在参数配置页完成 {environment} 环境的数据库连接配置。",
+                f"请先在“环境与参数”页完成 {environment} 环境的数据库连接配置。",
             )
             return
 
@@ -4055,12 +4081,12 @@ class WorkflowWindow(QMainWindow):
             self.mode_hint.setText("使用指定邮箱创建一个账号，并导出账号信息。")
             self.start_button.setText("创建指定账号")
             self.session_title.setText("CUSTOM ACCOUNT CREATE")
-            self.eyebrow.setText("$ account / create-custom")
+            self.page_description.setText("使用指定邮箱创建单个测试账号，并导出账号信息。")
         else:
             self.mode_hint.setText("按原有逻辑批量注册随机邮箱账号，并导出账号信息。")
             self.start_button.setText("批量创建账号")
             self.session_title.setText("ACCOUNT BATCH CREATE")
-            self.eyebrow.setText("$ account / create-batch")
+            self.page_description.setText(SECTION_INFO[0][2])
 
     # Android 设备、APK 缓存和归因安装
     def _append_apk_log(self, text: str) -> None:
@@ -4410,7 +4436,7 @@ class WorkflowWindow(QMainWindow):
     def _is_apk_busy(self) -> bool:
         return bool(self.apk_action_thread and self.apk_action_thread.isRunning())
 
-    # iOS 设备、IPA 下载、签名预检和归因安装
+    # iOS 设备、IPA 下载、缓存和归因安装
     def _append_ipa_log(self, text: str) -> None:
         cursor = self.ipa_log.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -4438,10 +4464,10 @@ class WorkflowWindow(QMainWindow):
             return
         attribution = self.ipa_attribution_input.toPlainText().strip()
         if source:
-            description = "预检并缓存 IPA"
+            description = "缓存 IPA"
             action = lambda: cache_ipa(source, attribution)
         else:
-            description = "下载、预检并缓存 IPA"
+            description = "下载并缓存 IPA"
             action = lambda: download_and_cache_ipa(download_url, attribution)
         self._append_ipa_log(f"[ipa] {description}…")
         self._run_ios_action(description, action, self._on_ipa_cached)
@@ -4453,11 +4479,10 @@ class WorkflowWindow(QMainWindow):
         self.ipa_download_url.clear()
         self.ipa_attribution_input.clear()
         package = getattr(value, "package", None)
-        signature = getattr(value, "signature", None)
         prefix = "相同 MD5 已存在，已复用" if getattr(value, "duplicate", False) else "已缓存"
         self._append_ipa_log(
-            f"[signature] {prefix}：{getattr(package, 'name', 'IPA')} · "
-            f"{getattr(signature, 'summary', '预检通过')}"
+            f"[cache] {prefix}：{getattr(package, 'name', 'IPA')} · "
+            f"{getattr(package, 'bundle_id', '')}"
         )
 
     def _refresh_ipa_table(self) -> None:
@@ -4608,7 +4633,7 @@ class WorkflowWindow(QMainWindow):
             if preferred_index >= 0:
                 self.ios_device_combo.setCurrentIndex(preferred_index)
             self.ios_device_hint.setText(
-                f"tidevice 已发现 {len(devices)} 台设备；安装前会再次校验 UDID 和签名期限。"
+                f"已发现 {len(devices)} 台设备；归因需开启 Safari 的 Web 检查器，并打开普通网页标签页。"
             )
         self.last_ios_device_error = ""
 
@@ -4622,14 +4647,6 @@ class WorkflowWindow(QMainWindow):
         except ValueError as error:
             QMessageBox.information(self, "选择设备", str(error))
             return
-        signature = verify_ipa_signature(package.path, udid)
-        if not signature.valid:
-            QMessageBox.critical(
-                self,
-                "签名预检失败",
-                "该 IPA 不能安装到当前设备：\n\n" + "\n".join(signature.errors),
-            )
-            return
         if with_attribution and not package.attribution:
             QMessageBox.information(self, "缺少归因链接", "请先编辑并填写归因链接。")
             return
@@ -4642,7 +4659,7 @@ class WorkflowWindow(QMainWindow):
             description = f"安装 {package.name}"
             action = lambda: install_ipa(udid, package.path)
         self._append_ipa_log(
-            f"[tidevice:{udid}] 签名预检通过；{description}…"
+            f"[tidevice:{udid}] {description}…"
         )
         self._run_ios_action(
             description,
@@ -5105,46 +5122,41 @@ class WorkflowWindow(QMainWindow):
         self.current_section = index
         if index < len(self.navigation_buttons):
             self.navigation_buttons[index].setChecked(True)
+            _group, title, description = SECTION_INFO[index]
+            self.page_title.setText(title)
+            self.page_description.setText(description)
         if index == 0:
             self.content_stack.setCurrentIndex(0)
             self.settings_stack.setCurrentIndex(0)
-            self.settings_title.setText("创建账号")
+            self.settings_title.setText("账号生成设置")
             self._on_account_creation_mode_changed()
         elif index == 1:
             self.content_stack.setCurrentIndex(0)
             self.settings_stack.setCurrentIndex(1)
-            self.settings_title.setText("锦标赛数据")
+            self.settings_title.setText("锦标赛造数设置")
             self.mode_hint.setText(
                 "账号和下注可分别设置串行或并行；并行下注使用独立 session。"
             )
             self.start_button.setText("生成锦标赛数据")
             self.session_title.setText("TOURNAMENT DATA")
-            self.eyebrow.setText("$ tournament / generate")
         elif index == 2:
             self.content_stack.setCurrentIndex(2)
-            self.eyebrow.setText("$ sql-data / generate")
         elif index == 3:
             self.content_stack.setCurrentIndex(3)
-            self.eyebrow.setText("$ api-request / send")
         elif index == 4:
             self.content_stack.setCurrentIndex(4)
-            self.eyebrow.setText("$ feature-scenario / run")
         elif index == 5:
             self.content_stack.setCurrentIndex(5)
-            self.eyebrow.setText("$ android / attribution-install")
             QTimer.singleShot(0, self._refresh_android_devices)
         elif index == 6:
             self.content_stack.setCurrentIndex(6)
-            self.eyebrow.setText("$ ios / signature-attribution-install")
             QTimer.singleShot(0, self._refresh_ios_devices)
         elif index == 7:
             self.content_stack.setCurrentIndex(7)
-            self.eyebrow.setText("$ android / logcat")
             if not self.app_log_devices:
                 QTimer.singleShot(0, self._refresh_app_log_devices)
         else:
             self.content_stack.setCurrentIndex(1)
-            self.eyebrow.setText("$ settings / parameters")
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.progress_text.setText("0 / 0")
@@ -5427,7 +5439,7 @@ class WorkflowWindow(QMainWindow):
         if self.current_section == 4:
             scenario = self._selected_feature_scenario()
             if scenario is None:
-                raise ValueError("请先从列表选择功能场景")
+                raise ValueError("请先从列表选择自动化场景")
             environment = self.scenario_environment.currentText()
             connection = self.database_connections_by_environment[environment]
             if scenario_needs_database(scenario) and not is_database_connection_configured(
@@ -5455,7 +5467,7 @@ class WorkflowWindow(QMainWindow):
             )
 
         if self.current_section != 1:
-            raise ValueError("参数配置页不能执行任务")
+            raise ValueError("“环境与参数”页不能执行任务")
 
         output_path = Path(self.output_file.text()).expanduser()
         if not output_path.name:

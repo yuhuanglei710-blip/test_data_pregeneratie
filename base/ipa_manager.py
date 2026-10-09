@@ -1,8 +1,9 @@
-"""下载、缓存并预检 IPA，通过 tidevice 完成 iOS 归因和安装。"""
+"""下载和缓存 IPA，通过 tidevice 完成 iOS 归因和安装。"""
 
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import plistlib
@@ -67,7 +68,7 @@ class IpaSignatureCheck:
 
 @dataclass(frozen=True)
 class CachedIpa:
-    """一个已通过通用签名预检的 IPA 缓存条目。"""
+    """一个 IPA 缓存条目。"""
 
     package_id: str
     name: str
@@ -82,17 +83,25 @@ class CachedIpa:
 
 
 @dataclass(frozen=True)
+class IpaMetadata:
+    """仅用于展示的包信息，不表示签名校验结果。"""
+
+    bundle_id: str
+    profile_name: str = ""
+    expires_at: str = ""
+
+
+@dataclass(frozen=True)
 class CacheIpaResult:
     package: CachedIpa
     duplicate: bool
-    signature: IpaSignatureCheck
+    metadata: IpaMetadata
 
 
 @dataclass(frozen=True)
 class IpaInstallResult:
     status: str
     bundle_id: str
-    signature: IpaSignatureCheck
 
 
 class TideviceCommandError(RuntimeError):
@@ -263,6 +272,44 @@ def verify_ipa_signature(
     )
 
 
+def read_ipa_metadata(ipa_path: Union[str, Path]) -> IpaMetadata:
+    """读取包标识和可选描述信息，不检查签名、证书或设备白名单。"""
+    path = Path(ipa_path)
+    if not path.is_file():
+        raise ValueError("IPA 文件不存在")
+    if path.suffix.lower() != ".ipa":
+        raise ValueError("只支持 .ipa 安装包")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            info_files = [
+                name for name in archive.namelist()
+                if len(PurePosixPath(name).parts) == 3
+                and PurePosixPath(name).parts[0] == "Payload"
+                and PurePosixPath(name).parts[1].endswith(".app")
+                and PurePosixPath(name).name == "Info.plist"
+            ]
+            if len(info_files) != 1:
+                raise ValueError("IPA 必须且只能包含一个 Payload/*.app")
+            info = plistlib.loads(archive.read(info_files[0]))
+            if not isinstance(info, dict):
+                raise ValueError("Info.plist 内容无效")
+            bundle_id = str(info.get("CFBundleIdentifier") or "").strip()
+            if not bundle_id:
+                raise ValueError("Bundle ID 缺失")
+            profile_path = f"{PurePosixPath(info_files[0]).parent}/embedded.mobileprovision"
+            try:
+                profile = _embedded_profile(archive.read(profile_path))
+            except (KeyError, ValueError, plistlib.InvalidFileException):
+                profile = {}
+            return IpaMetadata(
+                bundle_id,
+                str(profile.get("Name") or "").strip(),
+                _iso_datetime(profile.get("ExpirationDate")),
+            )
+    except (OSError, zipfile.BadZipFile, KeyError, plistlib.InvalidFileException, ValueError) as error:
+        raise ValueError(f"无法读取 IPA 包信息：{error}") from error
+
+
 def file_md5(path: Union[str, Path]) -> str:
     digest = hashlib.md5()
     with Path(path).open("rb") as stream:
@@ -326,15 +373,13 @@ def cache_ipa(
     config_path: Union[str, Path] = IPA_CONFIG_FILE,
     cache_dir: Union[str, Path] = IPA_CACHE_DIR,
 ) -> CacheIpaResult:
-    """完成通用签名预检后按 MD5 缓存 IPA。"""
+    """读取包信息后按 MD5 缓存 IPA，不做签名预检。"""
     source_path = Path(source)
     if not source_path.is_file():
         raise ValueError("请选择存在的 IPA 文件")
     if source_path.suffix.lower() != ".ipa":
         raise ValueError("只支持缓存 .ipa 安装包")
-    signature = verify_ipa_signature(source_path)
-    if not signature.valid:
-        raise ValueError("IPA 签名预检失败：" + "；".join(signature.errors))
+    metadata = read_ipa_metadata(source_path)
 
     checksum = file_md5(source_path)
     packages = load_cached_ipas(config_path)
@@ -345,7 +390,7 @@ def cache_ipa(
             existing = CachedIpa(**{**asdict(existing), "attribution": attribution.strip()})
             packages[index] = existing
             _write_cached_ipas(packages, config_path)
-        return CacheIpaResult(existing, True, signature)
+        return CacheIpaResult(existing, True, metadata)
 
     target_dir = Path(cache_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -357,15 +402,15 @@ def cache_ipa(
         name=display_name.strip() or source_path.name,
         path=str(target_path.resolve()),
         md5=checksum,
-        bundle_id=signature.bundle_id,
-        profile_name=signature.profile_name,
-        expires_at=signature.expires_at,
+        bundle_id=metadata.bundle_id,
+        profile_name=metadata.profile_name,
+        expires_at=metadata.expires_at,
         attribution=(attribution or "").strip(),
         added_at=datetime.now(timezone.utc).isoformat(),
     )
     packages.insert(0, package)
     _write_cached_ipas(packages, config_path)
-    return CacheIpaResult(package, False, signature)
+    return CacheIpaResult(package, False, metadata)
 
 
 def download_and_cache_ipa(
@@ -376,7 +421,7 @@ def download_and_cache_ipa(
     cache_dir: Union[str, Path] = IPA_CACHE_DIR,
     timeout: tuple[int, int] = (10, 300),
 ) -> CacheIpaResult:
-    """下载到临时文件，签名预检通过后才进入正式缓存。"""
+    """下载到临时文件，读取包信息后进入正式缓存。"""
     cleaned = url.strip()
     parsed = urlparse(cleaned)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -508,20 +553,18 @@ def _validated_install(udid: str, ipa_path: Union[str, Path]) -> IpaInstallResul
     cleaned_udid = udid.strip()
     if not cleaned_udid:
         raise ValueError("请先连接并选择 iOS 设备")
-    signature = verify_ipa_signature(ipa_path, cleaned_udid)
-    if not signature.valid:
-        raise ValueError("IPA 不满足当前设备安装条件：" + "；".join(signature.errors))
+    metadata = read_ipa_metadata(ipa_path)
     _run_tidevice(["install", str(Path(ipa_path))], udid=cleaned_udid, timeout=600)
-    return IpaInstallResult("installed", signature.bundle_id, signature)
+    return IpaInstallResult("installed", metadata.bundle_id)
 
 
 def install_ipa(udid: str, ipa_path: Union[str, Path]) -> IpaInstallResult:
-    """预检签名和 UDID 后安装 IPA。"""
+    """通过 tidevice 安装 IPA，由设备判断是否允许安装。"""
     return _validated_install(udid, ipa_path)
 
 
 def open_ios_attribution_url(udid: str, url: str) -> None:
-    """通过 tidevice 在所选 iOS 设备上启动 Safari 并打开归因 URL。"""
+    """通过 Web Inspector 打开 Safari URL，兼容新版 iOS，不挂载开发者镜像。"""
     cleaned_udid = udid.strip()
     if not cleaned_udid:
         raise ValueError("请先连接并选择 iOS 设备")
@@ -529,23 +572,60 @@ def open_ios_attribution_url(udid: str, url: str) -> None:
     parsed = urlparse(cleaned)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("归因链接必须是有效的 http:// 或 https:// 地址")
-    _run_tidevice(
-        ["launch", "com.apple.mobilesafari", cleaned],
-        udid=cleaned_udid,
-        timeout=60,
+    _run_ios_safari(cleaned_udid, cleaned)
+
+
+def _ios_python() -> str:
+    runtime = PROJECT_ROOT / "cache" / "ios-runtime"
+    executable = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if executable.is_file():
+        return str(executable)
+    if importlib.util.find_spec("pymobiledevice3") is not None:
+        return sys.executable
+    raise TideviceCommandError(
+        "未安装 Safari 控制依赖，请按 README 的 iOS 运行环境步骤安装 requirements-ios.txt。"
     )
+
+
+def _run_ios_safari(
+    udid: str,
+    url: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> None:
+    command = [_ios_python(), str(PROJECT_ROOT / "tools" / "ios_safari.py")]
+    try:
+        result = runner(
+            command,
+            input=json.dumps({"udid": udid, "url": url}),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=90, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        )
+    except subprocess.TimeoutExpired as error:
+        raise TideviceCommandError("Safari 打开链接超时，请检查手机网络及 Web 检查器、远程自动化设置。") from error
+    except OSError as error:
+        raise TideviceCommandError(f"无法启动 Safari 控制工具：{error}") from error
+    try:
+        payload = json.loads(result.stdout.strip())
+    except (json.JSONDecodeError, AttributeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    if result.returncode != 0 or payload.get("status") != "opened" or payload.get("udid") != udid:
+        message = payload.get("message") or result.stderr.strip() or "Safari 控制工具未确认链接已打开"
+        raise TideviceCommandError(f"Safari 归因链接打开失败：{message}")
 
 
 def attribute_and_install_ipa(
     udid: str, url: str, ipa_path: Union[str, Path]
 ) -> IpaInstallResult:
-    """先完成所有安装条件预检，再打开归因链接并安装 IPA。"""
+    """读取包信息后打开归因链接并安装 IPA，不做签名预检。"""
     cleaned_udid = udid.strip()
     if not cleaned_udid:
         raise ValueError("请先连接并选择 iOS 设备")
-    signature = verify_ipa_signature(ipa_path, cleaned_udid)
-    if not signature.valid:
-        raise ValueError("IPA 不满足当前设备安装条件：" + "；".join(signature.errors))
+    metadata = read_ipa_metadata(ipa_path)
     open_ios_attribution_url(cleaned_udid, url)
     _run_tidevice(["install", str(Path(ipa_path))], udid=cleaned_udid, timeout=600)
-    return IpaInstallResult("installed", signature.bundle_id, signature)
+    return IpaInstallResult("installed", metadata.bundle_id)

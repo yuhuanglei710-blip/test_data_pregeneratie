@@ -1,0 +1,2 @@
+# Isolated Safari automation runtime (Python >= 3.10).
+pymobiledevice3==11.26.0

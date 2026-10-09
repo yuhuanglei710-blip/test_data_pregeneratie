@@ -589,24 +589,23 @@ class IpaManagerTests(unittest.TestCase):
         self.assertFalse(rejected.valid)
         self.assertIn("不在描述文件白名单", "；".join(rejected.errors))
 
-    def test_cache_rejects_expired_profile_before_copy(self):
+    def test_cache_accepts_expired_profile(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             ipa_file = Path(temp_dir) / "expired.ipa"
             cache_dir = Path(temp_dir) / "cache"
             config_file = Path(temp_dir) / "ipa_packages.json"
             self._write_ipa(ipa_file, expired=True)
 
-            with self.assertRaisesRegex(ValueError, "描述文件已过期"):
-                ipa_manager.cache_ipa(
-                    ipa_file,
-                    config_path=config_file,
-                    cache_dir=cache_dir,
-                )
+            result = ipa_manager.cache_ipa(
+                ipa_file,
+                config_path=config_file,
+                cache_dir=cache_dir,
+            )
 
-            self.assertEqual(ipa_manager.load_cached_ipas(config_file), [])
-            self.assertFalse(cache_dir.exists())
+            self.assertEqual(ipa_manager.load_cached_ipas(config_file), [result.package])
+            self.assertTrue(Path(result.package.path).is_file())
 
-    def test_download_is_preflighted_then_cached_without_temp_file(self):
+    def test_download_is_cached_without_temp_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source = Path(temp_dir) / "source.ipa"
             cache_dir = Path(temp_dir) / "cache"
@@ -635,13 +634,12 @@ class IpaManagerTests(unittest.TestCase):
         self.assertEqual(len(cached_files), 1)
         self.assertFalse(cached_files[0].name.startswith("."))
 
-    def test_attribution_runs_before_install_after_preflight(self):
-        signature = ipa_manager.IpaSignatureCheck(
-            True,
+    def test_attribution_runs_before_install_after_reading_metadata(self):
+        metadata = ipa_manager.IpaMetadata(
             bundle_id="com.example.demo",
         )
         with patch.object(
-            ipa_manager, "verify_ipa_signature", return_value=signature
+            ipa_manager, "read_ipa_metadata", return_value=metadata
         ), patch.object(ipa_manager, "open_ios_attribution_url") as open_url, patch.object(
             ipa_manager, "_run_tidevice"
         ) as run_tidevice:
@@ -654,6 +652,48 @@ class IpaManagerTests(unittest.TestCase):
             ["install", "demo.ipa"], udid="device-1", timeout=600
         )
         self.assertEqual(result.bundle_id, "com.example.demo")
+
+    def test_install_does_not_block_expired_or_unlisted_device(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ipa_file = Path(temp_dir) / "demo.ipa"
+            self._write_ipa(ipa_file, expired=True)
+            for with_attribution in (False, True):
+                with self.subTest(with_attribution=with_attribution), patch.object(
+                    ipa_manager, "verify_ipa_signature", side_effect=AssertionError("unexpected preflight")
+                ), patch.object(ipa_manager, "_run_tidevice") as run_tidevice, patch.object(
+                    ipa_manager, "_run_ios_safari"
+                ) as open_safari:
+                    if with_attribution:
+                        result = ipa_manager.attribute_and_install_ipa(
+                            "unlisted-device", "https://example.test/track", ipa_file
+                        )
+                        open_safari.assert_called_once_with("unlisted-device", "https://example.test/track")
+                    else:
+                        result = ipa_manager.install_ipa("unlisted-device", ipa_file)
+                    run_tidevice.assert_called_with(
+                        ["install", str(ipa_file)], udid="unlisted-device", timeout=600
+                    )
+                    self.assertEqual(result.status, "installed")
+
+    def test_cache_and_install_without_signature_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ipa_file = Path(temp_dir) / "demo.ipa"
+            with zipfile.ZipFile(ipa_file, "w") as archive:
+                archive.writestr(
+                    "Payload/Demo.app/Info.plist",
+                    plistlib.dumps({"CFBundleIdentifier": "com.example.demo"}),
+                )
+            result = ipa_manager.cache_ipa(
+                ipa_file, config_path=Path(temp_dir) / "packages.json",
+                cache_dir=Path(temp_dir) / "cache",
+            )
+            self.assertEqual(result.package.profile_name, "")
+            with patch.object(
+                ipa_manager, "_run_tidevice",
+                side_effect=ipa_manager.TideviceCommandError("device rejected installation"),
+            ):
+                with self.assertRaisesRegex(ipa_manager.TideviceCommandError, "device rejected"):
+                    ipa_manager.install_ipa("device-1", result.package.path)
 
     def test_list_ios_devices_parses_tidevice_json(self):
         output = json.dumps(
@@ -673,6 +713,36 @@ class IpaManagerTests(unittest.TestCase):
             devices,
             [ipa_manager.IosDevice("device-1", "QA iPhone", "18.0", "USB")],
         )
+
+    def test_safari_url_uses_stdin_and_checks_device_acknowledgement(self):
+        url = 'https://example.test/track?a=1&data="hello"' + 'x' * 10000
+        runner = Mock(return_value=subprocess.CompletedProcess(
+            [], 0, json.dumps({"status": "opened", "udid": "device-1"}), ""
+        ))
+        with patch.object(ipa_manager, "_ios_python", return_value="ios-python"):
+            ipa_manager._run_ios_safari("device-1", url, runner=runner)
+        self.assertNotIn(url, runner.call_args.args[0])
+        self.assertEqual(json.loads(runner.call_args.kwargs["input"]), {"udid": "device-1", "url": url})
+        self.assertEqual(runner.call_args.kwargs["timeout"], 90)
+
+    def test_safari_errors_and_missing_ack_are_not_success(self):
+        outputs = [
+            subprocess.CompletedProcess([], 1, '{"status":"error","message":"开启远程自动化"}', ""),
+            subprocess.CompletedProcess([], 0, "", "Web inspector is not enabled"),
+            subprocess.CompletedProcess([], 0, '{"status":"opened","udid":"other-device"}', ""),
+        ]
+        with patch.object(ipa_manager, "_ios_python", return_value="ios-python"):
+            for output in outputs:
+                with self.subTest(output=output), self.assertRaises(ipa_manager.TideviceCommandError):
+                    ipa_manager._run_ios_safari("device-1", "https://example.test", runner=Mock(return_value=output))
+
+    def test_attribution_failure_prevents_install(self):
+        with patch.object(ipa_manager, "read_ipa_metadata", return_value=ipa_manager.IpaMetadata("com.example.demo")), patch.object(
+            ipa_manager, "_run_ios_safari", side_effect=ipa_manager.TideviceCommandError("开启远程自动化")
+        ), patch.object(ipa_manager, "_run_tidevice") as install:
+            with self.assertRaisesRegex(ipa_manager.TideviceCommandError, "开启远程自动化"):
+                ipa_manager.attribute_and_install_ipa("device-1", "https://example.test", "demo.ipa")
+            install.assert_not_called()
 
 
 class SqlDataTests(unittest.TestCase):
