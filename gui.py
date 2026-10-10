@@ -111,7 +111,6 @@ from base.channel_source import (
     fetch_channel_sources,
     load_channel_source_config,
     log_database_name_for_environment,
-    requires_manual_channel_code,
     resolve_registration_channel,
     save_channel_sources,
 )
@@ -1734,19 +1733,6 @@ class WorkflowWindow(QMainWindow):
             "注册时长",
             self.player_tier_registration_age,
         )
-        self.player_tier_user_token = QLineEdit()
-        self.player_tier_user_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.player_tier_user_token.setClearButtonEnabled(True)
-        self.player_tier_user_token.setPlaceholderText(
-            "新用户改为大于7天时必填"
-        )
-        self._add_form_row(
-            uid_form,
-            3,
-            "用户 Token",
-            self.player_tier_user_token,
-        )
-
         turnover_fields = QWidget()
         turnover_layout = QHBoxLayout(turnover_fields)
         turnover_layout.setContentsMargins(0, 0, 0, 0)
@@ -1766,7 +1752,7 @@ class WorkflowWindow(QMainWindow):
             label.setObjectName("fieldHint")
             turnover_layout.addWidget(label)
             turnover_layout.addWidget(control, 1)
-        self._add_form_row(uid_form, 4, "流水准备", turnover_fields)
+        self._add_form_row(uid_form, 3, "流水准备", turnover_fields)
         uid_layout.addLayout(uid_form)
 
         self.player_tier_query_button = QPushButton("读取当前分层")
@@ -1855,7 +1841,6 @@ class WorkflowWindow(QMainWindow):
             self.player_tier_uid,
             self.player_tier_query_button,
             self.player_tier_registration_age,
-            self.player_tier_user_token,
             self.player_tier_initial_balance,
             self.player_tier_spin_count,
             self.player_tier_bet_amount,
@@ -2366,14 +2351,12 @@ class WorkflowWindow(QMainWindow):
         self.account_channel_source = QLineEdit()
         self.account_channel_source.setReadOnly(True)
         self.account_channel_source.setPlaceholderText("请先更新渠道参数")
-        self.account_channel_code = self._prod_channel_code_combo()
         (
             account_channel_source_field,
             self.account_update_parameters_button,
         ) = self._channel_source_field(
             self.account_channel_source,
             "account",
-            self.account_channel_code,
         )
         self.account_channel_source_label = self._add_form_row(
             form,
@@ -2665,14 +2648,12 @@ class WorkflowWindow(QMainWindow):
         self.tournament_channel_source = QLineEdit()
         self.tournament_channel_source.setReadOnly(True)
         self.tournament_channel_source.setPlaceholderText("请先更新渠道参数")
-        self.tournament_channel_code = self._prod_channel_code_combo()
         (
             tournament_channel_source_field,
             self.tournament_update_parameters_button,
         ) = self._channel_source_field(
             self.tournament_channel_source,
             "tournament",
-            self.tournament_channel_code,
         )
         self.tournament_channel_source_label = self._add_form_row(
             form,
@@ -3452,16 +3433,12 @@ class WorkflowWindow(QMainWindow):
         self,
         line_edit: QLineEdit,
         context: str,
-        manual_combo: Optional[QComboBox] = None,
     ) -> tuple[QWidget, QPushButton]:
-        """创建自动渠道预览和生产 Channel Code 选择器。"""
+        """创建自动渠道预览控件。"""
         holder = QWidget()
         row = QHBoxLayout(holder)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(7)
-        if manual_combo is not None:
-            manual_combo.hide()
-            row.addWidget(manual_combo, 1)
         row.addWidget(line_edit, 1)
         update_button = QPushButton("更新参数")
         update_button.setObjectName("secondaryButton")
@@ -3470,22 +3447,6 @@ class WorkflowWindow(QMainWindow):
         )
         row.addWidget(update_button)
         return holder, update_button
-
-    def _prod_channel_code_combo(self) -> QComboBox:
-        combo = QComboBox()
-        combo.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        combo.setMinimumContentsLength(10)
-        combo.addItems(self.channel_codes_by_environment["prod"])
-        return combo
-
-    def _refresh_prod_channel_code_combo(self, combo: QComboBox) -> None:
-        selected = combo.currentText()
-        combo.clear()
-        combo.addItems(self.channel_codes_by_environment["prod"])
-        selected_index = combo.findText(selected)
-        combo.setCurrentIndex(max(0, selected_index))
 
     def _sql_binding_combo(self) -> QComboBox:
         combo = SearchableComboBox()
@@ -4282,22 +4243,17 @@ class WorkflowWindow(QMainWindow):
         self._sync_execution_mode_inputs()
 
     def _sync_account_channel_options(self, _environment: str = "") -> None:
-        """生产环境改为手动输入，其他环境自动匹配。"""
+        """同步账号创建页的渠道匹配选项。"""
         if not hasattr(self, "account_new_user_control"):
             return
-        environment = self.account_environment.currentText()
-        manual = requires_manual_channel_code(environment)
-        can_enter_b = self.account_enter_b_yes_button.isChecked() and not manual
-        self.account_enter_b_label.setVisible(not manual)
-        self.account_enter_b_control.setVisible(not manual)
+        can_enter_b = self.account_enter_b_yes_button.isChecked()
+        self.account_enter_b_label.setVisible(True)
+        self.account_enter_b_control.setVisible(True)
         self.account_new_user_label.setVisible(can_enter_b)
         self.account_new_user_control.setVisible(can_enter_b)
-        self.account_channel_source_label.setText(
-            "Channel Code" if manual else "匹配渠道源"
-        )
-        self.account_channel_source.setVisible(not manual)
-        self.account_channel_code.setVisible(manual)
-        self.account_update_parameters_button.setVisible(not manual)
+        self.account_channel_source_label.setText("匹配渠道源")
+        self.account_channel_source.setVisible(True)
+        self.account_update_parameters_button.setVisible(True)
         self._refresh_account_channel_source()
 
     def _resolve_account_channel_source(self) -> str:
@@ -4308,7 +4264,6 @@ class WorkflowWindow(QMainWindow):
             can_enter_b=self.account_enter_b_yes_button.isChecked(),
             has_new_user_offer=self.account_new_user_yes_button.isChecked(),
             preferred_sources=self.channel_codes_by_environment[environment],
-            manual_channel_code=self.account_channel_code.currentText(),
         )
 
     @Slot()
@@ -4316,8 +4271,6 @@ class WorkflowWindow(QMainWindow):
     def _refresh_account_channel_source(self, _value: str = "") -> None:
         """预览当前业务选项自动匹配出的渠道源。"""
         if not hasattr(self, "account_channel_source"):
-            return
-        if requires_manual_channel_code(self.account_environment.currentText()):
             return
         try:
             channel_source = self._resolve_account_channel_source()
@@ -4328,22 +4281,17 @@ class WorkflowWindow(QMainWindow):
             self.account_channel_source.setText(channel_source)
 
     def _sync_tournament_channel_options(self, _environment: str = "") -> None:
-        """生产环境改为手动输入，其他环境自动匹配。"""
+        """同步锦标赛页的渠道匹配选项。"""
         if not hasattr(self, "tournament_new_user_control"):
             return
-        environment = self.environment.currentText()
-        manual = requires_manual_channel_code(environment)
-        can_enter_b = self.tournament_enter_b_yes_button.isChecked() and not manual
-        self.tournament_enter_b_label.setVisible(not manual)
-        self.tournament_enter_b_control.setVisible(not manual)
+        can_enter_b = self.tournament_enter_b_yes_button.isChecked()
+        self.tournament_enter_b_label.setVisible(True)
+        self.tournament_enter_b_control.setVisible(True)
         self.tournament_new_user_label.setVisible(can_enter_b)
         self.tournament_new_user_control.setVisible(can_enter_b)
-        self.tournament_channel_source_label.setText(
-            "Channel Code" if manual else "匹配渠道源"
-        )
-        self.tournament_channel_source.setVisible(not manual)
-        self.tournament_channel_code.setVisible(manual)
-        self.tournament_update_parameters_button.setVisible(not manual)
+        self.tournament_channel_source_label.setText("匹配渠道源")
+        self.tournament_channel_source.setVisible(True)
+        self.tournament_update_parameters_button.setVisible(True)
         self._refresh_tournament_channel_source()
 
     def _resolve_tournament_channel_source(self) -> str:
@@ -4354,7 +4302,6 @@ class WorkflowWindow(QMainWindow):
             can_enter_b=self.tournament_enter_b_yes_button.isChecked(),
             has_new_user_offer=self.tournament_new_user_yes_button.isChecked(),
             preferred_sources=self.channel_codes_by_environment[environment],
-            manual_channel_code=self.tournament_channel_code.currentText(),
         )
 
     @Slot()
@@ -4362,8 +4309,6 @@ class WorkflowWindow(QMainWindow):
     def _refresh_tournament_channel_source(self, _value: str = "") -> None:
         """预览锦标赛任务自动匹配出的渠道源。"""
         if not hasattr(self, "tournament_channel_source"):
-            return
-        if requires_manual_channel_code(self.environment.currentText()):
             return
         try:
             channel_source = self._resolve_tournament_channel_source()
@@ -4567,7 +4512,6 @@ class WorkflowWindow(QMainWindow):
             registration_age,
             registration_age,
         )
-        user_token = self.player_tier_user_token.text().strip()
         initial_balance = self.player_tier_initial_balance.value()
         spin_count = self.player_tier_spin_count.value()
         bet_amount = self.player_tier_bet_amount.value()
@@ -4578,7 +4522,7 @@ class WorkflowWindow(QMainWindow):
                 f"将在 {environment} 环境把 UID {user_id} 构造为“{target_label}”。\n\n"
                 f"注册时长将满足“{registration_age_label}”；符合条件时保留原时间，"
                 "否则更新 user.created_at。\n"
-                "若7天内的新用户将被改为大于7天，会先执行流水准备："
+                "若7天内的新用户将被改为大于7天，会自动登录并执行流水准备："
                 f"加钱 {initial_balance}，下注 {spin_count} 次，"
                 f"单注 {bet_amount} 美分。\n"
                 "累计充值高于分层门槛时会保留原值，否则使用 "
@@ -4598,7 +4542,6 @@ class WorkflowWindow(QMainWindow):
                 connection,
                 registration_age,
                 environment=environment,
-                user_token=user_token,
                 initial_balance=initial_balance,
                 spin_count=spin_count,
                 bet_amount=bet_amount,
@@ -5925,9 +5868,6 @@ class WorkflowWindow(QMainWindow):
         self.channel_codes_by_environment[environment] = saved_codes
         self.channel_code_list.clear()
         self.channel_code_list.addItems(saved_codes)
-        if environment == "prod":
-            self._refresh_prod_channel_code_combo(self.account_channel_code)
-            self._refresh_prod_channel_code_combo(self.tournament_channel_code)
         if self.environment.currentText() == environment:
             self._refresh_tournament_channel_source()
         if self.account_environment.currentText() == environment:

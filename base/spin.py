@@ -11,8 +11,13 @@ from urllib.parse import parse_qs, unquote, urlparse
 import jwt
 import requests
 
+try:  # Support package and direct script imports.
+    from .api_request import load_environment_api_base_url
+except ImportError:  # pragma: no cover - compatibility for direct execution.
+    from api_request import load_environment_api_base_url
 
-GAME_URL_API = "https://ceshigeren-ush-api.szhdev.top/v1/gamehall/self_game_url"
+
+GAME_URL_PATH = "/v1/gamehall/self_game_url"
 SPIN_API = "https://h5gz-api.szhdev.top/v1/slot/spin"
 WEB_ORIGIN = "https://webnew.hotspin777.com"
 SPIN_ORIGIN = "https://h5gz.szhdev.top"
@@ -20,13 +25,14 @@ REQUEST_TIMEOUT = 10
 ERROR_BODY_LIMIT = 300
 TOKEN_EXPIRY_LEEWAY = 5
 DEFAULT_BET_CENTS = 1_000
+TOKEN_ACTIVATION_RETRY_DELAYS = (0.5, 1.0, 2.0, 3.0)
 
 
 @dataclass(frozen=True)
 class SpinEnvironmentConfig:
     """单个下注环境的接口和浏览器参数。"""
 
-    game_url_api: str
+    environment: str
     web_origin: str
     spin_api: str = SPIN_API
     spin_origin: str = SPIN_ORIGIN
@@ -37,14 +43,19 @@ class SpinEnvironmentConfig:
         "Chrome/153.0.0.0 Mobile Safari/537.36"
     )
 
+    @property
+    def game_url_api(self) -> str:
+        """始终从所选环境读取前台 API，禁止跨环境复用地址。"""
+        return f"{load_environment_api_base_url(self.environment)}{GAME_URL_PATH}"
+
 
 SPIN_ENVIRONMENT_CONFIGS = {
     "dev": SpinEnvironmentConfig(
-        game_url_api=GAME_URL_API,
+        environment="dev",
         web_origin=WEB_ORIGIN,
     ),
     "huidu": SpinEnvironmentConfig(
-        game_url_api="https://hdapi.ushdev.top/v1/gamehall/self_game_url",
+        environment="huidu",
         web_origin="https://newhdweb.ushdev.top",
         user_agent=(
             "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) "
@@ -54,9 +65,13 @@ SPIN_ENVIRONMENT_CONFIGS = {
         version=None,
     ),
     "yy": SpinEnvironmentConfig(
-        game_url_api="https://yyapi.ushdev.top/v1/gamehall/self_game_url",
+        environment="yy",
         web_origin="https://yyres.ushdev.top",
         version=None,
+    ),
+    "individual": SpinEnvironmentConfig(
+        environment="individual",
+        web_origin=WEB_ORIGIN,
     ),
 }
 
@@ -65,11 +80,14 @@ _game_session_cache: Dict[tuple[str, str], str] = {}
 
 
 def _config_for_environment(environment: str) -> SpinEnvironmentConfig:
-    """读取下注环境配置，未知环境沿用旧默认值。"""
-    return SPIN_ENVIRONMENT_CONFIGS.get(
-        environment,
-        SPIN_ENVIRONMENT_CONFIGS["dev"],
-    )
+    """读取下注环境配置；缺失时必须停止，不能回退到其他环境。"""
+    try:
+        return SPIN_ENVIRONMENT_CONFIGS[environment]
+    except KeyError as error:
+        supported = "、".join(SPIN_ENVIRONMENT_CONFIGS)
+        raise ValueError(
+            f"下注环境 {environment!r} 未配置，可选值：{supported}"
+        ) from error
 
 
 def _game_url_headers(
@@ -221,27 +239,44 @@ def get_game_token(
         "cash_event": f"{config.web_origin}/backshop",
     }
 
-    try:
-        response = requests.post(
-            config.game_url_api,
-            headers=_game_url_headers(user_token, config),
-            json=payload,
-            timeout=REQUEST_TIMEOUT,
-        )
-        _print_debug("获取游戏 token", response, verbose)
-        if response.status_code != 200:
-            print(
-                f"[spin] 获取游戏 token 失败（HTTP {response.status_code}）："
-                f"{_response_summary(response)}"
+    retry_delays = (*TOKEN_ACTIVATION_RETRY_DELAYS, None)
+    for attempt, retry_delay in enumerate(retry_delays, 1):
+        try:
+            response = requests.post(
+                config.game_url_api,
+                headers=_game_url_headers(user_token, config),
+                json=payload,
+                timeout=REQUEST_TIMEOUT,
             )
-            return None
+            _print_debug("获取游戏 token", response, verbose)
+            if response.status_code != 200:
+                print(
+                    f"[spin] 获取游戏 token 失败（HTTP {response.status_code}）："
+                    f"{_response_summary(response)}"
+                )
+                return None
 
-        result = response.json()
-        return _extract_game_token(result)
-    except (KeyError, IndexError, TypeError, ValueError) as error:
-        print(f"[spin] 游戏 token 解析失败：{error}")
-    except requests.RequestException as error:
-        print(f"[spin] 获取游戏 token 请求失败：{error}")
+            result = response.json()
+            message = _decode_base64_value(result.get("msg"))
+            token_not_active = (
+                isinstance(message, str)
+                and "token not active yet" in message.casefold()
+            )
+            if token_not_active and retry_delay is not None:
+                print(
+                    "[spin] 登录 Token 尚不能换取游戏 Token，"
+                    f"{retry_delay:g} 秒后重试 "
+                    f"({attempt}/{len(retry_delays)})"
+                )
+                time.sleep(retry_delay)
+                continue
+            return _extract_game_token(result)
+        except (KeyError, IndexError, TypeError, ValueError) as error:
+            print(f"[spin] 登录 Token 换取游戏 Token 失败：{error}")
+            return None
+        except requests.RequestException as error:
+            print(f"[spin] 获取游戏 token 请求失败：{error}")
+            return None
     return None
 
 

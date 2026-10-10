@@ -29,6 +29,7 @@ from base import (
     api_request,
     channel_source,
     database_config,
+    environment_policy,
     feature_scenario,
     ipa_manager,
     sql_data,
@@ -42,7 +43,7 @@ from base.database_config import (
     save_database_connection,
 )
 from base.enums import Platform
-from base.user import DEFAULT_CHANNEL_CODE, User
+from base.user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD_HASH, User
 from tools.timestamp_tool import TimestampTool
 
 
@@ -55,6 +56,10 @@ class UserResponseTests(unittest.TestCase):
 
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(ids, sorted(ids, key=int))
+
+    def test_prod_is_not_a_supported_user_environment(self):
+        with self.assertRaisesRegex(ValueError, "不支持的环境"):
+            User(environment="prod")
 
     def test_decodes_base64_registration_data(self):
         payload = {"user": {"id": 42}, "token": "token-value"}
@@ -71,6 +76,73 @@ class UserResponseTests(unittest.TestCase):
 
         self.assertEqual(user_data, {"id": 42})
         self.assertEqual(token, "token-value")
+
+    def test_login_uses_single_default_password_hash_and_saves_token(self):
+        account = User(email="player@cc.cc", environment="dev")
+        account.password = "database-double-md5"
+        response = {
+            "data": {
+                "user": {"id": 42},
+                "token": "user-token",
+            }
+        }
+
+        with patch.object(
+            account,
+            "_post_user_request",
+            return_value=response,
+        ) as request:
+            account.login(platform=3)
+
+        self.assertEqual(account.uid, 42)
+        self.assertEqual(account.token, "user-token")
+        path, payload, action = request.call_args.args
+        self.assertEqual(path, "/v1/user/login")
+        self.assertEqual(action, "登录")
+        self.assertEqual(payload["email"], "player@cc.cc")
+        self.assertEqual(payload["password"], DEFAULT_PASSWORD_HASH)
+        self.assertEqual(payload["platform"], 3)
+        self.assertEqual(payload["distribution_channel"], "")
+        self.assertEqual(
+            set(payload),
+            {
+                "advertising_id",
+                "app_version",
+                "city",
+                "country",
+                "data",
+                "distribution_channel",
+                "email",
+                "password",
+                "phone_model",
+                "phone_os_version",
+                "platform",
+                "province",
+                "res_version",
+            },
+        )
+
+
+class RemovedEnvironmentPolicyTests(unittest.TestCase):
+    def test_prod_environment_and_known_hosts_are_blocked(self):
+        with self.assertRaisesRegex(ValueError, "永久移除"):
+            environment_policy.ensure_environment_allowed("prod")
+        with self.assertRaisesRegex(ValueError, "生产地址"):
+            environment_policy.ensure_url_allowed(
+                "https://api.hotspin777.com/v1/user/login"
+            )
+
+    def test_prod_marked_values_cannot_be_cached(self):
+        with self.assertRaisesRegex(ValueError, "禁止缓存"):
+            environment_policy.ensure_cache_value_allowed(
+                "test_ua_custom_prod"
+            )
+
+    def test_non_prod_environment_and_url_remain_allowed(self):
+        environment_policy.ensure_environment_allowed("dev")
+        environment_policy.ensure_url_allowed(
+            "https://devapi.ushdev.top/v1/user/login"
+        )
 
 
 class AppConfigTests(unittest.TestCase):
@@ -97,15 +169,23 @@ class AppConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_file = f"{temp_dir}/channel_codes.json"
             save_channel_codes("dev", ["dev-code"], config_file)
-            save_channel_codes("prod", ["prod-code"], config_file)
+            save_channel_codes("yy", ["yy-code"], config_file)
 
             dev_codes = load_channel_codes("dev", config_file)
-            prod_codes = load_channel_codes("prod", config_file)
+            yy_codes = load_channel_codes("yy", config_file)
             huidu_codes = load_channel_codes("huidu", config_file)
 
         self.assertEqual(dev_codes, ["dev-code"])
-        self.assertEqual(prod_codes, ["prod-code"])
+        self.assertEqual(yy_codes, ["yy-code"])
         self.assertEqual(huidu_codes, [DEFAULT_CHANNEL_CODE])
+
+    def test_removed_prod_environment_cannot_be_loaded_or_saved(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = f"{temp_dir}/channel_codes.json"
+            with self.assertRaisesRegex(ValueError, "不支持的环境"):
+                load_channel_codes("prod", config_file)
+            with self.assertRaisesRegex(ValueError, "不支持的环境"):
+                save_channel_codes("prod", ["forbidden"], config_file)
 
 
 class ApkManagerTests(unittest.TestCase):
@@ -1155,19 +1235,8 @@ class FeatureScenarioTests(unittest.TestCase):
 
 
 class ChannelSourceTests(unittest.TestCase):
-    def test_prod_uses_manual_channel_code(self):
-        resolved = channel_source.resolve_registration_channel(
-            "prod",
-            [],
-            can_enter_b=True,
-            has_new_user_offer=False,
-            manual_channel_code=" manual-prod-code ",
-        )
-
-        self.assertEqual(resolved, "manual-prod-code")
-
-    def test_prod_rejects_empty_manual_channel_code(self):
-        with self.assertRaisesRegex(ValueError, "Channel Code 不能为空"):
+    def test_removed_prod_environment_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "不支持的环境"):
             channel_source.resolve_registration_channel(
                 "prod",
                 [],
@@ -1175,7 +1244,7 @@ class ChannelSourceTests(unittest.TestCase):
                 has_new_user_offer=False,
             )
 
-    def test_non_prod_still_matches_channel_source(self):
+    def test_supported_environment_matches_channel_source(self):
         sources = [channel_source.ChannelSource("matched-code", "", 1)]
 
         resolved = channel_source.resolve_registration_channel(
@@ -1183,7 +1252,6 @@ class ChannelSourceTests(unittest.TestCase):
             sources,
             can_enter_b=True,
             has_new_user_offer=False,
-            manual_channel_code="ignored-manual-code",
         )
 
         self.assertEqual(resolved, "matched-code")
@@ -1263,15 +1331,15 @@ class ChannelSourceTests(unittest.TestCase):
                 cache_file,
             )
             channel_source.save_channel_sources(
-                "prod",
-                [channel_source.ChannelSource("prod-source", "group", 0)],
+                "yy",
+                [channel_source.ChannelSource("yy-source", "group", 0)],
                 cache_file,
             )
 
             cached = channel_source.load_channel_source_config(cache_file)
 
         self.assertEqual(cached["dev"][0].user_source, "dev-source")
-        self.assertEqual(cached["prod"][0].user_source, "prod-source")
+        self.assertEqual(cached["yy"][0].user_source, "yy-source")
         self.assertEqual(cached["huidu"], [])
 
 
@@ -1305,8 +1373,8 @@ class DatabaseConfigTests(unittest.TestCase):
                     config_file,
                 )
                 save_database_connection(
-                    "prod",
-                    self._connection("key-id", "prod-ssh.example.test"),
+                    "yy",
+                    self._connection("key-id", "yy-ssh.example.test"),
                     config_file,
                 )
 
@@ -1314,7 +1382,7 @@ class DatabaseConfigTests(unittest.TestCase):
 
         self.assertEqual(connections["dev"].ssh_host, "dev-ssh.example.test")
         self.assertEqual(connections["dev"].log_database_name, "automation_log")
-        self.assertEqual(connections["prod"].ssh_host, "prod-ssh.example.test")
+        self.assertEqual(connections["yy"].ssh_host, "yy-ssh.example.test")
         self.assertEqual(connections["huidu"].ssh_host, "")
 
     def test_missing_private_key_is_rejected(self):
@@ -1483,6 +1551,57 @@ class ApiParsingTests(unittest.TestCase):
         self.assertEqual(result, {"code": 0, "data": {}, "msg": "bet error"})
         self.assertTrue(spin._spin_failed(result))
 
+    def test_dev_game_token_uses_same_environment_as_login(self):
+        game_info = {
+            "url": "https://game.example.test/play?sign=dev-game-token"
+        }
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "data": base64.b64encode(
+                json.dumps(game_info).encode("utf-8")
+            ).decode("ascii")
+        }
+
+        with patch.object(spin.requests, "post", return_value=response) as post:
+            token = spin.get_game_token("dev-user-token", environment="dev")
+
+        self.assertEqual(token, "dev-game-token")
+        self.assertEqual(
+            post.call_args.args[0],
+            "https://devapi.ushdev.top/v1/gamehall/self_game_url",
+        )
+
+    def test_every_supported_spin_environment_uses_its_own_api_domain(self):
+        expected = {
+            "dev": (
+                "https://devapi.ushdev.top/v1/gamehall/self_game_url",
+                "https://webnew.hotspin777.com",
+            ),
+            "huidu": (
+                "https://hdapi.ushdev.top/v1/gamehall/self_game_url",
+                "https://newhdweb.ushdev.top",
+            ),
+            "yy": (
+                "https://yyapi.ushdev.top/v1/gamehall/self_game_url",
+                "https://yyres.ushdev.top",
+            ),
+            "individual": (
+                "https://ceshigeren-ush-api.szhdev.top/v1/gamehall/self_game_url",
+                "https://webnew.hotspin777.com",
+            ),
+        }
+
+        self.assertEqual(set(spin.SPIN_ENVIRONMENT_CONFIGS), set(expected))
+        for environment, (game_url_api, web_origin) in expected.items():
+            with self.subTest(environment=environment):
+                config = spin._config_for_environment(environment)
+                self.assertEqual(config.game_url_api, game_url_api)
+                self.assertEqual(config.web_origin, web_origin)
+
+    def test_unknown_spin_environment_never_falls_back_to_dev(self):
+        with self.assertRaisesRegex(ValueError, "未配置"):
+            spin.get_game_token("user-token", environment="missing")
+
     def test_huidu_game_token_uses_gray_environment_endpoints(self):
         game_info = {
             "url": "https://game.example.test/play?sign=huidu-game-token"
@@ -1557,6 +1676,39 @@ class ApiParsingTests(unittest.TestCase):
             "https://yyres.ushdev.top/backshop",
         )
 
+    def test_game_token_retries_while_new_user_token_is_activating(self):
+        inactive_response = Mock(status_code=200)
+        inactive_response.json.return_value = {
+            "code": 0,
+            "data": {},
+            "msg": "Token not active yet",
+        }
+        active_response = Mock(status_code=200)
+        active_response.json.return_value = {
+            "code": 1,
+            "data": {
+                "url": "https://game.example.test/play?sign=fresh-game-token"
+            },
+            "msg": "Succeeded",
+        }
+
+        with (
+            patch.object(
+                spin.requests,
+                "post",
+                side_effect=[inactive_response, inactive_response, active_response],
+            ) as post,
+            patch.object(spin.time, "sleep") as sleep,
+        ):
+            token = spin.get_game_token("fresh-user-token")
+
+        self.assertEqual(token, "fresh-game-token")
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual(
+            sleep.call_args_list,
+            [call(0.5), call(1.0)],
+        )
+
     def test_successful_spin_prints_compact_result(self):
         response = Mock(status_code=200)
         response.json.return_value = {"data": {"win": 0}}
@@ -1564,13 +1716,18 @@ class ApiParsingTests(unittest.TestCase):
 
         with (
             patch.object(spin, "get_valid_game_token", return_value="game-token"),
-            patch.object(spin.requests, "post", return_value=response),
+            patch.object(spin.requests, "post", return_value=response) as post,
             redirect_stdout(console),
         ):
             result = spin.dev_spin("user-token")
 
         self.assertIs(result, response)
         self.assertEqual(console.getvalue(), '[spin] 下注响应：{"data":{"win":0}}\n')
+        self.assertEqual(post.call_args.kwargs["json"]["token"], "game-token")
+        self.assertEqual(
+            post.call_args.kwargs["headers"]["Authorization"],
+            "Bearer game-token",
+        )
 
     def test_reuses_token_and_passes_session_to_next_spin(self):
         game_token = jwt.encode(
@@ -1739,6 +1896,7 @@ class BatchWorkflowTests(unittest.TestCase):
             platform=Platform.ios.value,
             verbose=False,
         )
+        account.login.assert_called_once_with(platform=Platform.ios.value)
 
     def test_tournament_bound_scenario_receives_account_context(self):
         account = Mock(uid=42, token="user-token", email="scenario@cc.cc")

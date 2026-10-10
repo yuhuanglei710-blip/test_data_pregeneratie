@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Union
 
 from .database_config import DatabaseConnectionConfig, open_database_connection
+from .environment_policy import contains_removed_environment_reference
 from .user import SUPPORTED_ENVIRONMENTS
 
 
@@ -15,7 +16,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CHANNEL_SOURCES_FILE = PROJECT_ROOT / "cache" / "channel_sources.json"
 NEW_USER_CHANNEL_GROUP = "USH-10SC-100-group"
 ORGANIC_CHANNEL_SOURCE = "Organic"
-MANUAL_CHANNEL_CODE_ENVIRONMENTS = frozenset({"prod"})
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,7 @@ def load_channel_source_config(
             source
             for value in values
             if (source := ChannelSource.from_mapping(value)) is not None
+            and not contains_removed_environment_reference(source.user_source)
         ]
     return config
 
@@ -81,6 +82,7 @@ def save_channel_sources(
             source.user_source: source
             for source in sources
             if source.user_source.strip()
+            and not contains_removed_environment_reference(source.user_source)
         }.values(),
         key=lambda source: source.user_source.casefold(),
     )
@@ -156,7 +158,10 @@ def fetch_channel_sources(
             enter_pkg=int(row[2]),
         )
         for row in rows
-        if row and str(row[0]).strip() and int(row[2]) in (0, 1)
+        if row
+        and str(row[0]).strip()
+        and not contains_removed_environment_reference(row[0])
+        and int(row[2]) in (0, 1)
     ]
 
 
@@ -201,11 +206,6 @@ def resolve_channel_source(
     )
 
 
-def requires_manual_channel_code(environment: str) -> bool:
-    """当前环境是否要求手动输入 Channel Code。"""
-    return environment in MANUAL_CHANNEL_CODE_ENVIRONMENTS
-
-
 def resolve_registration_channel(
     environment: str,
     sources: Sequence[ChannelSource],
@@ -213,15 +213,10 @@ def resolve_registration_channel(
     can_enter_b: bool,
     has_new_user_offer: bool,
     preferred_sources: Sequence[str] = (),
-    manual_channel_code: str = "",
 ) -> str:
-    """生产环境使用手动值，其他环境自动匹配渠道源。"""
-    if requires_manual_channel_code(environment):
-        channel_code = manual_channel_code.strip()
-        if not channel_code:
-            raise ValueError("Channel Code 不能为空")
-        return channel_code
-
+    """校验环境并自动匹配注册渠道源。"""
+    if environment not in SUPPORTED_ENVIRONMENTS:
+        raise ValueError(f"不支持的环境：{environment}")
     return resolve_channel_source(
         sources,
         can_enter_b=can_enter_b,

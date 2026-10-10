@@ -15,6 +15,7 @@ from .fund_and_spin import (
     fund_and_spin,
 )
 from .spin import DEFAULT_BET_CENTS
+from .user import User
 
 
 CHARGE_FEE_RATE = Decimal("0.07")
@@ -71,6 +72,14 @@ class PlayerTierMetrics:
     @property
     def tier_label(self) -> str:
         return TIER_LABELS[self.tier]
+
+
+@dataclass(frozen=True)
+class PlayerLoginCredentials:
+    """自动登录所需且不会返回到界面的用户字段。"""
+
+    email: str
+    platform: int
 
 
 def _non_negative_integer(value: object, label: str) -> int:
@@ -240,6 +249,32 @@ def fetch_player_tier(
     )
 
 
+def fetch_player_login_credentials(
+    user_id: int,
+    connection: DatabaseConnectionConfig,
+) -> PlayerLoginCredentials:
+    """按 UID 读取自动登录所需的邮箱和平台。"""
+    if isinstance(user_id, bool) or int(user_id) <= 0:
+        raise ValueError("UID 必须是大于 0 的整数")
+    with open_database_connection(connection) as database:
+        with database.cursor() as cursor:
+            cursor.execute(
+                "SELECT email, platform "
+                "FROM `user` WHERE id=%s LIMIT 1",
+                (int(user_id),),
+            )
+            row = cursor.fetchone()
+    if not isinstance(row, (tuple, list)) or len(row) < 2:
+        raise ValueError(f"未找到 UID {int(user_id)} 的登录信息")
+    email = str(row[0] or "").strip()
+    if not email:
+        raise ValueError("数据库中的用户邮箱为空，无法自动登录")
+    return PlayerLoginCredentials(
+        email=email,
+        platform=int(row[1] if row[1] is not None else 0),
+    )
+
+
 def construct_player_tier(
     user_id: int,
     target_tier: str,
@@ -313,7 +348,6 @@ def prepare_turnover_and_construct_player_tier(
     registration_age: str,
     *,
     environment: str,
-    user_token: str = "",
     initial_balance: int = INITIAL_BALANCE,
     spin_count: int = INITIAL_SPIN_COUNT,
     bet_amount: int = DEFAULT_BET_CENTS,
@@ -332,14 +366,30 @@ def prepare_turnover_and_construct_player_tier(
         and target_created_at != current.created_at
     )
     if is_new_user_being_aged:
+        credentials = fetch_player_login_credentials(user_id, connection)
+        account = User(email=credentials.email, environment=environment)
+
+        def refresh_user_token() -> str:
+            """后台加钱完成后重新登录，获取仍然有效的用户 Token。"""
+            account.login(platform=credentials.platform)
+            if account.uid != int(user_id):
+                raise RuntimeError(
+                    f"自动登录返回 UID {account.uid}，"
+                    f"与目标 UID {int(user_id)} 不一致"
+                )
+            if not account.token:
+                raise RuntimeError("自动登录成功但未获取到用户 Token")
+            return account.token
+
         fund_and_spin(
             user_id,
-            user_token,
+            None,
             environment=environment,
             amount=initial_balance,
             spin_count=spin_count,
             bet_amount=bet_amount,
             spin_workers=spin_workers,
+            refresh_user_token=refresh_user_token,
         )
     return construct_player_tier(
         user_id,

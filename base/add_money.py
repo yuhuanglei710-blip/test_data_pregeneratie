@@ -10,6 +10,11 @@ import jwt
 import requests
 from dotenv import dotenv_values
 
+try:  # Support package and direct script imports.
+    from .environment_policy import ensure_environment_allowed, ensure_url_allowed
+except ImportError:  # pragma: no cover - compatibility for direct execution.
+    from environment_policy import ensure_environment_allowed, ensure_url_allowed
+
 
 BASE_URL = os.getenv("ADMIN_BASE_URL", "https://admin.ushdev.top")
 USERNAME = os.getenv("ADMIN_USERNAME", "admin")
@@ -26,11 +31,13 @@ def _normalize_base_url(value: str) -> str:
     url = value.strip().rstrip("/")
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
+    ensure_url_allowed(url)
     return url
 
 
 def base_url_for_environment(environment: str) -> str:
     """从环境文件读取后台接口地址。"""
+    ensure_environment_allowed(environment)
     env_file = PROJECT_ROOT / f"{environment}.env"
     domain = dotenv_values(env_file).get("background_domain")
     if domain:

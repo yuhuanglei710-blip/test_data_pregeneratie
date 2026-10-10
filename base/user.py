@@ -23,7 +23,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SUPPORTED_ENVIRONMENTS = {
     "dev": "测试环境",
     "huidu": "灰度环境",
-    "prod": "生产环境",
     "yy": "运营环境",
     "individual": "个人服环境",
 }
@@ -172,6 +171,15 @@ class User:
 
     def _post_registration(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """提交注册请求并返回 JSON 对象。"""
+        return self._post_user_request("/v1/user/register", payload, "注册")
+
+    def _post_user_request(
+        self,
+        path: str,
+        payload: Dict[str, Any],
+        action: str,
+    ) -> Dict[str, Any]:
+        """向用户接口提交 JSON 请求。"""
         connection = http.client.HTTPSConnection(
             self.domain,
             timeout=REGISTRATION_TIMEOUT,
@@ -179,7 +187,7 @@ class User:
         try:
             connection.request(
                 "POST",
-                "/v1/user/register",
+                path,
                 body=json.dumps(payload),
                 headers={"Content-Type": "application/json"},
             )
@@ -189,7 +197,7 @@ class User:
             connection.close()
 
         if not isinstance(response_data, dict):
-            raise RuntimeError(f"注册接口返回格式异常: {response_data!r}")
+            raise RuntimeError(f"{action}接口返回格式异常: {response_data!r}")
         return response_data
 
     @classmethod
@@ -249,9 +257,48 @@ class User:
         except jwt.PyJWTError as error:
             print(f"token 解析失败: {error}")
 
-    def login(self) -> None:
-        """登录已有用户，功能尚未实现。"""
-        raise NotImplementedError("用户登录接口尚未实现")
+    def login(
+        self,
+        *,
+        platform: int = 0,
+        verbose: bool = False,
+    ) -> None:
+        """使用邮箱和默认密码的一次 MD5 登录已有用户并保存 token。"""
+        if not self.email.strip():
+            raise ValueError("登录邮箱不能为空")
+        self.platform = int(platform)
+        response = self._post_user_request(
+            "/v1/user/login",
+            {
+                "advertising_id": "",
+                "app_version": "",
+                "city": "",
+                "country": "",
+                "data": "",
+                "distribution_channel": "",
+                "email": self.email,
+                # 登录接口需要原密码 123456 的一次 MD5；user.password
+                # 存的是二次 MD5，不能从数据库取值后直接传入。
+                "password": DEFAULT_PASSWORD_HASH,
+                "phone_model": "",
+                "phone_os_version": "",
+                "platform": self.platform,
+                "province": "",
+                "res_version": "",
+            },
+            "登录",
+        )
+        decoded_response = self._decode_registration_response(response)
+        if verbose:
+            print(
+                "[user:debug] 登录接口响应:",
+                json.dumps(decoded_response, ensure_ascii=False, indent=2),
+            )
+        user_data, token = self._find_registration_data(decoded_response.get("data"))
+        if not user_data or not token:
+            raise RuntimeError(f"登录失败，接口响应: {decoded_response}")
+        self.uid = int(user_data["id"])
+        self.token = token
 
     @staticmethod
     def map_translate_dic(key: str) -> str:

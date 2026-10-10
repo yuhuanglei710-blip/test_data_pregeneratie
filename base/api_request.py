@@ -14,6 +14,11 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 import requests
 from dotenv import dotenv_values
 
+try:  # Support package and direct script imports.
+    from .environment_policy import ensure_environment_allowed, ensure_url_allowed
+except ImportError:  # pragma: no cover - compatibility for direct execution.
+    from environment_policy import ensure_environment_allowed, ensure_url_allowed
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 API_TEMPLATES_FILE = PROJECT_ROOT / "cache" / "api_templates.json"
@@ -313,6 +318,7 @@ def load_environment_api_base_url(
     project_root: Union[str, Path] = PROJECT_ROOT,
 ) -> str:
     """读取环境文件中的前台 API 域名并转换成基础 URL。"""
+    ensure_environment_allowed(environment)
     env_file = Path(project_root) / f"{environment}.env"
     domain = str(dotenv_values(env_file).get("domain") or "").strip()
     if not domain:
@@ -330,10 +336,13 @@ def resolve_api_url(
     """将相对接口路径和所选环境域名组合成完整 URL。"""
     rendered_endpoint = _render_value(endpoint, parameters)
     if rendered_endpoint.startswith(("http://", "https://")):
+        ensure_url_allowed(rendered_endpoint)
         return rendered_endpoint
     if not environment:
         raise ValueError("相对接口路径必须选择运行环境")
-    return f"{load_environment_api_base_url(environment)}{rendered_endpoint}"
+    resolved = f"{load_environment_api_base_url(environment)}{rendered_endpoint}"
+    ensure_url_allowed(resolved)
+    return resolved
 
 
 def execute_api_template(

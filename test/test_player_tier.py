@@ -4,12 +4,13 @@ import unittest
 from contextlib import contextmanager
 from dataclasses import replace
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import ANY, Mock, patch
 
 from base.database_config import DatabaseConnectionConfig
 from base.player_tier import (
     CONSTRUCTION_CHARGE_TOTAL,
     MINIMUM_TIER_CHARGE_TOTAL,
+    PlayerLoginCredentials,
     REGISTRATION_AGE_OVER_7_DAYS,
     REGISTRATION_AGE_WITHIN_7_DAYS,
     SECONDS_PER_DAY,
@@ -22,6 +23,7 @@ from base.player_tier import (
     build_player_tier_values,
     calculate_player_tier,
     construct_player_tier,
+    fetch_player_login_credentials,
     fetch_player_tier,
     prepare_turnover_and_construct_player_tier,
     resolve_registration_created_at,
@@ -134,7 +136,7 @@ class PlayerTierCalculationTests(unittest.TestCase):
 class _FakeCursor:
     def __init__(
         self,
-        row: tuple[int, ...],
+        row: tuple[object, ...],
         user_segment: int = 0,
     ) -> None:
         self.row = row
@@ -164,7 +166,7 @@ class _FakeCursor:
 class _FakeDatabase:
     def __init__(
         self,
-        row: tuple[int, ...],
+        row: tuple[object, ...],
         user_segment: int = 0,
     ) -> None:
         self.fake_cursor = _FakeCursor(row, user_segment)
@@ -182,8 +184,36 @@ class _FakeDatabase:
 
 
 class PlayerTierDatabaseTests(unittest.TestCase):
+    def test_fetch_login_credentials_by_uid(self) -> None:
+        database = _FakeDatabase(
+            (
+                "player@cc.cc",
+                3,
+            )
+        )
+
+        @contextmanager
+        def connection_context(_connection):
+            yield database
+
+        with patch(
+            "base.player_tier.open_database_connection",
+            side_effect=connection_context,
+        ):
+            credentials = fetch_player_login_credentials(
+                42,
+                DatabaseConnectionConfig(),
+            )
+
+        self.assertEqual(credentials.email, "player@cc.cc")
+        self.assertEqual(credentials.platform, 3)
+        self.assertEqual(database.fake_cursor.executions[0][1], (42,))
+
     def test_fetch_returns_user_base_segment(self) -> None:
-        database = _FakeDatabase((42, 350_000, 0, 273_000), user_segment=3)
+        database = _FakeDatabase(
+            (42, 350_000, 0, 273_000, 1_900_000),
+            user_segment=3,
+        )
 
         @contextmanager
         def connection_context(_connection):
@@ -274,10 +304,19 @@ class PlayerTierDatabaseTests(unittest.TestCase):
             calculate_player_tier(400_000, 0, 312_000, user_id=42),
             created_at=now - SECONDS_PER_DAY,
         )
+        credentials = PlayerLoginCredentials(
+            "player@cc.cc",
+            3,
+        )
         events = []
+        account = Mock(uid=42, token="auto-user-token")
 
-        def prepare_turnover(*_args, **_kwargs):
+        def prepare_turnover(*_args, **kwargs):
             events.append("turnover")
+            self.assertEqual(
+                kwargs["refresh_user_token"](),
+                "auto-user-token",
+            )
 
         def construct(*_args, **_kwargs):
             events.append("construct")
@@ -286,6 +325,11 @@ class PlayerTierDatabaseTests(unittest.TestCase):
         with (
             patch("base.player_tier.time.time", return_value=now),
             patch("base.player_tier.fetch_player_tier", return_value=current),
+            patch(
+                "base.player_tier.fetch_player_login_credentials",
+                return_value=credentials,
+            ),
+            patch("base.player_tier.User", return_value=account) as user_factory,
             patch(
                 "base.player_tier.fund_and_spin",
                 side_effect=prepare_turnover,
@@ -301,7 +345,6 @@ class PlayerTierDatabaseTests(unittest.TestCase):
                 DatabaseConnectionConfig(),
                 REGISTRATION_AGE_OVER_7_DAYS,
                 environment="dev",
-                user_token="user-token",
                 initial_balance=1_000,
                 spin_count=3,
                 bet_amount=100,
@@ -309,14 +352,20 @@ class PlayerTierDatabaseTests(unittest.TestCase):
 
         self.assertIs(result, current)
         self.assertEqual(events, ["turnover", "construct"])
+        user_factory.assert_called_once_with(
+            email="player@cc.cc",
+            environment="dev",
+        )
+        account.login.assert_called_once_with(platform=3)
         fund.assert_called_once_with(
             42,
-            "user-token",
+            None,
             environment="dev",
             amount=1_000,
             spin_count=3,
             bet_amount=100,
             spin_workers=5,
+            refresh_user_token=ANY,
         )
 
     def test_existing_old_user_skips_turnover(self) -> None:

@@ -153,6 +153,20 @@ def _create_account_and_bet(
             raise BatchCriticalError(f"绑定 SQL 执行失败：{error}") from error
         print(f"[{index}/{count}] SQL OK · {sql_template.title}")
 
+    registered_user_id = int(account.uid)
+
+    def refresh_user_token() -> str:
+        """后台加钱会使旧 token 失效，下注前必须重新登录。"""
+        account.login(platform=platform)
+        if account.uid != registered_user_id:
+            raise RuntimeError(
+                f"重新登录返回 UID {account.uid}，与目标 UID "
+                f"{registered_user_id} 不一致"
+            )
+        if not account.token:
+            raise RuntimeError("重新登录成功但未获取到用户 Token")
+        return account.token
+
     fund_and_spin(
         account.uid,
         account.token,
@@ -164,6 +178,7 @@ def _create_account_and_bet(
         verbose=verbose,
         stop_requested=stop_requested,
         admin_base_url=admin_base_url,
+        refresh_user_token=refresh_user_token,
         spin_runner=_place_initial_spins,
         log_prefix=f"[{index}/{count}] ",
     )

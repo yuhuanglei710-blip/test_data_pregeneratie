@@ -22,6 +22,12 @@ from urllib.parse import unquote, urlparse
 import requests
 from cryptography import x509
 
+from .environment_policy import (
+    contains_removed_environment_reference,
+    ensure_cache_value_allowed,
+    ensure_url_allowed,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 IPA_CACHE_DIR = PROJECT_ROOT / "cache" / "ipas"
@@ -324,7 +330,7 @@ def _normalize_package(value: object) -> Optional[CachedIpa]:
     required = ("package_id", "name", "path", "md5", "bundle_id")
     if any(not str(value.get(key) or "").strip() for key in required):
         return None
-    return CachedIpa(
+    package = CachedIpa(
         package_id=str(value["package_id"]).strip(),
         name=str(value["name"]).strip(),
         path=str(value["path"]).strip(),
@@ -336,6 +342,12 @@ def _normalize_package(value: object) -> Optional[CachedIpa]:
         note=str(value.get("note") or "").strip(),
         added_at=str(value.get("added_at") or "").strip(),
     )
+    if any(
+        contains_removed_environment_reference(field)
+        for field in asdict(package).values()
+    ):
+        return None
+    return package
 
 
 def load_cached_ipas(path: Union[str, Path] = IPA_CONFIG_FILE) -> list[CachedIpa]:
@@ -355,6 +367,10 @@ def load_cached_ipas(path: Union[str, Path] = IPA_CONFIG_FILE) -> list[CachedIpa
 def _write_cached_ipas(
     packages: Iterable[CachedIpa], path: Union[str, Path] = IPA_CONFIG_FILE
 ) -> None:
+    packages = list(packages)
+    for package in packages:
+        for value in asdict(package).values():
+            ensure_cache_value_allowed(value)
     config_path = Path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = config_path.with_suffix(f"{config_path.suffix}.tmp")
@@ -375,6 +391,9 @@ def cache_ipa(
 ) -> CacheIpaResult:
     """读取包信息后按 MD5 缓存 IPA，不做签名预检。"""
     source_path = Path(source)
+    ensure_cache_value_allowed(source_path.name)
+    ensure_cache_value_allowed(display_name)
+    ensure_cache_value_allowed(attribution or "")
     if not source_path.is_file():
         raise ValueError("请选择存在的 IPA 文件")
     if source_path.suffix.lower() != ".ipa":
@@ -423,6 +442,9 @@ def download_and_cache_ipa(
 ) -> CacheIpaResult:
     """下载到临时文件，读取包信息后进入正式缓存。"""
     cleaned = url.strip()
+    ensure_cache_value_allowed(cleaned)
+    ensure_cache_value_allowed(attribution or "")
+    ensure_url_allowed(cleaned)
     parsed = urlparse(cleaned)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("下载地址必须是有效的 http:// 或 https:// URL")
@@ -466,6 +488,8 @@ def update_cached_ipa(
     note: str = "",
     path: Union[str, Path] = IPA_CONFIG_FILE,
 ) -> CachedIpa:
+    for value in (name, attribution, note):
+        ensure_cache_value_allowed(value)
     packages = load_cached_ipas(path)
     index = next((i for i, item in enumerate(packages) if item.package_id == package_id), -1)
     if index < 0:
@@ -569,6 +593,8 @@ def open_ios_attribution_url(udid: str, url: str) -> None:
     if not cleaned_udid:
         raise ValueError("请先连接并选择 iOS 设备")
     cleaned = url.strip()
+    ensure_cache_value_allowed(cleaned)
+    ensure_url_allowed(cleaned)
     parsed = urlparse(cleaned)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("归因链接必须是有效的 http:// 或 https:// 地址")
