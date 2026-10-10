@@ -10,11 +10,15 @@ from base.database_config import DatabaseConnectionConfig
 from base.player_tier import (
     CONSTRUCTION_CHARGE_TOTAL,
     MINIMUM_TIER_CHARGE_TOTAL,
+    NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL,
+    NET_PROFIT_TOP_TARGET_RATE,
     PlayerLoginCredentials,
     REGISTRATION_AGE_OVER_7_DAYS,
     REGISTRATION_AGE_WITHIN_7_DAYS,
     SECONDS_PER_DAY,
+    TARGET_NET_PROFIT_TOP,
     TARGET_PROFIT_RATES,
+    TOP_NET_PROFIT_THRESHOLD,
     TIER_ARBITRAGE,
     TIER_CORE,
     TIER_NORMAL,
@@ -51,6 +55,19 @@ class PlayerTierCalculationTests(unittest.TestCase):
         self.assertIsNone(metrics.profit_rate)
         self.assertEqual(metrics.tier, TIER_UNCLASSIFIED)
 
+    def test_net_profit_top_rule_is_strict_and_precedes_profit_rate(self) -> None:
+        exact_threshold = calculate_player_tier(7_000_000, 0, 5_510_000)
+        above_threshold = calculate_player_tier(7_000_000, 0, 5_509_999)
+
+        self.assertEqual(exact_threshold.net_profit, TOP_NET_PROFIT_THRESHOLD)
+        self.assertEqual(exact_threshold.tier, TIER_CORE)
+        self.assertEqual(
+            above_threshold.net_profit,
+            TOP_NET_PROFIT_THRESHOLD + 1,
+        )
+        self.assertLess(above_threshold.profit_rate, Decimal("0.20"))
+        self.assertEqual(above_threshold.tier, TIER_TOP)
+
     def test_constructed_values_hit_each_target_with_small_charge(self) -> None:
         current = calculate_player_tier(20_000, 2_000, 250_000, user_id=42)
         for target in TARGET_PROFIT_RATES:
@@ -76,6 +93,36 @@ class PlayerTierCalculationTests(unittest.TestCase):
 
         self.assertEqual(proposed.charge_total, 525_000)
         self.assertEqual(proposed.profit_rate, TARGET_PROFIT_RATES[TIER_CORE])
+
+    def test_construct_net_profit_top_proves_priority_over_profit_rate(self) -> None:
+        current = calculate_player_tier(20_000, 0, 0, user_id=42)
+
+        proposed = build_player_tier_values(current, TARGET_NET_PROFIT_TOP)
+
+        self.assertEqual(
+            proposed.charge_total,
+            NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL,
+        )
+        self.assertEqual(proposed.profit_rate, NET_PROFIT_TOP_TARGET_RATE)
+        self.assertGreater(proposed.net_profit, TOP_NET_PROFIT_THRESHOLD)
+        self.assertEqual(proposed.tier, TIER_TOP)
+
+    def test_construct_core_after_net_profit_top_stays_below_priority_rule(self) -> None:
+        current = build_player_tier_values(
+            calculate_player_tier(20_000, 0, 0, user_id=42),
+            TARGET_NET_PROFIT_TOP,
+        )
+
+        proposed = build_player_tier_values(current, TIER_CORE)
+
+        self.assertEqual(
+            proposed.charge_total,
+            NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL,
+        )
+        self.assertLessEqual(proposed.net_profit, TOP_NET_PROFIT_THRESHOLD)
+        self.assertGreaterEqual(proposed.profit_rate, Decimal("0.10"))
+        self.assertLess(proposed.profit_rate, Decimal("0.20"))
+        self.assertEqual(proposed.tier, TIER_CORE)
 
     def test_minimum_boundary_uses_safe_construction_value(self) -> None:
         current = calculate_player_tier(

@@ -12,7 +12,10 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from base.apk_manager import ApkInstallResult, CachedApk
-from base.player_tier import REGISTRATION_AGE_OVER_7_DAYS
+from base.player_tier import (
+    REGISTRATION_AGE_OVER_7_DAYS,
+    TARGET_NET_PROFIT_TOP,
+)
 from base.sql_data import SqlTemplate
 from gui import WorkflowWindow, configure_application_fonts
 
@@ -111,6 +114,14 @@ class ApkConflictPromptTests(unittest.TestCase):
         self.assertEqual(
             self.window.player_tier_registration_age.currentData(),
             REGISTRATION_AGE_OVER_7_DAYS,
+        )
+        net_profit_top_index = self.window.player_tier_target.findData(
+            TARGET_NET_PROFIT_TOP
+        )
+        self.assertGreaterEqual(net_profit_top_index, 0)
+        self.assertIn(
+            "净利润顶级玩家",
+            self.window.player_tier_target.itemText(net_profit_top_index),
         )
 
     def test_sql_template_selection_builds_runtime_parameter_inputs(self) -> None:

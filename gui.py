@@ -85,10 +85,13 @@ from base.ipa_manager import (
 from base.player_tier import (
     CONSTRUCTION_CHARGE_TOTAL,
     MINIMUM_TIER_CHARGE_TOTAL,
+    NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL,
     REGISTRATION_AGE_LABELS,
     REGISTRATION_AGE_OVER_7_DAYS,
     REGISTRATION_AGE_WITHIN_7_DAYS,
+    TARGET_NET_PROFIT_TOP,
     TARGET_PROFIT_RATES,
+    TARGET_TIER_LABELS,
     TIER_LABELS,
     PlayerTierMetrics,
     calculate_player_tier,
@@ -215,7 +218,7 @@ def application_monospace_font(point_size: float) -> QFont:
 SECTION_INFO = (
     ("数据准备", "账号生成", "批量生成测试账号，或使用指定邮箱创建单个账号。"),
     ("数据准备", "锦标赛造数", "创建参赛账号并完成充值、下注等锦标赛数据准备。"),
-    ("数据准备", "玩家分层", "按利润率识别玩家层级，并可按 UID 构造目标分层数据。"),
+    ("数据准备", "玩家分层", "按净利润优先、利润率兜底识别玩家层级，并可按 UID 构造目标分层数据。"),
     ("接口与流程", "SQL 数据模板", "维护并执行可复用 SQL，用于快速准备业务测试数据。"),
     ("接口与流程", "API 请求模板", "保存、调试并复用环境化的 HTTP 请求。"),
     ("接口与流程", "自动化场景", "把 SQL、API、变量提取和断言编排为完整流程。"),
@@ -1687,6 +1690,7 @@ class WorkflowWindow(QMainWindow):
         formula_layout.addWidget(formula_title)
         formula = QLabel(
             "净利润 = 累计充值 − 累计提现 − 7% × 累计充值 − 3.5% × 累计提现 − 当前余额\n"
+            "净利润 > 1,000,000 分（$10,000）→ 顶级玩家；否则按利润率判断\n"
             "利润率 = 净利润 ÷ 累计充值    ·    套利 < −1%    ·    普通 [−1%, 10%)    ·    "
             "核心 [10%, 20%)    ·    顶级 ≥ 20%"
         )
@@ -1775,11 +1779,17 @@ class WorkflowWindow(QMainWindow):
                 f"{TIER_LABELS[tier]}（目标 {rate:.0f}%）",
                 tier,
             )
+        self.player_tier_target.addItem(
+            "净利润顶级玩家（净利润 > $10,000）",
+            TARGET_NET_PROFIT_TOP,
+        )
         uid_layout.addWidget(self.player_tier_target)
         construct_hint = QLabel(
             f"累计充值高于 {MINIMUM_TIER_CHARGE_TOTAL} 美分时保留原值；未达门槛或"
             f"正好处于门槛时使用 {CONSTRUCTION_CHARGE_TOTAL} 美分安全构造值，并更新 "
             "charge_total、withdraw_total 与 money；"
+            f"净利润顶级目标会使用至少 {NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL:,} 分累计充值，"
+            "以 15% 利润率构造并验证净利润规则优先；"
             "执行前会再次确认。"
         )
         construct_hint.setObjectName("fieldHint")
@@ -4504,7 +4514,7 @@ class WorkflowWindow(QMainWindow):
             QMessageBox.information(self, "无法构造", str(error))
             return
         target_tier = str(self.player_tier_target.currentData() or "")
-        target_label = TIER_LABELS.get(target_tier, target_tier)
+        target_label = TARGET_TIER_LABELS.get(target_tier, target_tier)
         registration_age = str(
             self.player_tier_registration_age.currentData() or ""
         )
@@ -4527,7 +4537,9 @@ class WorkflowWindow(QMainWindow):
                 f"单注 {bet_amount} 美分。\n"
                 "累计充值高于分层门槛时会保留原值，否则使用 "
                 f"{CONSTRUCTION_CHARGE_TOTAL} 美分安全构造值；并同步更新 "
-                "user.charge_total、user.withdraw_total 和 user.money。"
+                "user.charge_total、user.withdraw_total 和 user.money。\n"
+                "选择净利润顶级玩家时，将以 15% 利润率构造净利润严格超过 "
+                "1,000,000 分（$10,000）的数据。"
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,

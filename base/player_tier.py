@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from typing import Optional
 
 from .database_config import DatabaseConnectionConfig, open_database_connection
@@ -25,6 +25,13 @@ MAX_UNSIGNED_INT = 4_294_967_295
 # 留出 50000 美分余量，避免测试数据全部落在服务端判断边界上。
 MINIMUM_TIER_CHARGE_TOTAL = 350_000
 CONSTRUCTION_CHARGE_TOTAL = 400_000
+# 净利润严格超过 10,000 美元（1,000,000 分）时，优先判定为顶级玩家。
+TOP_NET_PROFIT_THRESHOLD = Decimal("1000000")
+TARGET_NET_PROFIT_TOP = "net_profit_top"
+# 特殊构造目标使用 7,000,000 分充值、15% 利润率：净利润为 1,050,000 分。
+# 该利润率按普通规则本应属于核心玩家，可明确验证净利润规则的优先级。
+NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL = 7_000_000
+NET_PROFIT_TOP_TARGET_RATE = Decimal("0.15")
 SECONDS_PER_DAY = 24 * 60 * 60
 REGISTRATION_AGE_WITHIN_7_DAYS = "within_7_days"
 REGISTRATION_AGE_OVER_7_DAYS = "over_7_days"
@@ -52,6 +59,11 @@ TARGET_PROFIT_RATES = {
     TIER_NORMAL: Decimal("0.05"),
     TIER_CORE: Decimal("0.15"),
     TIER_TOP: Decimal("0.25"),
+}
+
+TARGET_TIER_LABELS = {
+    **{tier: TIER_LABELS[tier] for tier in TARGET_PROFIT_RATES},
+    TARGET_NET_PROFIT_TOP: "净利润顶级玩家",
 }
 
 
@@ -123,7 +135,9 @@ def calculate_player_tier(
             TIER_UNCLASSIFIED,
         )
     profit_rate = net_profit / Decimal(charge)
-    if profit_rate < Decimal("-0.01"):
+    if net_profit > TOP_NET_PROFIT_THRESHOLD:
+        tier = TIER_TOP
+    elif profit_rate < Decimal("-0.01"):
         tier = TIER_ARBITRAGE
     elif profit_rate < Decimal("0.10"):
         tier = TIER_NORMAL
@@ -147,18 +161,33 @@ def build_player_tier_values(
     target_tier: str,
 ) -> PlayerTierMetrics:
     """保留已达标的累计充值，并调整余额构造目标分层区间。"""
-    if target_tier not in TARGET_PROFIT_RATES:
+    if target_tier not in TARGET_TIER_LABELS:
         raise ValueError("不支持的目标分层")
-    target_rate = TARGET_PROFIT_RATES[target_tier]
     charge = (
         current.charge_total
         if current.charge_total > MINIMUM_TIER_CHARGE_TOTAL
         else CONSTRUCTION_CHARGE_TOTAL
     )
+    if target_tier == TARGET_NET_PROFIT_TOP:
+        charge = max(charge, NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL)
+        target_rate = NET_PROFIT_TOP_TARGET_RATE
+    else:
+        target_rate = TARGET_PROFIT_RATES[target_tier]
     withdraw = 0
+    target_net_profit = target_rate * Decimal(charge)
+    rounding = ROUND_HALF_UP
+    if (
+        target_tier in {TIER_NORMAL, TIER_CORE}
+        and target_net_profit > TOP_NET_PROFIT_THRESHOLD
+    ):
+        # 保留高累计充值时，不能让普通/核心目标被净利润优先规则重新判成顶级。
+        target_net_profit = TOP_NET_PROFIT_THRESHOLD
+        rounding = ROUND_CEILING
     balance = int(
-        ((Decimal("0.93") - target_rate) * Decimal(charge)).to_integral_value(
-            rounding=ROUND_HALF_UP
+        (
+            Decimal("0.93") * Decimal(charge) - target_net_profit
+        ).to_integral_value(
+            rounding=rounding
         )
     )
     if balance > MAX_UNSIGNED_INT:
@@ -169,8 +198,19 @@ def build_player_tier_values(
         balance,
         user_id=current.user_id,
     )
-    if proposed.tier != target_tier:
+    expected_tier = TIER_TOP if target_tier == TARGET_NET_PROFIT_TOP else target_tier
+    if proposed.tier != expected_tier:
+        if target_tier == TIER_CORE and charge > 10_000_000:
+            raise ValueError(
+                "当前累计充值超过 10,000,000 分；保留该充值额时，"
+                "核心玩家所需的最低 10% 净利润已超过顶级阈值，无法构造"
+            )
         raise ValueError("整数金额舍入后未能落入目标分层")
+    if (
+        target_tier == TARGET_NET_PROFIT_TOP
+        and proposed.net_profit <= TOP_NET_PROFIT_THRESHOLD
+    ):
+        raise ValueError("整数金额舍入后净利润未超过 1,000,000 分")
     return proposed
 
 
