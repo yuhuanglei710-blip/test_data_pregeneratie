@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from base.database_config import DatabaseConnectionConfig
 from base.player_tier import (
+    CONSTRUCTION_CHARGE_TOTAL,
     TARGET_PROFIT_RATES,
     TIER_ARBITRAGE,
     TIER_CORE,
@@ -40,14 +41,22 @@ class PlayerTierCalculationTests(unittest.TestCase):
         self.assertIsNone(metrics.profit_rate)
         self.assertEqual(metrics.tier, TIER_UNCLASSIFIED)
 
-    def test_constructed_values_hit_each_target_and_keep_balance(self) -> None:
+    def test_constructed_values_hit_each_target_with_small_charge(self) -> None:
         current = calculate_player_tier(20_000, 2_000, 250_000, user_id=42)
         for target in TARGET_PROFIT_RATES:
             with self.subTest(target=target):
                 proposed = build_player_tier_values(current, target)
                 self.assertEqual(proposed.tier, target)
-                self.assertEqual(proposed.balance, current.balance)
-                self.assertGreaterEqual(proposed.charge_total, current.charge_total)
+                self.assertEqual(
+                    proposed.profit_rate,
+                    TARGET_PROFIT_RATES[target],
+                )
+                self.assertEqual(
+                    proposed.charge_total,
+                    CONSTRUCTION_CHARGE_TOTAL,
+                )
+                self.assertEqual(proposed.withdraw_total, 0)
+                self.assertLess(proposed.balance, CONSTRUCTION_CHARGE_TOTAL)
 
 
 class _FakeCursor:
@@ -88,7 +97,7 @@ class _FakeDatabase:
 
 
 class PlayerTierDatabaseTests(unittest.TestCase):
-    def test_construct_updates_totals_but_not_balance(self) -> None:
+    def test_construct_updates_totals_and_balance(self) -> None:
         database = _FakeDatabase((42, 10_000, 2_000, 35_000))
 
         @contextmanager
@@ -108,10 +117,12 @@ class PlayerTierDatabaseTests(unittest.TestCase):
         self.assertTrue(database.committed)
         self.assertFalse(database.rolled_back)
         self.assertEqual(result.tier, TIER_CORE)
-        self.assertEqual(result.balance, 35_000)
+        self.assertEqual(result.charge_total, CONSTRUCTION_CHARGE_TOTAL)
+        self.assertEqual(result.withdraw_total, 0)
+        self.assertEqual(result.balance, 7_800)
         update_sql, update_parameters = database.fake_cursor.executions[1]
-        self.assertNotIn("money=", update_sql)
-        self.assertEqual(update_parameters[2], 42)
+        self.assertIn("money=%s", update_sql)
+        self.assertEqual(update_parameters, (10_000, 0, 7_800, 42))
 
 
 if __name__ == "__main__":

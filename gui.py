@@ -82,6 +82,7 @@ from base.ipa_manager import (
     update_cached_ipa,
 )
 from base.player_tier import (
+    CONSTRUCTION_CHARGE_TOTAL,
     TARGET_PROFIT_RATES,
     TIER_LABELS,
     PlayerTierMetrics,
@@ -1660,7 +1661,7 @@ class WorkflowWindow(QMainWindow):
         uid_title = QLabel("按 UID 查询与构造")
         uid_title.setObjectName("sectionTitle")
         uid_layout.addWidget(uid_title)
-        uid_hint = QLabel("从所选环境的 user 表读取数据；构造时保持 money 不变。")
+        uid_hint = QLabel("从所选环境的 user 表读取数据；构造时会同步调整 money。")
         uid_hint.setObjectName("fieldHint")
         uid_hint.setWordWrap(True)
         uid_layout.addWidget(uid_hint)
@@ -1696,7 +1697,9 @@ class WorkflowWindow(QMainWindow):
             )
         uid_layout.addWidget(self.player_tier_target)
         construct_hint = QLabel(
-            "仅更新 charge_total 与 withdraw_total，执行前会再次确认；金额均为数据库原值（分）。"
+            f"使用 {CONSTRUCTION_CHARGE_TOTAL} 分累计充值构造，并更新 "
+            "charge_total、withdraw_total 与 money；"
+            "执行前会再次确认。"
         )
         construct_hint.setObjectName("fieldHint")
         construct_hint.setWordWrap(True)
@@ -4372,7 +4375,9 @@ class WorkflowWindow(QMainWindow):
             "确认构造玩家分层",
             (
                 f"将在 {environment} 环境把 UID {user_id} 构造为“{target_label}”。\n\n"
-                "操作会更新 user.charge_total 和 user.withdraw_total，当前余额 money 保持不变。"
+                f"操作会把 user.charge_total 设为 {CONSTRUCTION_CHARGE_TOTAL} 分，"
+                "并同步更新 "
+                "user.withdraw_total 和 user.money。"
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,

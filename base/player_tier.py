@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from .database_config import DatabaseConnectionConfig, open_database_connection
@@ -12,6 +12,7 @@ from .database_config import DatabaseConnectionConfig, open_database_connection
 CHARGE_FEE_RATE = Decimal("0.07")
 WITHDRAW_FEE_RATE = Decimal("0.035")
 MAX_UNSIGNED_INT = 4_294_967_295
+CONSTRUCTION_CHARGE_TOTAL = 10_000
 
 TIER_ARBITRAGE = "arbitrage"
 TIER_NORMAL = "normal"
@@ -116,34 +117,27 @@ def build_player_tier_values(
     current: PlayerTierMetrics,
     target_tier: str,
 ) -> PlayerTierMetrics:
-    """保持当前余额不变，构造目标分层区间内的累计充值和提现。"""
+    """用小额累计充值并调整余额，构造目标分层区间内的数据。"""
     if target_tier not in TARGET_PROFIT_RATES:
         raise ValueError("不支持的目标分层")
     target_rate = TARGET_PROFIT_RATES[target_tier]
-    charge_factor = Decimal("0.93") - target_rate
-    required_charge = (
-        Decimal(current.balance) / charge_factor
-    ).to_integral_value(rounding=ROUND_CEILING) + 10_000
-    charge = max(current.charge_total, 100_000, int(required_charge))
-    if charge > MAX_UNSIGNED_INT:
-        raise ValueError("当前余额过高，无法在 user 表字段范围内构造目标分层")
-    withdraw = int(
-        (
-            (charge_factor * Decimal(charge) - Decimal(current.balance))
-            / Decimal("1.035")
-        ).to_integral_value(rounding=ROUND_HALF_UP)
+    charge = CONSTRUCTION_CHARGE_TOTAL
+    withdraw = 0
+    balance = int(
+        ((Decimal("0.93") - target_rate) * Decimal(charge)).to_integral_value(
+            rounding=ROUND_HALF_UP
+        )
     )
-    withdraw = max(0, withdraw)
-    if withdraw > MAX_UNSIGNED_INT:
-        raise ValueError("计算出的累计提现超出 user 表字段范围")
+    if balance > MAX_UNSIGNED_INT:
+        raise ValueError("计算出的当前余额超出 user 表字段范围")
     proposed = calculate_player_tier(
         charge,
         withdraw,
-        current.balance,
+        balance,
         user_id=current.user_id,
     )
     if proposed.tier != target_tier:
-        raise ValueError("整数金额舍入后未能落入目标分层，请调整当前余额后重试")
+        raise ValueError("整数金额舍入后未能落入目标分层")
     return proposed
 
 
@@ -178,7 +172,7 @@ def construct_player_tier(
     target_tier: str,
     connection: DatabaseConnectionConfig,
 ) -> PlayerTierMetrics:
-    """锁定玩家记录并写入目标分层数据，仅修改累计充值和累计提现。"""
+    """锁定玩家记录并写入目标分层的充值、提现和余额数据。"""
     if isinstance(user_id, bool) or int(user_id) <= 0:
         raise ValueError("UID 必须是大于 0 的整数")
     with open_database_connection(connection) as database:
@@ -195,11 +189,12 @@ def construct_player_tier(
                 current = _metrics_from_row(row, int(user_id))
                 proposed = build_player_tier_values(current, target_tier)
                 cursor.execute(
-                    "UPDATE `user` SET charge_total=%s, withdraw_total=%s "
+                    "UPDATE `user` SET charge_total=%s, withdraw_total=%s, money=%s "
                     "WHERE id=%s",
                     (
                         proposed.charge_total,
                         proposed.withdraw_total,
+                        proposed.balance,
                         proposed.user_id,
                     ),
                 )
