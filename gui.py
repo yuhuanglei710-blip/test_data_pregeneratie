@@ -1,6 +1,7 @@
 """自动化测试数据桌面控制台。"""
 
 import os
+import re
 import threading
 from contextlib import redirect_stderr, redirect_stdout
 from decimal import Decimal
@@ -139,7 +140,9 @@ from base.sql_data import (
     delete_sql_template,
     generate_feature_data,
     load_sql_templates,
+    parse_runtime_parameter,
     save_sql_template,
+    template_parameter_names,
 )
 from base.tournment_test import (
     DEFAULT_ACCOUNT_COUNT,
@@ -893,19 +896,35 @@ class SqlTemplateDialog(QDialog):
         self.title_input.setPlaceholderText("例如：开通 VIP 测试数据")
         layout.addWidget(self.title_input)
 
-        sql_label = QLabel("SQL（使用 @userid=xxx; 声明 UID）")
+        parameter_label = QLabel("添加参数")
+        parameter_label.setObjectName("fieldLabel")
+        layout.addWidget(parameter_label)
+        parameter_row = QHBoxLayout()
+        self.parameter_name_input = QLineEdit()
+        self.parameter_name_input.setPlaceholderText("例如：viplevel")
+        self.parameter_name_input.returnPressed.connect(self._add_parameter)
+        parameter_row.addWidget(self.parameter_name_input, 1)
+        add_parameter_button = QPushButton("添加声明")
+        add_parameter_button.setObjectName("secondaryButton")
+        add_parameter_button.clicked.connect(self._add_parameter)
+        parameter_row.addWidget(add_parameter_button)
+        layout.addLayout(parameter_row)
+
+        sql_label = QLabel("SQL（使用 @参数名=xxx; 声明运行参数）")
         sql_label.setObjectName("fieldLabel")
         layout.addWidget(sql_label)
         self.sql_input = QPlainTextEdit()
         self.sql_input.setPlaceholderText(
             "@userid=xxx;\n"
-            "UPDATE user SET vip_level=1 WHERE id=@userid;"
+            "@viplevel=xxx;\n"
+            "UPDATE user SET vip_level=@viplevel WHERE id=@userid;"
         )
         self.sql_input.setPlainText(template.sql if template else "@userid=xxx;\n")
         layout.addWidget(self.sql_input, 1)
 
         hint = QLabel(
-            "执行时会自动转换为 SET @userid=<UID>;，后续 SQL 可使用 @userid。"
+            "参数名只能包含字母、数字和下划线，且不能以数字开头。"
+            "单次执行时会自动生成参数输入框；正文可直接引用 @参数名。"
         )
         hint.setObjectName("fieldHint")
         hint.setWordWrap(True)
@@ -922,6 +941,29 @@ class SqlTemplateDialog(QDialog):
         save_button.clicked.connect(self._save)
         buttons.addWidget(save_button)
         layout.addLayout(buttons)
+
+    @Slot()
+    def _add_parameter(self) -> None:
+        name = self.parameter_name_input.text().strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            QMessageBox.information(
+                self,
+                "参数名无效",
+                "参数名只能包含字母、数字和下划线，且不能以数字开头。",
+            )
+            return
+        existing = template_parameter_names(
+            SqlTemplate("preview", "preview", self.sql_input.toPlainText())
+        )
+        if name.casefold() in {value.casefold() for value in existing}:
+            QMessageBox.information(self, "参数已存在", f"@{name} 已在 SQL 中声明。")
+            return
+        cursor = self.sql_input.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        cursor.insertText(f"@{name}=xxx;\n")
+        self.sql_input.setTextCursor(cursor)
+        self.parameter_name_input.clear()
+        self.sql_input.setFocus()
 
     @Slot()
     def _save(self) -> None:
@@ -1697,7 +1739,7 @@ class WorkflowWindow(QMainWindow):
             )
         uid_layout.addWidget(self.player_tier_target)
         construct_hint = QLabel(
-            f"使用 {CONSTRUCTION_CHARGE_TOTAL} 分累计充值构造，并更新 "
+            f"按分层最低门槛使用 {CONSTRUCTION_CHARGE_TOTAL} 美分累计充值，并更新 "
             "charge_total、withdraw_total 与 money；"
             "执行前会再次确认。"
         )
@@ -2785,20 +2827,33 @@ class WorkflowWindow(QMainWindow):
         self.feature_environment.addItems(list(SUPPORTED_ENVIRONMENTS))
         execute_layout.addWidget(self.feature_environment)
 
-        user_id_label = QLabel("User ID")
-        user_id_label.setObjectName("fieldLabel")
-        execute_layout.addWidget(user_id_label)
-        self.feature_user_id = self._spin_box(1, maximum=2_147_483_647)
-        self.feature_user_id.setMinimum(1)
-        execute_layout.addWidget(self.feature_user_id)
-
         parameter_hint = QLabel(
-            "@userid=xxx 会自动替换为上方 User ID。"
+            "选择模板后，会自动识别 @参数名=xxx 声明并生成输入框。"
         )
         parameter_hint.setObjectName("fieldHint")
         parameter_hint.setWordWrap(True)
         execute_layout.addWidget(parameter_hint)
-        execute_layout.addStretch()
+
+        self.feature_sql_parameter_inputs: Dict[str, QLineEdit] = {}
+        self.feature_sql_parameter_signature: Optional[
+            tuple[str, tuple[str, ...]]
+        ] = None
+        self.feature_sql_parameter_widget = QWidget()
+        self.feature_sql_parameter_layout = QVBoxLayout(
+            self.feature_sql_parameter_widget
+        )
+        self.feature_sql_parameter_layout.setContentsMargins(0, 0, 0, 0)
+        self.feature_sql_parameter_layout.setSpacing(8)
+        self.feature_sql_parameter_scroll = QScrollArea()
+        self.feature_sql_parameter_scroll.setWidgetResizable(True)
+        self.feature_sql_parameter_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.feature_sql_parameter_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.feature_sql_parameter_scroll.setWidget(
+            self.feature_sql_parameter_widget
+        )
+        execute_layout.addWidget(self.feature_sql_parameter_scroll, 1)
 
         execute_buttons = QHBoxLayout()
         self.feature_execute_button = QPushButton("执行")
@@ -2844,7 +2899,7 @@ class WorkflowWindow(QMainWindow):
                 self.feature_sql_search,
                 self.feature_sql_list,
                 self.feature_environment,
-                self.feature_user_id,
+                self.feature_sql_parameter_scroll,
                 self.new_sql_template_button,
                 self.edit_sql_template_button,
                 self.delete_sql_template_button,
@@ -3518,6 +3573,72 @@ class WorkflowWindow(QMainWindow):
             return None
         return self._template_by_id(item.data(Qt.ItemDataRole.UserRole))
 
+    def _refresh_feature_sql_parameter_inputs(
+        self,
+        template: Optional[SqlTemplate],
+    ) -> None:
+        if not hasattr(self, "feature_sql_parameter_layout"):
+            return
+        parameter_names = template_parameter_names(template) if template else []
+        signature = (
+            (template.template_id, tuple(parameter_names))
+            if template is not None
+            else None
+        )
+        if signature == self.feature_sql_parameter_signature:
+            return
+        previous_values = {
+            name.casefold(): field.text()
+            for name, field in self.feature_sql_parameter_inputs.items()
+        }
+        while self.feature_sql_parameter_layout.count():
+            item = self.feature_sql_parameter_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.feature_sql_parameter_inputs = {}
+        self.feature_sql_parameter_signature = signature
+
+        if not parameter_names:
+            empty_label = QLabel("当前模板没有可填写的参数。")
+            empty_label.setObjectName("fieldHint")
+            empty_label.setWordWrap(True)
+            self.feature_sql_parameter_layout.addWidget(empty_label)
+            self.feature_sql_parameter_layout.addStretch()
+            return
+
+        for name in parameter_names:
+            label = QLabel(f"@{name}")
+            label.setObjectName("fieldLabel")
+            self.feature_sql_parameter_layout.addWidget(label)
+            field = QLineEdit()
+            field.setPlaceholderText(
+                "请输入 User ID" if name.casefold() == "userid" else f"请输入 {name}"
+            )
+            field.setText(previous_values.get(name.casefold(), ""))
+            self.feature_sql_parameter_layout.addWidget(field)
+            self.feature_sql_parameter_inputs[name] = field
+        self.feature_sql_parameter_layout.addStretch()
+
+    def _feature_sql_runtime_parameters(self) -> Dict[str, object]:
+        missing: list[str] = []
+        parameters: Dict[str, object] = {}
+        for name, field in self.feature_sql_parameter_inputs.items():
+            raw_value = field.text().strip()
+            if not raw_value:
+                missing.append(name)
+                continue
+            try:
+                parameters[name] = parse_runtime_parameter(raw_value)
+            except ValueError as error:
+                raise ValueError(f"SQL 参数 @{name}：{error}") from error
+        if missing:
+            raise ValueError(
+                "请填写 SQL 参数："
+                + "、".join(f"@{name}" for name in missing)
+            )
+        return parameters
+
     @Slot(str)
     def _filter_feature_sql_templates(self, query: str) -> None:
         if not hasattr(self, "feature_sql_list"):
@@ -3540,6 +3661,7 @@ class WorkflowWindow(QMainWindow):
             return
         template = self._selected_feature_sql_template()
         self.feature_selected_title.setText(template.title if template else "未选择")
+        self._refresh_feature_sql_parameter_inputs(template)
         has_template = template is not None
         self.edit_sql_template_button.setEnabled(has_template)
         self.delete_sql_template_button.setEnabled(has_template)
@@ -4304,6 +4426,11 @@ class WorkflowWindow(QMainWindow):
     @staticmethod
     def _player_tier_summary(metrics: PlayerTierMetrics) -> str:
         profit = metrics.net_profit.quantize(Decimal("0.01"))
+        user_segment = (
+            "暂无记录"
+            if metrics.user_segment is None
+            else str(metrics.user_segment)
+        )
         rate = (
             "无法计算（累计充值为 0）"
             if metrics.profit_rate is None
@@ -4315,7 +4442,8 @@ class WorkflowWindow(QMainWindow):
             f"当前余额    {metrics.balance:,} 分\n"
             f"净利润      {profit:,} 分\n"
             f"利润率      {rate}\n"
-            f"玩家分层    {metrics.tier_label}"
+            f"公式分层    {metrics.tier_label}\n"
+            f"user_segment    {user_segment}"
         )
 
     def _update_manual_tier_preview(self) -> None:
@@ -4375,7 +4503,7 @@ class WorkflowWindow(QMainWindow):
             "确认构造玩家分层",
             (
                 f"将在 {environment} 环境把 UID {user_id} 构造为“{target_label}”。\n\n"
-                f"操作会把 user.charge_total 设为 {CONSTRUCTION_CHARGE_TOTAL} 分，"
+                f"操作会把 user.charge_total 设为 {CONSTRUCTION_CHARGE_TOTAL} 美分，"
                 "并同步更新 "
                 "user.withdraw_total 和 user.money。"
             ),
@@ -5820,6 +5948,15 @@ class WorkflowWindow(QMainWindow):
             template = self._selected_feature_sql_template()
             if template is None:
                 raise ValueError("请先从列表选择 SQL 模板")
+            runtime_parameters = self._feature_sql_runtime_parameters()
+            user_id = next(
+                (
+                    value
+                    for name, value in runtime_parameters.items()
+                    if name.casefold() == "userid"
+                ),
+                None,
+            )
             connection = self.database_connections_by_environment[environment]
             if not is_database_connection_configured(connection):
                 raise ValueError(
@@ -5829,7 +5966,8 @@ class WorkflowWindow(QMainWindow):
                 generate_feature_data,
                 {
                     "template": template,
-                    "user_id": self.feature_user_id.value(),
+                    "user_id": user_id,
+                    "parameters": runtime_parameters,
                     "connection": connection,
                 },
                 "generate-feature-data",

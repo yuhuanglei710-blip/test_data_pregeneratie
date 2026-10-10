@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import uuid
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 try:
     from .database_config import DatabaseConnectionConfig, open_database_connection
@@ -17,12 +19,9 @@ except ImportError:  # Support ``python base/sql_data.py`` imports.
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SQL_TEMPLATES_FILE = PROJECT_ROOT / "cache" / "sql_templates.json"
-USER_ID_PLACEHOLDER = re.compile(
-    r"(@userid\s*=\s*)xxx\b",
-    flags=re.IGNORECASE,
-)
-BARE_USER_ID_DECLARATION = re.compile(
-    r"(?im)(^|;)(\s*)@userid\s*=\s*xxx\b",
+PARAMETER_DECLARATION = re.compile(
+    r"(?im)(^|;)(\s*)(?:(SET)(\s+))?"
+    r"@([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)xxx\b",
 )
 
 
@@ -111,8 +110,8 @@ def save_sql_template(
         raise ValueError("SQL 标题不能为空")
     if not normalized_sql:
         raise ValueError("SQL 内容不能为空")
-    if not USER_ID_PLACEHOLDER.search(normalized_sql):
-        raise ValueError("SQL 中必须包含 @userid=xxx 参数")
+    if not PARAMETER_DECLARATION.search(normalized_sql):
+        raise ValueError("SQL 中必须至少包含一个 @参数名=xxx 声明")
 
     templates = load_sql_templates(path)
     existing_id = (template_id or "").strip()
@@ -151,30 +150,120 @@ def delete_sql_template(
     _write_sql_templates(remaining, path)
 
 
-def render_sql_template(template: SqlTemplate, user_id: int) -> str:
-    """把 @userid=xxx 中的 xxx 替换为经校验的整数 UID。"""
-    if isinstance(user_id, bool) or int(user_id) <= 0:
-        raise ValueError("User ID 必须是大于 0 的整数")
-    rendered, bare_replacements = BARE_USER_ID_DECLARATION.subn(
-        rf"\g<1>\g<2>SET @userid={int(user_id)}",
-        template.sql,
+def template_parameter_names(template: SqlTemplate) -> List[str]:
+    """按声明首次出现的顺序返回 SQL 模板参数名。"""
+    names: List[str] = []
+    known_names: set[str] = set()
+    for match in PARAMETER_DECLARATION.finditer(template.sql):
+        name = match.group(5)
+        normalized = name.casefold()
+        if normalized not in known_names:
+            known_names.add(normalized)
+            names.append(name)
+    return names
+
+
+def parse_runtime_parameter(value: str) -> object:
+    """把界面文本解析为常用 SQL 参数类型，普通文本保持为字符串。"""
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("参数值不能为空")
+    if normalized.casefold() == "null":
+        return None
+    if normalized.casefold() == "true":
+        return True
+    if normalized.casefold() == "false":
+        return False
+    try:
+        parsed = json.loads(normalized)
+    except json.JSONDecodeError:
+        return normalized
+    if isinstance(parsed, (dict, list)):
+        return normalized
+    return parsed
+
+
+def _sql_literal(value: object) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, (float, Decimal)):
+        if not math.isfinite(float(value)):
+            raise ValueError("SQL 参数不能是无穷大或 NaN")
+        return str(value)
+    if isinstance(value, (dict, list)):
+        value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    text = str(value)
+    escaped = (
+        text.replace("\\", "\\\\")
+        .replace("'", "''")
+        .replace("\0", "\\0")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
     )
-    rendered, replacements = USER_ID_PLACEHOLDER.subn(
-        rf"\g<1>{int(user_id)}",
-        rendered,
-    )
-    if bare_replacements + replacements == 0:
-        raise ValueError("SQL 中未找到 @userid=xxx 参数")
+    return f"'{escaped}'"
+
+
+def render_sql_template(
+    template: SqlTemplate,
+    user_id: Optional[int] = None,
+    parameters: Optional[Mapping[str, object]] = None,
+) -> str:
+    """把 @参数名=xxx 声明替换为安全的 MySQL SET 语句。"""
+    values = {
+        str(name).casefold(): value
+        for name, value in (parameters or {}).items()
+    }
+    if user_id is not None:
+        values["userid"] = user_id
+
+    missing: List[str] = []
+
+    def replace_declaration(match: re.Match[str]) -> str:
+        name = match.group(5)
+        normalized_name = name.casefold()
+        if normalized_name not in values:
+            missing.append(name)
+            return match.group(0)
+        value = values[normalized_name]
+        if normalized_name == "userid":
+            if isinstance(value, bool):
+                raise ValueError("User ID 必须是大于 0 的整数")
+            try:
+                value = int(str(value).replace(",", "").strip())
+            except (TypeError, ValueError) as error:
+                raise ValueError("User ID 必须是大于 0 的整数") from error
+            if value <= 0:
+                raise ValueError("User ID 必须是大于 0 的整数")
+        set_keyword = (
+            f"{match.group(3)}{match.group(4)}"
+            if match.group(3)
+            else "SET "
+        )
+        return (
+            f"{match.group(1)}{match.group(2)}{set_keyword}"
+            f"@{name}{match.group(6)}{_sql_literal(value)}"
+        )
+
+    rendered = PARAMETER_DECLARATION.sub(replace_declaration, template.sql)
+    if missing:
+        raise ValueError(f"缺少 SQL 参数：{', '.join(dict.fromkeys(missing))}")
+    if not template_parameter_names(template):
+        raise ValueError("SQL 中未找到 @参数名=xxx 声明")
     return rendered
 
 
 def execute_sql_template(
     template: SqlTemplate,
-    user_id: int,
+    user_id: Optional[int],
     connection: DatabaseConnectionConfig,
+    parameters: Optional[Mapping[str, object]] = None,
 ) -> SqlExecutionResult:
     """在当前环境业务库中以事务执行渲染后的 SQL。"""
-    rendered_sql = render_sql_template(template, user_id)
+    rendered_sql = render_sql_template(template, user_id, parameters)
     statements = 0
     affected_rows = 0
     result_rows = 0
@@ -215,7 +304,8 @@ def execute_sql_template(
 def generate_feature_data(
     *,
     template: SqlTemplate,
-    user_id: int,
+    user_id: Optional[int] = None,
+    parameters: Optional[Mapping[str, object]] = None,
     connection: DatabaseConnectionConfig,
     stop_requested: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
@@ -224,8 +314,9 @@ def generate_feature_data(
     if stop_requested and stop_requested():
         print("用户已停止任务")
         return 0
-    execute_sql_template(template, user_id, connection)
-    print(f"[sql] OK · {template.title} · uid={user_id}")
+    execute_sql_template(template, user_id, connection, parameters)
+    user_label = f" · uid={user_id}" if user_id is not None else ""
+    print(f"[sql] OK · {template.title}{user_label}")
     if progress_callback:
         progress_callback(1, 1, 1)
     return 1

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
@@ -12,7 +12,8 @@ from .database_config import DatabaseConnectionConfig, open_database_connection
 CHARGE_FEE_RATE = Decimal("0.07")
 WITHDRAW_FEE_RATE = Decimal("0.035")
 MAX_UNSIGNED_INT = 4_294_967_295
-CONSTRUCTION_CHARGE_TOTAL = 10_000
+# 服务端只有累计充值达到 350000 美分时才会参与用户分层。
+CONSTRUCTION_CHARGE_TOTAL = 350_000
 
 TIER_ARBITRAGE = "arbitrage"
 TIER_NORMAL = "normal"
@@ -47,6 +48,7 @@ class PlayerTierMetrics:
     net_profit: Decimal
     profit_rate: Optional[Decimal]
     tier: str
+    user_segment: Optional[int] = None
 
     @property
     def tier_label(self) -> str:
@@ -147,6 +149,21 @@ def _metrics_from_row(row: object, user_id: int) -> PlayerTierMetrics:
     return calculate_player_tier(row[1], row[2], row[3], user_id=int(row[0] or user_id))
 
 
+def _fetch_user_segment(cursor: object, user_id: int) -> Optional[int]:
+    cursor.execute(
+        "SELECT user_segment FROM user_base WHERE user_id=%s LIMIT 1",
+        (int(user_id),),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    if not isinstance(row, (tuple, list)) or not row:
+        raise ValueError("数据库返回的 user_segment 数据格式无效")
+    if row[0] is None:
+        return None
+    return _non_negative_integer(row[0], "user_segment")
+
+
 def fetch_player_tier(
     user_id: int,
     connection: DatabaseConnectionConfig,
@@ -162,9 +179,13 @@ def fetch_player_tier(
                 (int(user_id),),
             )
             row = cursor.fetchone()
-    if row is None:
-        raise ValueError(f"未找到 UID {int(user_id)}")
-    return _metrics_from_row(row, int(user_id))
+            if row is None:
+                raise ValueError(f"未找到 UID {int(user_id)}")
+            user_segment = _fetch_user_segment(cursor, int(user_id))
+    return replace(
+        _metrics_from_row(row, int(user_id)),
+        user_segment=user_segment,
+    )
 
 
 def construct_player_tier(
@@ -200,6 +221,10 @@ def construct_player_tier(
                 )
                 if int(cursor.rowcount) != 1:
                     raise RuntimeError("玩家分层数据更新失败")
+                proposed = replace(
+                    proposed,
+                    user_segment=_fetch_user_segment(cursor, proposed.user_id),
+                )
             database.commit()
             return proposed
         except Exception:

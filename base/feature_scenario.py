@@ -287,6 +287,7 @@ def _execute_step(
             template,  # type: ignore[arg-type]
             int(context["userid"]),
             database_connection,
+            context,
         )
         last_rows = list(result.result_sets[-1]) if result.result_sets else []
         context["sql_rows"] = last_rows

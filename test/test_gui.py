@@ -12,6 +12,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from base.apk_manager import ApkInstallResult, CachedApk
+from base.sql_data import SqlTemplate
 from gui import WorkflowWindow, configure_application_fonts
 
 
@@ -104,6 +105,32 @@ class ApkConflictPromptTests(unittest.TestCase):
         self.assertEqual(self.window.content_stack.currentIndex(), 8)
         self.assertEqual(self.window.player_preview_tier.text(), "核心玩家")
         self.assertIn("10.00%", self.window.player_preview_result.text())
+
+    def test_sql_template_selection_builds_runtime_parameter_inputs(self) -> None:
+        template = SqlTemplate(
+            "sql-parameters",
+            "修改 VIP 等级",
+            (
+                "@userid=xxx;\n"
+                "@viplevel=xxx;\n"
+                "UPDATE user SET vip_level=@viplevel WHERE id=@userid;"
+            ),
+        )
+        self.window.sql_templates = [template]
+        self.window._refresh_sql_template_combos(template.template_id)
+        self.app.processEvents()
+
+        self.assertEqual(
+            list(self.window.feature_sql_parameter_inputs),
+            ["userid", "viplevel"],
+        )
+        self.window.feature_sql_parameter_inputs["userid"].setText("607166")
+        self.window.feature_sql_parameter_inputs["viplevel"].setText("4")
+
+        self.assertEqual(
+            self.window._feature_sql_runtime_parameters(),
+            {"userid": 607166, "viplevel": 4},
+        )
 
     def test_application_uses_high_quality_scalable_font(self) -> None:
         ui_family, _monospace_family = configure_application_fonts(self.app)

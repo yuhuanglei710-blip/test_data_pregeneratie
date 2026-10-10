@@ -790,14 +790,68 @@ class SqlDataTests(unittest.TestCase):
 
         self.assertEqual(rendered, "SET @userid=4321; SELECT @userid;")
 
-    def test_template_requires_user_id_placeholder(self):
+    def test_template_requires_parameter_declaration(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            with self.assertRaisesRegex(ValueError, "@userid=xxx"):
+            with self.assertRaisesRegex(ValueError, "@参数名=xxx"):
                 sql_data.save_sql_template(
                     "invalid",
                     "SELECT 1;",
                     path=f"{temp_dir}/sql_templates.json",
                 )
+
+    def test_generic_parameters_are_detected_and_rendered_in_order(self):
+        template = sql_data.SqlTemplate(
+            "template-id",
+            "修改 VIP",
+            (
+                "@userid=xxx;\n"
+                "@viplevel = xxx;\n"
+                "@nickname=xxx;\n"
+                "UPDATE user SET vip_level=@viplevel, nickname=@nickname "
+                "WHERE id=@userid;"
+            ),
+        )
+
+        self.assertEqual(
+            sql_data.template_parameter_names(template),
+            ["userid", "viplevel", "nickname"],
+        )
+        rendered = sql_data.render_sql_template(
+            template,
+            4321,
+            {"viplevel": 4, "nickname": "O'Reilly"},
+        )
+
+        self.assertIn("SET @userid=4321;", rendered)
+        self.assertIn("SET @viplevel = 4;", rendered)
+        self.assertIn("SET @nickname='O''Reilly';", rendered)
+        self.assertIn("vip_level=@viplevel", rendered)
+
+    def test_generic_template_can_be_saved_without_user_id(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            saved = sql_data.save_sql_template(
+                "切换状态",
+                "@status=xxx; UPDATE feature SET status=@status;",
+                path=f"{temp_dir}/sql_templates.json",
+            )
+
+        self.assertEqual(sql_data.template_parameter_names(saved), ["status"])
+
+    def test_missing_generic_parameter_is_reported(self):
+        template = sql_data.SqlTemplate(
+            "template-id",
+            "test",
+            "@userid=xxx; @viplevel=xxx; SELECT @viplevel;",
+        )
+
+        with self.assertRaisesRegex(ValueError, "viplevel"):
+            sql_data.render_sql_template(template, 4321)
+
+    def test_runtime_parameter_text_recognizes_common_scalar_types(self):
+        self.assertEqual(sql_data.parse_runtime_parameter("42"), 42)
+        self.assertIs(sql_data.parse_runtime_parameter("true"), True)
+        self.assertIsNone(sql_data.parse_runtime_parameter("null"))
+        self.assertEqual(sql_data.parse_runtime_parameter("plain text"), "plain text")
 
 
 class ApiRequestTests(unittest.TestCase):
