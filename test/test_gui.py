@@ -12,6 +12,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from base.apk_manager import ApkInstallResult, CachedApk
+from base.player_tier import REGISTRATION_AGE_OVER_7_DAYS
 from base.sql_data import SqlTemplate
 from gui import WorkflowWindow, configure_application_fonts
 
@@ -105,6 +106,12 @@ class ApkConflictPromptTests(unittest.TestCase):
         self.assertEqual(self.window.content_stack.currentIndex(), 8)
         self.assertEqual(self.window.player_preview_tier.text(), "核心玩家")
         self.assertIn("10.00%", self.window.player_preview_result.text())
+        self.assertIn("user_segment", self.window.player_preview_result.text())
+        self.assertEqual(len(self.window.player_preview_result.text().splitlines()), 4)
+        self.assertEqual(
+            self.window.player_tier_registration_age.currentData(),
+            REGISTRATION_AGE_OVER_7_DAYS,
+        )
 
     def test_sql_template_selection_builds_runtime_parameter_inputs(self) -> None:
         template = SqlTemplate(

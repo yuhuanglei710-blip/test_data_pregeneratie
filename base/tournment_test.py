@@ -1,6 +1,5 @@
 """批量创建账号、加钱并执行初始下注。"""
 
-import json
 import random
 import sys
 import threading
@@ -9,7 +8,6 @@ from concurrent.futures import (
     CancelledError,
     Future,
     ThreadPoolExecutor,
-    as_completed,
     wait,
 )
 from dataclasses import dataclass
@@ -21,6 +19,15 @@ try:  # Support ``python -m base.tournment_test``.
     from .database_config import DatabaseConnectionConfig
     from .enums import Platform
     from .feature_scenario import FeatureScenario, execute_feature_scenario
+    from .fund_and_spin import (
+        DEFAULT_SPIN_WORKERS,
+        INITIAL_BALANCE,
+        INITIAL_SPIN_COUNT,
+        FundingWorkflowCancelled,
+        SpinWorkflowError,
+        fund_and_spin,
+        place_spins,
+    )
     from .sql_data import SqlTemplate, execute_sql_template
     from .user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD, User
 except ImportError:  # Support ``python base/tournment_test.py``.
@@ -32,23 +39,22 @@ except ImportError:  # Support ``python base/tournment_test.py``.
     from database_config import DatabaseConnectionConfig
     from enums import Platform
     from feature_scenario import FeatureScenario, execute_feature_scenario
+    from fund_and_spin import (
+        DEFAULT_SPIN_WORKERS,
+        INITIAL_BALANCE,
+        INITIAL_SPIN_COUNT,
+        FundingWorkflowCancelled,
+        SpinWorkflowError,
+        fund_and_spin,
+        place_spins,
+    )
     from sql_data import SqlTemplate, execute_sql_template
     from user import DEFAULT_CHANNEL_CODE, DEFAULT_PASSWORD, User
 
 
 DEFAULT_ACCOUNT_COUNT = 30
-INITIAL_BALANCE = 1_000_000
-INITIAL_SPIN_COUNT = 30
 DEFAULT_MAX_WORKERS = 5
-DEFAULT_SPIN_WORKERS = 5
-
-
-class SpinWorkflowError(RuntimeError):
-    """游戏服务拒绝下注时终止批量任务。"""
-
-
-class BatchCancelled(RuntimeError):
-    """调用方请求安全停止。"""
+BatchCancelled = FundingWorkflowCancelled
 
 
 class BatchCriticalError(RuntimeError):
@@ -87,58 +93,7 @@ def _print_account(account: User, index: int, count: int) -> None:
     )
 
 
-def _place_initial_spins(
-    user_token: str,
-    spin_count: int,
-    bet_amount: int = spin.DEFAULT_BET_CENTS,
-    *,
-    environment: str = "dev",
-    spin_workers: int = 1,
-    verbose: bool = False,
-    stop_requested: Optional[Callable[[], bool]] = None,
-) -> None:
-    """按所选并发数完成单个账号的初始下注。"""
-    if spin_workers <= 0:
-        raise ValueError("下注并发数必须大于 0")
-
-    if spin_workers > 1:
-        if not spin.get_valid_game_token(user_token, environment=environment):
-            raise SpinWorkflowError("获取游戏 token 失败")
-
-        def place_parallel_spin(spin_index: int) -> None:
-            if stop_requested and stop_requested():
-                raise BatchCancelled("用户已停止任务")
-            if spin.dev_spin(
-                user_token,
-                environment=environment,
-                bet_amount=bet_amount,
-                preserve_session=False,
-                verbose=verbose,
-            ) is None:
-                raise SpinWorkflowError(f"第 {spin_index}/{spin_count} 次下注失败")
-
-        with ThreadPoolExecutor(
-            max_workers=min(spin_workers, spin_count),
-            thread_name_prefix="spin",
-        ) as executor:
-            futures = [
-                executor.submit(place_parallel_spin, spin_index)
-                for spin_index in range(1, spin_count + 1)
-            ]
-            for future in as_completed(futures):
-                future.result()
-        return
-
-    for spin_index in range(1, spin_count + 1):
-        if stop_requested and stop_requested():
-            raise BatchCancelled("用户已停止任务")
-        if spin.dev_spin(
-            user_token,
-            environment=environment,
-            bet_amount=bet_amount,
-            verbose=verbose,
-        ) is None:
-            raise SpinWorkflowError(f"第 {spin_index}/{spin_count} 次下注失败")
+_place_initial_spins = place_spins
 
 
 def _create_account_and_bet(
@@ -198,27 +153,19 @@ def _create_account_and_bet(
             raise BatchCriticalError(f"绑定 SQL 执行失败：{error}") from error
         print(f"[{index}/{count}] SQL OK · {sql_template.title}")
 
-    money_result = add_money.add_money(
-        user_id=account.uid,
-        amount=initial_balance,
-        remark="测试加钱",
-        base_url=admin_base_url,
-    )
-    print(
-        f"[{index}/{count}] [money] 加钱响应："
-        + json.dumps(money_result, ensure_ascii=False, separators=(",", ":"))
-    )
-    if not add_money.operation_succeeded(money_result):
-        raise RuntimeError(f"加钱业务失败：{money_result}")
-
-    _place_initial_spins(
+    fund_and_spin(
+        account.uid,
         account.token,
-        account_spin_count,
         environment=environment,
+        amount=initial_balance,
+        spin_count=account_spin_count,
         spin_workers=spin_workers,
         bet_amount=bet_amount,
         verbose=verbose,
         stop_requested=stop_requested,
+        admin_base_url=admin_base_url,
+        spin_runner=_place_initial_spins,
+        log_prefix=f"[{index}/{count}] ",
     )
 
     if feature_scenario is not None:

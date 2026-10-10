@@ -84,12 +84,16 @@ from base.ipa_manager import (
 )
 from base.player_tier import (
     CONSTRUCTION_CHARGE_TOTAL,
+    MINIMUM_TIER_CHARGE_TOTAL,
+    REGISTRATION_AGE_LABELS,
+    REGISTRATION_AGE_OVER_7_DAYS,
+    REGISTRATION_AGE_WITHIN_7_DAYS,
     TARGET_PROFIT_RATES,
     TIER_LABELS,
     PlayerTierMetrics,
     calculate_player_tier,
-    construct_player_tier,
     fetch_player_tier,
+    prepare_turnover_and_construct_player_tier,
 )
 from base.api_request import (
     ApiTemplate,
@@ -1715,6 +1719,54 @@ class WorkflowWindow(QMainWindow):
         self.player_tier_uid = self._spin_box(1, maximum=2_147_483_647)
         self.player_tier_uid.setMinimum(1)
         self._add_form_row(uid_form, 1, "玩家 UID", self.player_tier_uid)
+        self.player_tier_registration_age = QComboBox()
+        self.player_tier_registration_age.addItem(
+            "大于7天（符合时保留原时间）",
+            REGISTRATION_AGE_OVER_7_DAYS,
+        )
+        self.player_tier_registration_age.addItem(
+            "7天内（超龄时改为5天前）",
+            REGISTRATION_AGE_WITHIN_7_DAYS,
+        )
+        self._add_form_row(
+            uid_form,
+            2,
+            "注册时长",
+            self.player_tier_registration_age,
+        )
+        self.player_tier_user_token = QLineEdit()
+        self.player_tier_user_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.player_tier_user_token.setClearButtonEnabled(True)
+        self.player_tier_user_token.setPlaceholderText(
+            "新用户改为大于7天时必填"
+        )
+        self._add_form_row(
+            uid_form,
+            3,
+            "用户 Token",
+            self.player_tier_user_token,
+        )
+
+        turnover_fields = QWidget()
+        turnover_layout = QHBoxLayout(turnover_fields)
+        turnover_layout.setContentsMargins(0, 0, 0, 0)
+        turnover_layout.setSpacing(6)
+        self.player_tier_initial_balance = self._spin_box(INITIAL_BALANCE)
+        self.player_tier_spin_count = self._spin_box(
+            INITIAL_SPIN_COUNT,
+            maximum=100_000,
+        )
+        self.player_tier_bet_amount = self._spin_box(spin.DEFAULT_BET_CENTS)
+        for label_text, control in (
+            ("加钱", self.player_tier_initial_balance),
+            ("次数", self.player_tier_spin_count),
+            ("单注", self.player_tier_bet_amount),
+        ):
+            label = QLabel(label_text)
+            label.setObjectName("fieldHint")
+            turnover_layout.addWidget(label)
+            turnover_layout.addWidget(control, 1)
+        self._add_form_row(uid_form, 4, "流水准备", turnover_fields)
         uid_layout.addLayout(uid_form)
 
         self.player_tier_query_button = QPushButton("读取当前分层")
@@ -1739,7 +1791,8 @@ class WorkflowWindow(QMainWindow):
             )
         uid_layout.addWidget(self.player_tier_target)
         construct_hint = QLabel(
-            f"按分层最低门槛使用 {CONSTRUCTION_CHARGE_TOTAL} 美分累计充值，并更新 "
+            f"累计充值高于 {MINIMUM_TIER_CHARGE_TOTAL} 美分时保留原值；未达门槛或"
+            f"正好处于门槛时使用 {CONSTRUCTION_CHARGE_TOTAL} 美分安全构造值，并更新 "
             "charge_total、withdraw_total 与 money；"
             "执行前会再次确认。"
         )
@@ -1801,10 +1854,15 @@ class WorkflowWindow(QMainWindow):
             self.player_tier_environment,
             self.player_tier_uid,
             self.player_tier_query_button,
+            self.player_tier_registration_age,
+            self.player_tier_user_token,
+            self.player_tier_initial_balance,
+            self.player_tier_spin_count,
+            self.player_tier_bet_amount,
             self.player_tier_target,
             self.player_tier_construct_button,
         )
-        return page
+        return self._scrollable_settings_page(page)
 
     def _build_apk_workspace(self) -> QWidget:
         """构建设备检测、APK 缓存、归因和安装页面。"""
@@ -4436,14 +4494,18 @@ class WorkflowWindow(QMainWindow):
             if metrics.profit_rate is None
             else f"{metrics.profit_rate * 100:.2f}%"
         )
+        created_at = (
+            ""
+            if metrics.created_at is None
+            else f"　　created_at  {metrics.created_at}"
+        )
         return (
-            f"累计充值    {metrics.charge_total:,} 分\n"
-            f"累计提现    {metrics.withdraw_total:,} 分\n"
-            f"当前余额    {metrics.balance:,} 分\n"
-            f"净利润      {profit:,} 分\n"
-            f"利润率      {rate}\n"
-            f"公式分层    {metrics.tier_label}\n"
-            f"user_segment    {user_segment}"
+            f"累计充值  {metrics.charge_total:,} 分　　"
+            f"累计提现  {metrics.withdraw_total:,} 分\n"
+            f"当前余额  {metrics.balance:,} 分　　净利润  {profit:,} 分\n"
+            f"利润率  {rate}　　公式分层  {metrics.tier_label}\n"
+            f"user_segment  {user_segment}"
+            f"{created_at}"
         )
 
     def _update_manual_tier_preview(self) -> None:
@@ -4498,14 +4560,30 @@ class WorkflowWindow(QMainWindow):
             return
         target_tier = str(self.player_tier_target.currentData() or "")
         target_label = TIER_LABELS.get(target_tier, target_tier)
+        registration_age = str(
+            self.player_tier_registration_age.currentData() or ""
+        )
+        registration_age_label = REGISTRATION_AGE_LABELS.get(
+            registration_age,
+            registration_age,
+        )
+        user_token = self.player_tier_user_token.text().strip()
+        initial_balance = self.player_tier_initial_balance.value()
+        spin_count = self.player_tier_spin_count.value()
+        bet_amount = self.player_tier_bet_amount.value()
         answer = QMessageBox.question(
             self,
             "确认构造玩家分层",
             (
                 f"将在 {environment} 环境把 UID {user_id} 构造为“{target_label}”。\n\n"
-                f"操作会把 user.charge_total 设为 {CONSTRUCTION_CHARGE_TOTAL} 美分，"
-                "并同步更新 "
-                "user.withdraw_total 和 user.money。"
+                f"注册时长将满足“{registration_age_label}”；符合条件时保留原时间，"
+                "否则更新 user.created_at。\n"
+                "若7天内的新用户将被改为大于7天，会先执行流水准备："
+                f"加钱 {initial_balance}，下注 {spin_count} 次，"
+                f"单注 {bet_amount} 美分。\n"
+                "累计充值高于分层门槛时会保留原值，否则使用 "
+                f"{CONSTRUCTION_CHARGE_TOTAL} 美分安全构造值；并同步更新 "
+                "user.charge_total、user.withdraw_total 和 user.money。"
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -4514,7 +4592,17 @@ class WorkflowWindow(QMainWindow):
             return
         self._run_player_tier_action(
             f"构造 {environment} · UID {user_id} · {target_label}",
-            lambda: construct_player_tier(user_id, target_tier, connection),
+            lambda: prepare_turnover_and_construct_player_tier(
+                user_id,
+                target_tier,
+                connection,
+                registration_age,
+                environment=environment,
+                user_token=user_token,
+                initial_balance=initial_balance,
+                spin_count=spin_count,
+                bet_amount=bet_amount,
+            ),
             self._on_player_tier_constructed,
         )
 
