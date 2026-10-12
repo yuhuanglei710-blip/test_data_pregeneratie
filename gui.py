@@ -84,8 +84,14 @@ from base.ipa_manager import (
 )
 from base.player_tier import (
     CONSTRUCTION_CHARGE_TOTAL,
+    FB_CONSTRUCTION_CHARGE_TOTAL,
+    FB_MINIMUM_TIER_CHARGE_TOTAL,
     MINIMUM_TIER_CHARGE_TOTAL,
     NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL,
+    PLAYER_CHANNEL_CHARGE_LIMITS,
+    PLAYER_CHANNEL_FB,
+    PLAYER_CHANNEL_GENERAL,
+    PLAYER_CHANNEL_LABELS,
     REGISTRATION_AGE_LABELS,
     REGISTRATION_AGE_OVER_7_DAYS,
     REGISTRATION_AGE_WITHIN_7_DAYS,
@@ -173,6 +179,7 @@ MONOSPACE_FONT_CANDIDATES = (
     "Cascadia Mono",
     "Consolas",
 )
+AUTO_ACCOUNT_SQL_PARAMETERS = {"uid", "userid"}
 
 
 def _best_font_family(candidates: tuple[str, ...]) -> str:
@@ -499,14 +506,30 @@ class QueueWriter:
 
     def __init__(self, emit: Callable[[str], None]):
         self.emit = emit
+        self._lock = threading.Lock()
+        self._buffers: Dict[int, str] = {}
 
     def write(self, text: str) -> int:
-        if text:
-            self.emit(text)
+        if not text:
+            return 0
+        thread_id = threading.get_ident()
+        with self._lock:
+            buffered = self._buffers.get(thread_id, "") + text
+            while "\n" in buffered:
+                line, buffered = buffered.split("\n", 1)
+                self.emit(f"{line}\n")
+            if buffered:
+                self._buffers[thread_id] = buffered
+            else:
+                self._buffers.pop(thread_id, None)
         return len(text)
 
     def flush(self) -> None:
-        return None
+        with self._lock:
+            for text in self._buffers.values():
+                if text:
+                    self.emit(text)
+            self._buffers.clear()
 
 
 class WorkflowWorker(QObject):
@@ -1543,6 +1566,15 @@ class WorkflowWindow(QMainWindow):
         self.ios_devices: Dict[str, IosDevice] = {}
         self.last_ios_device_error = ""
         self.app_log_devices: Dict[str, AndroidDevice] = {}
+        self.bound_sql_parameter_context: Optional[str] = None
+        self.bound_sql_parameter_signature: Optional[
+            tuple[str, str, tuple[str, ...]]
+        ] = None
+        self.bound_sql_parameter_inputs: Dict[str, QLineEdit] = {}
+        self.bound_sql_parameter_values: Dict[str, Dict[str, str]] = {
+            "account": {},
+            "tournament": {},
+        }
 
         root = QWidget()
         root.setObjectName("root")
@@ -1722,6 +1754,21 @@ class WorkflowWindow(QMainWindow):
         self.player_tier_uid = self._spin_box(1, maximum=2_147_483_647)
         self.player_tier_uid.setMinimum(1)
         self._add_form_row(uid_form, 1, "玩家 UID", self.player_tier_uid)
+        self.player_tier_channel = QComboBox()
+        self.player_tier_channel.addItem(
+            "通用玩家（充值门槛 350,000 分）",
+            PLAYER_CHANNEL_GENERAL,
+        )
+        self.player_tier_channel.addItem(
+            "FB 玩家（充值门槛 20,000 分）",
+            PLAYER_CHANNEL_FB,
+        )
+        self._add_form_row(
+            uid_form,
+            2,
+            "初始渠道",
+            self.player_tier_channel,
+        )
         self.player_tier_registration_age = QComboBox()
         self.player_tier_registration_age.addItem(
             "大于7天（符合时保留原时间）",
@@ -1733,7 +1780,7 @@ class WorkflowWindow(QMainWindow):
         )
         self._add_form_row(
             uid_form,
-            2,
+            3,
             "注册时长",
             self.player_tier_registration_age,
         )
@@ -1756,7 +1803,7 @@ class WorkflowWindow(QMainWindow):
             label.setObjectName("fieldHint")
             turnover_layout.addWidget(label)
             turnover_layout.addWidget(control, 1)
-        self._add_form_row(uid_form, 3, "流水准备", turnover_fields)
+        self._add_form_row(uid_form, 4, "流水准备", turnover_fields)
         uid_layout.addLayout(uid_form)
 
         self.player_tier_query_button = QPushButton("读取当前分层")
@@ -1785,8 +1832,10 @@ class WorkflowWindow(QMainWindow):
         )
         uid_layout.addWidget(self.player_tier_target)
         construct_hint = QLabel(
-            f"累计充值高于 {MINIMUM_TIER_CHARGE_TOTAL} 美分时保留原值；未达门槛或"
-            f"正好处于门槛时使用 {CONSTRUCTION_CHARGE_TOTAL} 美分安全构造值，并更新 "
+            f"通用玩家：门槛 {MINIMUM_TIER_CHARGE_TOTAL:,} 分、安全构造值 "
+            f"{CONSTRUCTION_CHARGE_TOTAL:,} 分；FB 玩家：门槛 "
+            f"{FB_MINIMUM_TIER_CHARGE_TOTAL:,} 分、安全构造值 "
+            f"{FB_CONSTRUCTION_CHARGE_TOTAL:,} 分。只按选择应用规则，不识别当前渠道；并更新 "
             "charge_total、withdraw_total 与 money；"
             f"净利润顶级目标会使用至少 {NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL:,} 分累计充值，"
             "以 15% 利润率构造并验证净利润规则优先；"
@@ -1850,6 +1899,7 @@ class WorkflowWindow(QMainWindow):
             self.player_tier_environment,
             self.player_tier_uid,
             self.player_tier_query_button,
+            self.player_tier_channel,
             self.player_tier_registration_age,
             self.player_tier_initial_balance,
             self.player_tier_spin_count,
@@ -2432,6 +2482,9 @@ class WorkflowWindow(QMainWindow):
         )
         self._add_form_row(form, 10, "输出文件", account_output)
         self.account_sql_template = self._sql_binding_combo()
+        self.account_sql_template.currentIndexChanged.connect(
+            lambda _index: self._refresh_bound_sql_parameter_inputs("account")
+        )
         self._add_form_row(form, 11, "绑定 SQL", self.account_sql_template)
         self.account_scenario = self._scenario_binding_combo()
         self._add_form_row(form, 12, "绑定场景", self.account_scenario)
@@ -2726,6 +2779,9 @@ class WorkflowWindow(QMainWindow):
         tournament_output, self.browse_button = self._output_field(self.output_file)
         self._add_form_row(form, 13, "输出文件", tournament_output)
         self.tournament_sql_template = self._sql_binding_combo()
+        self.tournament_sql_template.currentIndexChanged.connect(
+            lambda _index: self._refresh_bound_sql_parameter_inputs("tournament")
+        )
         self._add_form_row(form, 14, "绑定 SQL", self.tournament_sql_template)
         self.tournament_scenario = self._scenario_binding_combo()
         self._add_form_row(form, 15, "绑定场景", self.tournament_scenario)
@@ -3535,6 +3591,132 @@ class WorkflowWindow(QMainWindow):
             raise ValueError("请先选择 SQL 模板")
         return template
 
+    def _remember_bound_sql_parameter_values(self) -> None:
+        context = self.bound_sql_parameter_context
+        if context is None:
+            return
+        saved = self.bound_sql_parameter_values[context]
+        for name, field in self.bound_sql_parameter_inputs.items():
+            saved[name.casefold()] = field.text()
+
+    def _refresh_bound_sql_parameter_inputs(
+        self,
+        context: str,
+        template_override: Optional[SqlTemplate] = None,
+    ) -> None:
+        """在共享日志面板上展示当前账号任务绑定 SQL 的手填参数。"""
+        if not hasattr(self, "bound_sql_parameter_panel"):
+            return
+        active_context = (
+            "account"
+            if self.current_section == 0
+            else "tournament" if self.current_section == 1 else None
+        )
+        if context != active_context:
+            return
+        combo = (
+            self.account_sql_template
+            if context == "account"
+            else self.tournament_sql_template
+        )
+        template = template_override or self._template_by_id(combo.currentData())
+        parameter_names = template_parameter_names(template) if template else []
+        manual_names = [
+            name
+            for name in parameter_names
+            if name.casefold() not in AUTO_ACCOUNT_SQL_PARAMETERS
+        ]
+        signature = (
+            (context, template.template_id, tuple(manual_names))
+            if template is not None
+            else None
+        )
+        if signature == self.bound_sql_parameter_signature:
+            self.bound_sql_parameter_panel.setVisible(template is not None)
+            return
+
+        self._remember_bound_sql_parameter_values()
+        while self.bound_sql_parameter_layout.count():
+            item = self.bound_sql_parameter_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.bound_sql_parameter_inputs = {}
+        self.bound_sql_parameter_context = context if template else None
+        self.bound_sql_parameter_signature = signature
+        self.bound_sql_parameter_panel.setVisible(template is not None)
+        if template is None:
+            return
+
+        automatic_names = [
+            f"@{name}"
+            for name in parameter_names
+            if name.casefold() in AUTO_ACCOUNT_SQL_PARAMETERS
+        ]
+        self.bound_sql_parameter_hint.setText(
+            f"{template.title} · "
+            + (
+                f"{' / '.join(automatic_names)} 自动使用新账号 UID"
+                if automatic_names
+                else "模板未声明 @uid 或 @userid"
+            )
+        )
+        if not manual_names:
+            empty = QLabel("该模板没有需要手动填写的其他参数。")
+            empty.setObjectName("fieldHint")
+            self.bound_sql_parameter_layout.addWidget(empty, 0, 0, 1, 4)
+            return
+
+        saved = self.bound_sql_parameter_values[context]
+        for index, name in enumerate(manual_names):
+            row = index // 2
+            column = (index % 2) * 2
+            label = QLabel(f"@{name}")
+            label.setObjectName("fieldLabel")
+            self.bound_sql_parameter_layout.addWidget(label, row, column)
+            field = QLineEdit()
+            field.setPlaceholderText(f"请输入 {name}")
+            field.setText(saved.get(name.casefold(), ""))
+            field.setSizePolicy(
+                QSizePolicy.Policy.Ignored,
+                QSizePolicy.Policy.Fixed,
+            )
+            self.bound_sql_parameter_layout.addWidget(field, row, column + 1)
+            self.bound_sql_parameter_inputs[name] = field
+
+    def _bound_sql_runtime_parameters(
+        self,
+        context: str,
+        template: SqlTemplate,
+    ) -> Dict[str, object]:
+        self._refresh_bound_sql_parameter_inputs(context, template)
+        manual_names = [
+            name
+            for name in template_parameter_names(template)
+            if name.casefold() not in AUTO_ACCOUNT_SQL_PARAMETERS
+        ]
+        missing: list[str] = []
+        parameters: Dict[str, object] = {}
+        saved = self.bound_sql_parameter_values[context]
+        for name in manual_names:
+            field = self.bound_sql_parameter_inputs.get(name)
+            raw_value = field.text().strip() if field is not None else ""
+            if not raw_value:
+                raw_value = saved.get(name.casefold(), "").strip()
+            if not raw_value:
+                missing.append(name)
+                continue
+            try:
+                parameters[name] = parse_runtime_parameter(raw_value)
+            except ValueError as error:
+                raise ValueError(f"绑定 SQL 参数 @{name}：{error}") from error
+        if missing:
+            raise ValueError(
+                "请填写绑定 SQL 参数："
+                + "、".join(f"@{name}" for name in missing)
+            )
+        return parameters
+
     @staticmethod
     def _restore_combo_selection(combo: QComboBox, value: object) -> None:
         index = combo.findData(value)
@@ -3593,6 +3775,10 @@ class WorkflowWindow(QMainWindow):
                 self.feature_sql_list.setCurrentRow(max(0, selected_row))
             self._filter_feature_sql_templates(self.feature_sql_search.text())
             self._on_feature_sql_selection_changed()
+        if self.current_section == 0:
+            self._refresh_bound_sql_parameter_inputs("account")
+        elif self.current_section == 1:
+            self._refresh_bound_sql_parameter_inputs("tournament")
 
     def _selected_feature_sql_template(self) -> Optional[SqlTemplate]:
         if not hasattr(self, "feature_sql_list"):
@@ -4154,6 +4340,32 @@ class WorkflowWindow(QMainWindow):
         self.progress.setTextVisible(False)
         layout.addWidget(self.progress)
 
+        self.bound_sql_parameter_panel = QFrame()
+        self.bound_sql_parameter_panel.setObjectName("configCard")
+        parameter_panel_layout = QVBoxLayout(self.bound_sql_parameter_panel)
+        parameter_panel_layout.setContentsMargins(12, 10, 12, 10)
+        parameter_panel_layout.setSpacing(7)
+        parameter_header = QHBoxLayout()
+        parameter_title = QLabel("绑定 SQL 参数")
+        parameter_title.setObjectName("terminalMeta")
+        parameter_header.addWidget(parameter_title)
+        parameter_header.addStretch()
+        self.bound_sql_parameter_hint = QLabel("UID 自动使用新创建账号的 UID")
+        self.bound_sql_parameter_hint.setObjectName("fieldHint")
+        parameter_header.addWidget(self.bound_sql_parameter_hint)
+        parameter_panel_layout.addLayout(parameter_header)
+        self.bound_sql_parameter_widget = QWidget()
+        self.bound_sql_parameter_layout = QGridLayout(
+            self.bound_sql_parameter_widget
+        )
+        self.bound_sql_parameter_layout.setContentsMargins(0, 0, 0, 0)
+        self.bound_sql_parameter_layout.setHorizontalSpacing(8)
+        self.bound_sql_parameter_layout.setVerticalSpacing(5)
+        parameter_panel_layout.addWidget(self.bound_sql_parameter_widget)
+        self.bound_sql_parameter_panel.hide()
+        layout.addWidget(self.bound_sql_parameter_panel)
+        self.config_widgets.append(self.bound_sql_parameter_panel)
+
         output_label = QLabel("OUTPUT")
         output_label.setObjectName("terminalMeta")
         layout.addWidget(output_label)
@@ -4515,6 +4727,14 @@ class WorkflowWindow(QMainWindow):
             return
         target_tier = str(self.player_tier_target.currentData() or "")
         target_label = TARGET_TIER_LABELS.get(target_tier, target_tier)
+        player_channel = str(self.player_tier_channel.currentData() or "")
+        player_channel_label = PLAYER_CHANNEL_LABELS.get(
+            player_channel,
+            player_channel,
+        )
+        minimum_charge, construction_charge = PLAYER_CHANNEL_CHARGE_LIMITS[
+            player_channel
+        ]
         registration_age = str(
             self.player_tier_registration_age.currentData() or ""
         )
@@ -4529,14 +4749,16 @@ class WorkflowWindow(QMainWindow):
             self,
             "确认构造玩家分层",
             (
-                f"将在 {environment} 环境把 UID {user_id} 构造为“{target_label}”。\n\n"
+                f"将在 {environment} 环境把 UID {user_id} 按“{player_channel_label}”"
+                f"规则构造为“{target_label}”。\n\n"
+                "不会读取或识别账号当前渠道，只使用本次选择的构造规则。\n"
                 f"注册时长将满足“{registration_age_label}”；符合条件时保留原时间，"
                 "否则更新 user.created_at。\n"
                 "若7天内的新用户将被改为大于7天，会自动登录并执行流水准备："
                 f"加钱 {initial_balance}，下注 {spin_count} 次，"
                 f"单注 {bet_amount} 美分。\n"
-                "累计充值高于分层门槛时会保留原值，否则使用 "
-                f"{CONSTRUCTION_CHARGE_TOTAL} 美分安全构造值；并同步更新 "
+                f"累计充值高于 {minimum_charge:,} 分时会保留原值，否则使用 "
+                f"{construction_charge:,} 分安全构造值；并同步更新 "
                 "user.charge_total、user.withdraw_total 和 user.money。\n"
                 "选择净利润顶级玩家时，将以 15% 利润率构造净利润严格超过 "
                 "1,000,000 分（$10,000）的数据。"
@@ -4547,13 +4769,14 @@ class WorkflowWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             return
         self._run_player_tier_action(
-            f"构造 {environment} · UID {user_id} · {target_label}",
+            f"构造 {environment} · UID {user_id} · {player_channel_label} · {target_label}",
             lambda: prepare_turnover_and_construct_player_tier(
                 user_id,
                 target_tier,
                 connection,
                 registration_age,
                 environment=environment,
+                player_channel=player_channel,
                 initial_balance=initial_balance,
                 spin_count=spin_count,
                 bet_amount=bet_amount,
@@ -5743,6 +5966,12 @@ class WorkflowWindow(QMainWindow):
                 QTimer.singleShot(0, self._refresh_app_log_devices)
         else:
             self.content_stack.setCurrentIndex(1)
+        if index == 0:
+            self._refresh_bound_sql_parameter_inputs("account")
+        elif index == 1:
+            self._refresh_bound_sql_parameter_inputs("tournament")
+        elif hasattr(self, "bound_sql_parameter_panel"):
+            self.bound_sql_parameter_panel.hide()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.progress_text.setText("0 / 0")
@@ -5901,6 +6130,7 @@ class WorkflowWindow(QMainWindow):
         self,
         environment: str,
         combo: QComboBox,
+        context: str,
     ) -> dict:
         template = self._selected_sql_template(combo)
         if template is None:
@@ -5912,6 +6142,10 @@ class WorkflowWindow(QMainWindow):
             )
         return {
             "sql_template": template,
+            "sql_parameters": self._bound_sql_runtime_parameters(
+                context,
+                template,
+            ),
             "database_connection": connection,
         }
 
@@ -5952,6 +6186,7 @@ class WorkflowWindow(QMainWindow):
                 **self._sql_binding_parameters(
                     self.account_environment.currentText(),
                     self.account_sql_template,
+                    "account",
                 ),
                 **self._scenario_binding_parameters(
                     self.account_environment.currentText(),
@@ -6088,6 +6323,7 @@ class WorkflowWindow(QMainWindow):
             **self._sql_binding_parameters(
                 self.environment.currentText(),
                 self.tournament_sql_template,
+                "tournament",
             ),
             **self._scenario_binding_parameters(
                 self.environment.currentText(),

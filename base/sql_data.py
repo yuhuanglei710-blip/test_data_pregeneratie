@@ -219,6 +219,7 @@ def render_sql_template(
     }
     if user_id is not None:
         values["userid"] = user_id
+        values["uid"] = user_id
 
     missing: List[str] = []
 
@@ -229,7 +230,7 @@ def render_sql_template(
             missing.append(name)
             return match.group(0)
         value = values[normalized_name]
-        if normalized_name == "userid":
+        if normalized_name in {"uid", "userid"}:
             if isinstance(value, bool):
                 raise ValueError("User ID 必须是大于 0 的整数")
             try:

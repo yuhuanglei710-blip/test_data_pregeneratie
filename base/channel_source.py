@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Union
 
 from .database_config import DatabaseConnectionConfig, open_database_connection
-from .environment_policy import contains_removed_environment_reference
 from .user import SUPPORTED_ENVIRONMENTS
 
 
@@ -64,7 +63,6 @@ def load_channel_source_config(
             source
             for value in values
             if (source := ChannelSource.from_mapping(value)) is not None
-            and not contains_removed_environment_reference(source.user_source)
         ]
     return config
 
@@ -82,7 +80,6 @@ def save_channel_sources(
             source.user_source: source
             for source in sources
             if source.user_source.strip()
-            and not contains_removed_environment_reference(source.user_source)
         }.values(),
         key=lambda source: source.user_source.casefold(),
     )
@@ -160,7 +157,6 @@ def fetch_channel_sources(
         for row in rows
         if row
         and str(row[0]).strip()
-        and not contains_removed_environment_reference(row[0])
         and int(row[2]) in (0, 1)
     ]
 

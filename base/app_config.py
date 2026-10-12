@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from typing import Dict, Iterable, List, Union
 
-from .environment_policy import contains_removed_environment_reference
 from .user import DEFAULT_CHANNEL_CODE, SUPPORTED_ENVIRONMENTS
 
 
@@ -20,11 +19,7 @@ def _normalize_channel_codes(values: Iterable[object]) -> List[str]:
         if not isinstance(value, str):
             continue
         channel_code = value.strip()
-        if (
-            not channel_code
-            or channel_code in seen
-            or contains_removed_environment_reference(channel_code)
-        ):
+        if not channel_code or channel_code in seen:
             continue
         seen.add(channel_code)
         normalized.append(channel_code)

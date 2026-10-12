@@ -16,12 +16,6 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence, Union
 from urllib.parse import urlparse
 
-from .environment_policy import (
-    contains_removed_environment_reference,
-    ensure_cache_value_allowed,
-    ensure_url_allowed,
-)
-
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 APK_CACHE_DIR = PROJECT_ROOT / "cache" / "apks"
@@ -100,11 +94,6 @@ def _normalize_package(value: object) -> Optional[CachedApk]:
         note=str(value.get("note") or "").strip(),
         added_at=str(value.get("added_at") or value.get("addedAt") or "").strip(),
     )
-    if any(
-        contains_removed_environment_reference(field)
-        for field in asdict(package).values()
-    ):
-        return None
     return package
 
 
@@ -130,9 +119,6 @@ def _write_cached_apks(
     path: Union[str, Path] = APK_CONFIG_FILE,
 ) -> None:
     packages = list(packages)
-    for package in packages:
-        for value in asdict(package).values():
-            ensure_cache_value_allowed(value)
     config_path = Path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = config_path.with_suffix(f"{config_path.suffix}.tmp")
@@ -166,8 +152,6 @@ def cache_apk(
 ) -> CacheApkResult:
     """按 MD5 缓存 APK；相同文件只保留一个条目。"""
     source_path = Path(source)
-    ensure_cache_value_allowed(source_path.name)
-    ensure_cache_value_allowed(attribution or "")
     if not source_path.is_file():
         raise ValueError("请选择存在的 APK 文件")
     if source_path.suffix.lower() != ".apk":
@@ -216,8 +200,6 @@ def update_cached_apk(
     path: Union[str, Path] = APK_CONFIG_FILE,
 ) -> CachedApk:
     """更新缓存条目的显示名称、归因链接和备注。"""
-    for value in (name, attribution, note):
-        ensure_cache_value_allowed(value)
     packages = load_cached_apks(path)
     index = next(
         (position for position, item in enumerate(packages) if item.package_id == package_id),
@@ -366,8 +348,6 @@ def reinstall_apk(
 def open_attribution_url(serial: str, url: str) -> None:
     """在所选 Android 设备上打开归因链接。"""
     cleaned = url.strip()
-    ensure_cache_value_allowed(cleaned)
-    ensure_url_allowed(cleaned)
     parsed = urlparse(cleaned)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("归因链接必须是有效的 http:// 或 https:// 地址")

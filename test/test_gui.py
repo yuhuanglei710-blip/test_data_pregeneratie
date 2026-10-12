@@ -1,6 +1,7 @@
 """GUI regression tests for mobile-device workflows."""
 
 import os
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -13,11 +14,13 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from base.apk_manager import ApkInstallResult, CachedApk
 from base.player_tier import (
+    PLAYER_CHANNEL_FB,
+    PLAYER_CHANNEL_GENERAL,
     REGISTRATION_AGE_OVER_7_DAYS,
     TARGET_NET_PROFIT_TOP,
 )
 from base.sql_data import SqlTemplate
-from gui import WorkflowWindow, configure_application_fonts
+from gui import QueueWriter, WorkflowWindow, configure_application_fonts
 
 
 class ApkConflictPromptTests(unittest.TestCase):
@@ -115,6 +118,18 @@ class ApkConflictPromptTests(unittest.TestCase):
             self.window.player_tier_registration_age.currentData(),
             REGISTRATION_AGE_OVER_7_DAYS,
         )
+        self.assertEqual(
+            self.window.player_tier_channel.currentData(),
+            PLAYER_CHANNEL_GENERAL,
+        )
+        fb_channel_index = self.window.player_tier_channel.findData(
+            PLAYER_CHANNEL_FB
+        )
+        self.assertGreaterEqual(fb_channel_index, 0)
+        self.assertIn(
+            "FB 玩家",
+            self.window.player_tier_channel.itemText(fb_channel_index),
+        )
         net_profit_top_index = self.window.player_tier_target.findData(
             TARGET_NET_PROFIT_TOP
         )
@@ -150,6 +165,38 @@ class ApkConflictPromptTests(unittest.TestCase):
             {"userid": 607166, "viplevel": 4},
         )
 
+    def test_account_bound_sql_only_asks_for_non_uid_parameters(self) -> None:
+        template = SqlTemplate(
+            "account-sql-parameters",
+            "创建 VIP 账号",
+            (
+                "@uid=xxx;\n"
+                "@viplevel=xxx;\n"
+                "@nickname=xxx;\n"
+                "UPDATE user SET vip_level=@viplevel, nickname=@nickname "
+                "WHERE id=@uid;"
+            ),
+        )
+        self.window.sql_templates = [template]
+        self.window._refresh_sql_template_combos()
+        self.window.account_sql_template.setCurrentIndex(
+            self.window.account_sql_template.findData(template.template_id)
+        )
+        self.app.processEvents()
+
+        self.assertFalse(self.window.bound_sql_parameter_panel.isHidden())
+        self.assertEqual(
+            list(self.window.bound_sql_parameter_inputs),
+            ["viplevel", "nickname"],
+        )
+        self.window.bound_sql_parameter_inputs["viplevel"].setText("4")
+        self.window.bound_sql_parameter_inputs["nickname"].setText("tester")
+
+        self.assertEqual(
+            self.window._bound_sql_runtime_parameters("account", template),
+            {"viplevel": 4, "nickname": "tester"},
+        )
+
     def test_application_uses_high_quality_scalable_font(self) -> None:
         ui_family, _monospace_family = configure_application_fonts(self.app)
         font = self.app.font()
@@ -159,6 +206,30 @@ class ApkConflictPromptTests(unittest.TestCase):
         self.assertEqual(
             font.hintingPreference(),
             QFont.HintingPreference.PreferFullHinting,
+        )
+
+    def test_queue_writer_keeps_parallel_log_lines_atomic(self) -> None:
+        output: list[str] = []
+        writer = QueueWriter(output.append)
+        barrier = threading.Barrier(2)
+
+        def write_line(value: str) -> None:
+            writer.write(value)
+            barrier.wait()
+            writer.write("\n")
+
+        threads = [
+            threading.Thread(target=write_line, args=(value,))
+            for value in ("[1/2] SQL OK", "[2/2] SQL OK")
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertCountEqual(
+            output,
+            ["[1/2] SQL OK\n", "[2/2] SQL OK\n"],
         )
 
     def test_apk_worker_result_is_dispatched_on_the_ui_thread(self) -> None:

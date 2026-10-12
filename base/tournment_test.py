@@ -12,7 +12,7 @@ from concurrent.futures import (
 )
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Callable, Dict, Mapping, Optional, Tuple, Union
 
 try:  # Support ``python -m base.tournment_test``.
     from . import add_money, spin
@@ -112,6 +112,7 @@ def _create_account_and_bet(
     verbose: bool,
     stop_requested: Callable[[], bool],
     sql_template: Optional[SqlTemplate] = None,
+    sql_parameters: Optional[Mapping[str, object]] = None,
     database_connection: Optional[DatabaseConnectionConfig] = None,
     feature_scenario: Optional[FeatureScenario] = None,
     scenario_database_connection: Optional[DatabaseConnectionConfig] = None,
@@ -146,6 +147,7 @@ def _create_account_and_bet(
                 sql_template,
                 account.uid,
                 database_connection,
+                parameters=sql_parameters,
             )
         except Exception as error:
             if stop_requested():
@@ -236,6 +238,7 @@ def create_accounts_and_bet(
     stop_requested: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
     sql_template: Optional[SqlTemplate] = None,
+    sql_parameters: Optional[Mapping[str, object]] = None,
     database_connection: Optional[DatabaseConnectionConfig] = None,
     feature_scenario: Optional[FeatureScenario] = None,
     scenario_database_connection: Optional[DatabaseConnectionConfig] = None,
@@ -292,6 +295,7 @@ def create_accounts_and_bet(
                     verbose=verbose,
                     stop_requested=should_stop,
                     sql_template=sql_template,
+                    sql_parameters=sql_parameters,
                     database_connection=database_connection,
                     feature_scenario=feature_scenario,
                     scenario_database_connection=scenario_database_connection,

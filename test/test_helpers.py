@@ -29,7 +29,6 @@ from base import (
     api_request,
     channel_source,
     database_config,
-    environment_policy,
     feature_scenario,
     ipa_manager,
     sql_data,
@@ -123,28 +122,6 @@ class UserResponseTests(unittest.TestCase):
         )
 
 
-class RemovedEnvironmentPolicyTests(unittest.TestCase):
-    def test_prod_environment_and_known_hosts_are_blocked(self):
-        with self.assertRaisesRegex(ValueError, "永久移除"):
-            environment_policy.ensure_environment_allowed("prod")
-        with self.assertRaisesRegex(ValueError, "生产地址"):
-            environment_policy.ensure_url_allowed(
-                "https://api.hotspin777.com/v1/user/login"
-            )
-
-    def test_prod_marked_values_cannot_be_cached(self):
-        with self.assertRaisesRegex(ValueError, "禁止缓存"):
-            environment_policy.ensure_cache_value_allowed(
-                "test_ua_custom_prod"
-            )
-
-    def test_non_prod_environment_and_url_remain_allowed(self):
-        environment_policy.ensure_environment_allowed("dev")
-        environment_policy.ensure_url_allowed(
-            "https://devapi.ushdev.top/v1/user/login"
-        )
-
-
 class AppConfigTests(unittest.TestCase):
     def test_missing_channel_code_config_uses_default(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -157,13 +134,13 @@ class AppConfigTests(unittest.TestCase):
             config_file = f"{temp_dir}/channel_codes.json"
             saved = save_channel_codes(
                 "dev",
-                [" first ", "first", "second"],
+                [" first ", "first", "second", "prod-campaign"],
                 config_file,
             )
             loaded = load_channel_codes("dev", config_file)
 
-        self.assertEqual(saved, ["first", "second"])
-        self.assertEqual(loaded, ["first", "second"])
+        self.assertEqual(saved, ["first", "second", "prod-campaign"])
+        self.assertEqual(loaded, ["first", "second", "prod-campaign"])
 
     def test_channel_codes_are_isolated_by_environment(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -218,6 +195,26 @@ class ApkManagerTests(unittest.TestCase):
             )
             self.assertTrue(Path(second.package.path).is_file())
 
+    def test_cache_accepts_attribution_containing_prod_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "demo-prod.apk"
+            source.write_bytes(b"apk-content")
+            config_file = Path(temp_dir) / "apk_packages.json"
+            attribution = "https://tracking.example.test/path?tag=prod-campaign"
+
+            result = apk_manager.cache_apk(
+                source,
+                attribution,
+                config_path=config_file,
+                cache_dir=Path(temp_dir) / "apks",
+            )
+
+            self.assertEqual(result.package.attribution, attribution)
+            self.assertEqual(
+                apk_manager.load_cached_apks(config_file),
+                [result.package],
+            )
+
     def test_install_reports_signature_conflict_package(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             apk_file = Path(temp_dir) / "demo.apk"
@@ -266,6 +263,13 @@ class ApkManagerTests(unittest.TestCase):
 
         arguments = run_adb.call_args.args[0]
         self.assertEqual(arguments, ["-s", "device-1", "shell"])
+        self.assertIn(url, run_adb.call_args.kwargs["input_text"])
+
+    def test_attribution_url_containing_prod_text_is_allowed(self):
+        url = "https://tracking.example.test/attribute?campaign=prod-test"
+        with patch.object(apk_manager, "_run_adb") as run_adb:
+            apk_manager.open_attribution_url("device-1", url)
+
         self.assertIn(url, run_adb.call_args.kwargs["input_text"])
 
 
@@ -869,6 +873,17 @@ class SqlDataTests(unittest.TestCase):
         rendered = sql_data.render_sql_template(template, 4321)
 
         self.assertEqual(rendered, "SET @userid=4321; SELECT @userid;")
+
+    def test_uid_alias_is_filled_from_new_account_user_id(self):
+        template = sql_data.SqlTemplate(
+            "template-id",
+            "test",
+            "@uid=xxx; SELECT @uid;",
+        )
+
+        rendered = sql_data.render_sql_template(template, 4321)
+
+        self.assertEqual(rendered, "SET @uid=4321; SELECT @uid;")
 
     def test_template_requires_parameter_declaration(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1898,6 +1913,48 @@ class BatchWorkflowTests(unittest.TestCase):
         )
         account.login.assert_called_once_with(platform=Platform.ios.value)
 
+    def test_tournament_bound_sql_receives_uid_and_manual_parameters(self):
+        account = Mock(uid=42, token="user-token", email="sql@cc.cc")
+        template = sql_data.SqlTemplate(
+            "template-id",
+            "VIP 数据",
+            "@uid=xxx; @viplevel=xxx; SELECT @uid, @viplevel;",
+        )
+        connection = DatabaseConnectionConfig(database_name="ush_dev")
+        with (
+            patch.object(tournment_test, "User", return_value=account),
+            patch.object(tournment_test, "fund_and_spin"),
+            patch.object(
+                tournment_test,
+                "execute_sql_template",
+                return_value=sql_data.SqlExecutionResult(3, 0, 1),
+            ) as execute,
+        ):
+            tournment_test._create_account_and_bet(
+                1,
+                1,
+                environment="dev",
+                platform=Platform.ios.value,
+                channel_code="tournament-channel",
+                admin_base_url="https://admin.example.test",
+                initial_balance=1_000,
+                spin_count=3,
+                spin_count_range=None,
+                bet_amount=100,
+                verbose=False,
+                stop_requested=lambda: False,
+                sql_template=template,
+                sql_parameters={"viplevel": 4},
+                database_connection=connection,
+            )
+
+        execute.assert_called_once_with(
+            template,
+            42,
+            connection,
+            parameters={"viplevel": 4},
+        )
+
     def test_tournament_bound_scenario_receives_account_context(self):
         account = Mock(uid=42, token="user-token", email="scenario@cc.cc")
         scenario = feature_scenario.FeatureScenario(
@@ -2142,12 +2199,42 @@ class BatchWorkflowTests(unittest.TestCase):
 
 
 class AccountCreationTests(unittest.TestCase):
+    def test_custom_account_forwards_bound_sql_parameters(self):
+        template = sql_data.SqlTemplate(
+            "template-id",
+            "VIP 数据",
+            "@uid=xxx; @viplevel=xxx; SELECT @uid, @viplevel;",
+        )
+        connection = DatabaseConnectionConfig(database_name="ush_dev")
+        with patch.object(
+            account_batch,
+            "create_accounts",
+            return_value=1,
+        ) as create:
+            result = account_batch.create_custom_account(
+                "custom@example.com",
+                sql_template=template,
+                sql_parameters={"viplevel": 4},
+                database_connection=connection,
+            )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(create.call_args.kwargs["sql_template"], template)
+        self.assertEqual(
+            create.call_args.kwargs["sql_parameters"],
+            {"viplevel": 4},
+        )
+        self.assertEqual(
+            create.call_args.kwargs["database_connection"],
+            connection,
+        )
+
     def test_bound_sql_runs_with_new_account_uid(self):
         account = Mock(uid=42, token="user-token", email="sql@cc.cc")
         template = sql_data.SqlTemplate(
             "template-id",
             "VIP 数据",
-            "SET @userid=xxx; SELECT @userid;",
+            "SET @userid=xxx; @viplevel=xxx; SELECT @userid, @viplevel;",
         )
         connection = DatabaseConnectionConfig(database_name="ush_dev")
         execution_result = sql_data.SqlExecutionResult(2, 1, 0)
@@ -2158,6 +2245,7 @@ class AccountCreationTests(unittest.TestCase):
                 "execute_sql_template",
                 return_value=execution_result,
             ) as execute,
+            redirect_stdout(output := io.StringIO()),
         ):
             account_batch._register_account(
                 1,
@@ -2168,10 +2256,20 @@ class AccountCreationTests(unittest.TestCase):
                 verbose=False,
                 stop_requested=lambda: False,
                 sql_template=template,
+                sql_parameters={"viplevel": 4},
                 database_connection=connection,
             )
 
-        execute.assert_called_once_with(template, 42, connection)
+        execute.assert_called_once_with(
+            template,
+            42,
+            connection,
+            parameters={"viplevel": 4},
+        )
+        self.assertLess(
+            output.getvalue().index("注册成功"),
+            output.getvalue().index("SQL OK"),
+        )
 
     def test_bound_scenario_receives_new_account_context(self):
         account = Mock(

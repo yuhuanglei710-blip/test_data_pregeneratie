@@ -25,6 +25,24 @@ MAX_UNSIGNED_INT = 4_294_967_295
 # 留出 50000 美分余量，避免测试数据全部落在服务端判断边界上。
 MINIMUM_TIER_CHARGE_TOTAL = 350_000
 CONSTRUCTION_CHARGE_TOTAL = 400_000
+FB_MINIMUM_TIER_CHARGE_TOTAL = 20_000
+FB_CONSTRUCTION_CHARGE_TOTAL = 25_000
+PLAYER_CHANNEL_GENERAL = "general"
+PLAYER_CHANNEL_FB = "fb"
+PLAYER_CHANNEL_LABELS = {
+    PLAYER_CHANNEL_GENERAL: "通用玩家",
+    PLAYER_CHANNEL_FB: "FB 玩家",
+}
+PLAYER_CHANNEL_CHARGE_LIMITS = {
+    PLAYER_CHANNEL_GENERAL: (
+        MINIMUM_TIER_CHARGE_TOTAL,
+        CONSTRUCTION_CHARGE_TOTAL,
+    ),
+    PLAYER_CHANNEL_FB: (
+        FB_MINIMUM_TIER_CHARGE_TOTAL,
+        FB_CONSTRUCTION_CHARGE_TOTAL,
+    ),
+}
 # 净利润严格超过 10,000 美元（1,000,000 分）时，优先判定为顶级玩家。
 TOP_NET_PROFIT_THRESHOLD = Decimal("1000000")
 TARGET_NET_PROFIT_TOP = "net_profit_top"
@@ -159,14 +177,21 @@ def calculate_player_tier(
 def build_player_tier_values(
     current: PlayerTierMetrics,
     target_tier: str,
+    *,
+    player_channel: str = PLAYER_CHANNEL_GENERAL,
 ) -> PlayerTierMetrics:
     """保留已达标的累计充值，并调整余额构造目标分层区间。"""
     if target_tier not in TARGET_TIER_LABELS:
         raise ValueError("不支持的目标分层")
+    if player_channel not in PLAYER_CHANNEL_CHARGE_LIMITS:
+        raise ValueError("不支持的玩家初始渠道")
+    minimum_charge, construction_charge = PLAYER_CHANNEL_CHARGE_LIMITS[
+        player_channel
+    ]
     charge = (
         current.charge_total
-        if current.charge_total > MINIMUM_TIER_CHARGE_TOTAL
-        else CONSTRUCTION_CHARGE_TOTAL
+        if current.charge_total > minimum_charge
+        else construction_charge
     )
     if target_tier == TARGET_NET_PROFIT_TOP:
         charge = max(charge, NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL)
@@ -320,6 +345,8 @@ def construct_player_tier(
     target_tier: str,
     connection: DatabaseConnectionConfig,
     registration_age: Optional[str] = None,
+    *,
+    player_channel: str = PLAYER_CHANNEL_GENERAL,
 ) -> PlayerTierMetrics:
     """锁定玩家记录并写入目标分层及所选注册时长的数据。"""
     if isinstance(user_id, bool) or int(user_id) <= 0:
@@ -336,7 +363,11 @@ def construct_player_tier(
                 if row is None:
                     raise ValueError(f"未找到 UID {int(user_id)}")
                 current = _metrics_from_row(row, int(user_id))
-                proposed = build_player_tier_values(current, target_tier)
+                proposed = build_player_tier_values(
+                    current,
+                    target_tier,
+                    player_channel=player_channel,
+                )
                 if registration_age is None:
                     update_sql = (
                         "UPDATE `user` SET charge_total=%s, withdraw_total=%s, money=%s "
@@ -388,6 +419,7 @@ def prepare_turnover_and_construct_player_tier(
     registration_age: str,
     *,
     environment: str,
+    player_channel: str = PLAYER_CHANNEL_GENERAL,
     initial_balance: int = INITIAL_BALANCE,
     spin_count: int = INITIAL_SPIN_COUNT,
     bet_amount: int = DEFAULT_BET_CENTS,
@@ -436,4 +468,5 @@ def prepare_turnover_and_construct_player_tier(
         target_tier,
         connection,
         registration_age,
+        player_channel=player_channel,
     )

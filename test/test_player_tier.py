@@ -9,10 +9,13 @@ from unittest.mock import ANY, Mock, patch
 from base.database_config import DatabaseConnectionConfig
 from base.player_tier import (
     CONSTRUCTION_CHARGE_TOTAL,
+    FB_CONSTRUCTION_CHARGE_TOTAL,
+    FB_MINIMUM_TIER_CHARGE_TOTAL,
     MINIMUM_TIER_CHARGE_TOTAL,
     NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL,
     NET_PROFIT_TOP_TARGET_RATE,
     PlayerLoginCredentials,
+    PLAYER_CHANNEL_FB,
     REGISTRATION_AGE_OVER_7_DAYS,
     REGISTRATION_AGE_WITHIN_7_DAYS,
     SECONDS_PER_DAY,
@@ -136,6 +139,48 @@ class PlayerTierCalculationTests(unittest.TestCase):
 
         self.assertEqual(proposed.charge_total, CONSTRUCTION_CHARGE_TOTAL)
         self.assertGreater(proposed.charge_total, MINIMUM_TIER_CHARGE_TOTAL)
+
+    def test_fb_player_uses_its_own_safe_charge_threshold(self) -> None:
+        current = calculate_player_tier(
+            FB_MINIMUM_TIER_CHARGE_TOTAL,
+            0,
+            0,
+            user_id=42,
+        )
+
+        proposed = build_player_tier_values(
+            current,
+            TIER_CORE,
+            player_channel=PLAYER_CHANNEL_FB,
+        )
+
+        self.assertEqual(proposed.charge_total, FB_CONSTRUCTION_CHARGE_TOTAL)
+        self.assertGreater(
+            proposed.charge_total,
+            FB_MINIMUM_TIER_CHARGE_TOTAL,
+        )
+        self.assertEqual(proposed.profit_rate, TARGET_PROFIT_RATES[TIER_CORE])
+
+    def test_fb_player_preserves_charge_above_its_threshold(self) -> None:
+        current = calculate_player_tier(30_000, 0, 0, user_id=42)
+
+        proposed = build_player_tier_values(
+            current,
+            TIER_NORMAL,
+            player_channel=PLAYER_CHANNEL_FB,
+        )
+
+        self.assertEqual(proposed.charge_total, 30_000)
+
+    def test_unknown_player_channel_is_rejected(self) -> None:
+        current = calculate_player_tier(30_000, 0, 0, user_id=42)
+
+        with self.assertRaisesRegex(ValueError, "初始渠道"):
+            build_player_tier_values(
+                current,
+                TIER_NORMAL,
+                player_channel="unknown",
+            )
 
     def test_registration_age_keeps_matching_timestamps(self) -> None:
         now = 2_000_000
@@ -365,8 +410,9 @@ class PlayerTierDatabaseTests(unittest.TestCase):
                 "auto-user-token",
             )
 
-        def construct(*_args, **_kwargs):
+        def construct(*_args, **kwargs):
             events.append("construct")
+            self.assertEqual(kwargs["player_channel"], PLAYER_CHANNEL_FB)
             return current
 
         with (
@@ -392,6 +438,7 @@ class PlayerTierDatabaseTests(unittest.TestCase):
                 DatabaseConnectionConfig(),
                 REGISTRATION_AGE_OVER_7_DAYS,
                 environment="dev",
+                player_channel=PLAYER_CHANNEL_FB,
                 initial_balance=1_000,
                 spin_count=3,
                 bet_amount=100,

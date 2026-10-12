@@ -11,7 +11,7 @@ from concurrent.futures import (
 )
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Dict, Mapping, Optional, Union
 
 from .enums import Platform
 from .database_config import DatabaseConnectionConfig
@@ -51,6 +51,7 @@ def _register_account(
     stop_requested: Callable[[], bool],
     email: Optional[str] = None,
     sql_template: Optional[SqlTemplate] = None,
+    sql_parameters: Optional[Mapping[str, object]] = None,
     database_connection: Optional[DatabaseConnectionConfig] = None,
     feature_scenario: Optional[FeatureScenario] = None,
     scenario_database_connection: Optional[DatabaseConnectionConfig] = None,
@@ -67,6 +68,10 @@ def _register_account(
     )
     if not account.uid or not account.token:
         raise RuntimeError("注册成功但未获取到 uid 或 token")
+    print(
+        f"[{index}/{count}] 注册成功："
+        f"uid={account.uid}，email={account.email}，密码={DEFAULT_PASSWORD}"
+    )
 
     if sql_template is not None:
         if database_connection is None:
@@ -76,6 +81,7 @@ def _register_account(
                 sql_template,
                 account.uid,
                 database_connection,
+                parameters=sql_parameters,
             )
         except Exception as error:
             if stop_requested():
@@ -108,10 +114,6 @@ def _register_account(
             ) from error
         print(f"[{index}/{count}] 场景 PASS · {feature_scenario.title}")
 
-    print(
-        f"[{index}/{count}] 注册成功："
-        f"uid={account.uid}，email={account.email}，密码={DEFAULT_PASSWORD}"
-    )
     return RegisteredAccount(
         index=index,
         output_line=(
@@ -135,6 +137,7 @@ def create_accounts(
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
     email: Optional[str] = None,
     sql_template: Optional[SqlTemplate] = None,
+    sql_parameters: Optional[Mapping[str, object]] = None,
     database_connection: Optional[DatabaseConnectionConfig] = None,
     feature_scenario: Optional[FeatureScenario] = None,
     scenario_database_connection: Optional[DatabaseConnectionConfig] = None,
@@ -190,6 +193,7 @@ def create_accounts(
                     stop_requested=should_stop,
                     email=email,
                     sql_template=sql_template,
+                    sql_parameters=sql_parameters,
                     database_connection=database_connection,
                     feature_scenario=feature_scenario,
                     scenario_database_connection=scenario_database_connection,
@@ -291,16 +295,18 @@ def create_custom_account(
     stop_requested: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[int, int, int], None]] = None,
     sql_template: Optional[SqlTemplate] = None,
+    sql_parameters: Optional[Mapping[str, object]] = None,
     database_connection: Optional[DatabaseConnectionConfig] = None,
     feature_scenario: Optional[FeatureScenario] = None,
     scenario_database_connection: Optional[DatabaseConnectionConfig] = None,
 ) -> int:
     """使用指定邮箱创建并导出一个账号。"""
     email = validate_custom_email(email)
-    sql_parameters = {}
+    sql_binding_parameters = {}
     if sql_template is not None:
-        sql_parameters = {
+        sql_binding_parameters = {
             "sql_template": sql_template,
+            "sql_parameters": sql_parameters,
             "database_connection": database_connection,
         }
     scenario_parameters = {}
@@ -320,6 +326,6 @@ def create_custom_account(
         stop_requested=stop_requested,
         progress_callback=progress_callback,
         email=email,
-        **sql_parameters,
+        **sql_binding_parameters,
         **scenario_parameters,
     )
