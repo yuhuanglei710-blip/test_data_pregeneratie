@@ -4,6 +4,7 @@ import os
 import re
 import threading
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -84,11 +85,12 @@ from base.ipa_manager import (
 )
 from base.player_tier import (
     CONSTRUCTION_CHARGE_TOTAL,
+    DEFAULT_CONSTRUCTION_VIP_LEVEL,
     FB_CONSTRUCTION_CHARGE_TOTAL,
     FB_MINIMUM_TIER_CHARGE_TOTAL,
+    LOSS_OBSERVATION_BOUNDARY,
     MINIMUM_TIER_CHARGE_TOTAL,
     NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL,
-    PLAYER_CHANNEL_CHARGE_LIMITS,
     PLAYER_CHANNEL_FB,
     PLAYER_CHANNEL_GENERAL,
     PLAYER_CHANNEL_LABELS,
@@ -103,6 +105,7 @@ from base.player_tier import (
     calculate_player_tier,
     fetch_player_tier,
     prepare_turnover_and_construct_player_tier,
+    resolve_player_charge_limits,
 )
 from base.api_request import (
     ApiTemplate,
@@ -1722,6 +1725,8 @@ class WorkflowWindow(QMainWindow):
         formula_layout.addWidget(formula_title)
         formula = QLabel(
             "净利润 = 累计充值 − 累计提现 − 7% × 累计充值 − 3.5% × 累计提现 − 当前余额\n"
+            "当前余额 = money + bonus\n"
+            f"真实 VIP4+ 且注册 ≥ 7 天；−{LOSS_OBSERVATION_BOUNDARY:,} < 净利润 < 0 会进入 5 日观察期\n"
             "净利润 > 1,000,000 分（$10,000）→ 顶级玩家；否则按利润率判断\n"
             "利润率 = 净利润 ÷ 累计充值    ·    套利 < −1%    ·    普通 [−1%, 10%)    ·    "
             "核心 [10%, 20%)    ·    顶级 ≥ 20%"
@@ -1742,7 +1747,9 @@ class WorkflowWindow(QMainWindow):
         uid_title = QLabel("按 UID 查询与构造")
         uid_title.setObjectName("sectionTitle")
         uid_layout.addWidget(uid_title)
-        uid_hint = QLabel("从所选环境的 user 表读取数据；构造时会同步调整 money。")
+        uid_hint = QLabel(
+            "从所选环境的 user 表读取数据；当前余额按 money + bonus 计算。"
+        )
         uid_hint.setObjectName("fieldHint")
         uid_hint.setWordWrap(True)
         uid_layout.addWidget(uid_hint)
@@ -1769,6 +1776,18 @@ class WorkflowWindow(QMainWindow):
             "初始渠道",
             self.player_tier_channel,
         )
+        self.player_tier_vip_level = QComboBox()
+        for vip_level in (4, 5, 6):
+            self.player_tier_vip_level.addItem(f"VIP{vip_level}", vip_level)
+        self.player_tier_vip_level.setCurrentIndex(
+            self.player_tier_vip_level.findData(DEFAULT_CONSTRUCTION_VIP_LEVEL)
+        )
+        self._add_form_row(
+            uid_form,
+            3,
+            "目标 VIP",
+            self.player_tier_vip_level,
+        )
         self.player_tier_registration_age = QComboBox()
         self.player_tier_registration_age.addItem(
             "大于7天（符合时保留原时间）",
@@ -1780,7 +1799,7 @@ class WorkflowWindow(QMainWindow):
         )
         self._add_form_row(
             uid_form,
-            3,
+            4,
             "注册时长",
             self.player_tier_registration_age,
         )
@@ -1803,7 +1822,7 @@ class WorkflowWindow(QMainWindow):
             label.setObjectName("fieldHint")
             turnover_layout.addWidget(label)
             turnover_layout.addWidget(control, 1)
-        self._add_form_row(uid_form, 4, "流水准备", turnover_fields)
+        self._add_form_row(uid_form, 5, "流水准备", turnover_fields)
         uid_layout.addLayout(uid_form)
 
         self.player_tier_query_button = QPushButton("读取当前分层")
@@ -1836,7 +1855,8 @@ class WorkflowWindow(QMainWindow):
             f"{CONSTRUCTION_CHARGE_TOTAL:,} 分；FB 玩家：门槛 "
             f"{FB_MINIMUM_TIER_CHARGE_TOTAL:,} 分、安全构造值 "
             f"{FB_CONSTRUCTION_CHARGE_TOTAL:,} 分。只按选择应用规则，不识别当前渠道；并更新 "
-            "charge_total、withdraw_total 与 money；"
+            "charge_total、withdraw_total、money、bonus 与 vip_level；"
+            f"套利玩家的净利润会构造到不高于 −{LOSS_OBSERVATION_BOUNDARY:,} 分，避开 5 日观察期；"
             f"净利润顶级目标会使用至少 {NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL:,} 分累计充值，"
             "以 15% 利润率构造并验证净利润规则优先；"
             "执行前会再次确认。"
@@ -1875,19 +1895,23 @@ class WorkflowWindow(QMainWindow):
         self._add_form_row(preview_form, 1, "累计提现", self.player_preview_withdraw)
         self.player_preview_balance = QLineEdit()
         self.player_preview_balance.setPlaceholderText("例如：5000")
-        self._add_form_row(preview_form, 2, "当前余额", self.player_preview_balance)
+        self._add_form_row(preview_form, 2, "money", self.player_preview_balance)
+        self.player_preview_bonus = QLineEdit("0")
+        self.player_preview_bonus.setPlaceholderText("例如：1000")
+        self._add_form_row(preview_form, 3, "bonus", self.player_preview_bonus)
         preview_layout.addLayout(preview_form)
         for field in (
             self.player_preview_charge,
             self.player_preview_withdraw,
             self.player_preview_balance,
+            self.player_preview_bonus,
         ):
             field.textChanged.connect(self._update_manual_tier_preview)
 
         self.player_preview_tier = QLabel("等待输入")
         self.player_preview_tier.setObjectName("tierBadge")
         preview_layout.addWidget(self.player_preview_tier)
-        self.player_preview_result = QLabel("填写三个金额后自动计算。")
+        self.player_preview_result = QLabel("填写金额后自动计算，当前余额为 money + bonus。")
         self.player_preview_result.setObjectName("metricSummary")
         self.player_preview_result.setWordWrap(True)
         preview_layout.addWidget(self.player_preview_result)
@@ -1900,6 +1924,7 @@ class WorkflowWindow(QMainWindow):
             self.player_tier_uid,
             self.player_tier_query_button,
             self.player_tier_channel,
+            self.player_tier_vip_level,
             self.player_tier_registration_age,
             self.player_tier_initial_balance,
             self.player_tier_spin_count,
@@ -4669,9 +4694,10 @@ class WorkflowWindow(QMainWindow):
         return (
             f"累计充值  {metrics.charge_total:,} 分　　"
             f"累计提现  {metrics.withdraw_total:,} 分\n"
+            f"money  {metrics.money:,} 分　　bonus  {metrics.bonus:,} 分\n"
             f"当前余额  {metrics.balance:,} 分　　净利润  {profit:,} 分\n"
             f"利润率  {rate}　　公式分层  {metrics.tier_label}\n"
-            f"user_segment  {user_segment}"
+            f"VIP  {metrics.vip_level}　　user_segment（服务端当前值）  {user_segment}"
             f"{created_at}"
         )
 
@@ -4680,15 +4706,25 @@ class WorkflowWindow(QMainWindow):
             self.player_preview_charge.text().replace(",", "").strip(),
             self.player_preview_withdraw.text().replace(",", "").strip(),
             self.player_preview_balance.text().replace(",", "").strip(),
+            self.player_preview_bonus.text().replace(",", "").strip(),
         )
         if not all(values):
             self.player_preview_tier.setText("等待输入")
-            self.player_preview_result.setText("填写三个金额后自动计算。")
+            self.player_preview_result.setText(
+                "填写金额后自动计算，当前余额为 money + bonus。"
+            )
             return
         try:
             if any(not value.isdigit() for value in values):
-                raise ValueError("累计充值、累计提现和当前余额必须是非负整数")
-            metrics = calculate_player_tier(*(int(value) for value in values))
+                raise ValueError(
+                    "累计充值、累计提现、money 和 bonus 必须是非负整数"
+                )
+            charge, withdraw, money, bonus = (int(value) for value in values)
+            metrics = replace(
+                calculate_player_tier(charge, withdraw, money + bonus),
+                money=money,
+                bonus=bonus,
+            )
         except ValueError as error:
             self.player_preview_tier.setText("输入无效")
             self.player_preview_result.setText(str(error))
@@ -4732,9 +4768,11 @@ class WorkflowWindow(QMainWindow):
             player_channel,
             player_channel,
         )
-        minimum_charge, construction_charge = PLAYER_CHANNEL_CHARGE_LIMITS[
-            player_channel
-        ]
+        target_vip_level = int(self.player_tier_vip_level.currentData())
+        minimum_charge, construction_charge = resolve_player_charge_limits(
+            player_channel,
+            target_vip_level,
+        )
         registration_age = str(
             self.player_tier_registration_age.currentData() or ""
         )
@@ -4750,7 +4788,7 @@ class WorkflowWindow(QMainWindow):
             "确认构造玩家分层",
             (
                 f"将在 {environment} 环境把 UID {user_id} 按“{player_channel_label}”"
-                f"规则构造为“{target_label}”。\n\n"
+                f"规则构造为 VIP{target_vip_level}“{target_label}”。\n\n"
                 "不会读取或识别账号当前渠道，只使用本次选择的构造规则。\n"
                 f"注册时长将满足“{registration_age_label}”；符合条件时保留原时间，"
                 "否则更新 user.created_at。\n"
@@ -4759,7 +4797,10 @@ class WorkflowWindow(QMainWindow):
                 f"单注 {bet_amount} 美分。\n"
                 f"累计充值高于 {minimum_charge:,} 分时会保留原值，否则使用 "
                 f"{construction_charge:,} 分安全构造值；并同步更新 "
-                "user.charge_total、user.withdraw_total 和 user.money。\n"
+                "user.charge_total、user.withdraw_total、user.money、user.bonus "
+                "和 user.vip_level；"
+                "当前余额始终按 money + bonus 计算。\n"
+                f"套利玩家会避开 −{LOSS_OBSERVATION_BOUNDARY:,} 到 0 的观察区间。\n"
                 "选择净利润顶级玩家时，将以 15% 利润率构造净利润严格超过 "
                 "1,000,000 分（$10,000）的数据。"
             ),
@@ -4777,6 +4818,7 @@ class WorkflowWindow(QMainWindow):
                 registration_age,
                 environment=environment,
                 player_channel=player_channel,
+                target_vip_level=target_vip_level,
                 initial_balance=initial_balance,
                 spin_count=spin_count,
                 bet_amount=bet_amount,
@@ -4793,7 +4835,7 @@ class WorkflowWindow(QMainWindow):
         if not isinstance(value, PlayerTierMetrics):
             raise TypeError("数据库返回了无法识别的玩家分层数据")
         self.player_tier_result.setText(
-            f"构造完成 · UID {value.user_id} · {value.tier_label}\n\n"
+            f"构造参数已写入 · UID {value.user_id} · {value.tier_label}\n\n"
             + self._player_tier_summary(value)
         )
 

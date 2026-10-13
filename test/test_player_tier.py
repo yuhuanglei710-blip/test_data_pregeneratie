@@ -11,6 +11,7 @@ from base.player_tier import (
     CONSTRUCTION_CHARGE_TOTAL,
     FB_CONSTRUCTION_CHARGE_TOTAL,
     FB_MINIMUM_TIER_CHARGE_TOTAL,
+    LOSS_OBSERVATION_BOUNDARY,
     MINIMUM_TIER_CHARGE_TOTAL,
     NET_PROFIT_TOP_CONSTRUCTION_CHARGE_TOTAL,
     NET_PROFIT_TOP_TARGET_RATE,
@@ -33,6 +34,7 @@ from base.player_tier import (
     fetch_player_login_credentials,
     fetch_player_tier,
     prepare_turnover_and_construct_player_tier,
+    resolve_player_charge_limits,
     resolve_registration_created_at,
 )
 
@@ -77,17 +79,25 @@ class PlayerTierCalculationTests(unittest.TestCase):
             with self.subTest(target=target):
                 proposed = build_player_tier_values(current, target)
                 self.assertEqual(proposed.tier, target)
-                self.assertEqual(
-                    proposed.profit_rate,
-                    TARGET_PROFIT_RATES[target],
-                )
+                if target == TIER_ARBITRAGE:
+                    self.assertLess(proposed.profit_rate, Decimal("-0.01"))
+                    self.assertLessEqual(
+                        proposed.net_profit,
+                        -Decimal(LOSS_OBSERVATION_BOUNDARY),
+                    )
+                else:
+                    self.assertEqual(
+                        proposed.profit_rate,
+                        TARGET_PROFIT_RATES[target],
+                    )
                 self.assertEqual(
                     proposed.charge_total,
                     CONSTRUCTION_CHARGE_TOTAL,
                 )
                 self.assertGreaterEqual(proposed.charge_total, 350_000)
                 self.assertEqual(proposed.withdraw_total, 0)
-                self.assertLess(proposed.balance, CONSTRUCTION_CHARGE_TOTAL)
+                if target != TIER_ARBITRAGE:
+                    self.assertLess(proposed.balance, CONSTRUCTION_CHARGE_TOTAL)
 
     def test_constructed_values_preserve_charge_above_minimum(self) -> None:
         current = calculate_player_tier(525_000, 2_000, 250_000, user_id=42)
@@ -171,6 +181,45 @@ class PlayerTierCalculationTests(unittest.TestCase):
         )
 
         self.assertEqual(proposed.charge_total, 30_000)
+
+    def test_general_vip5_and_vip6_use_their_own_safe_thresholds(self) -> None:
+        current = calculate_player_tier(20_000, 0, 0, user_id=42)
+
+        vip5 = build_player_tier_values(
+            current,
+            TIER_NORMAL,
+            target_vip_level=5,
+        )
+        vip6 = build_player_tier_values(
+            current,
+            TIER_NORMAL,
+            target_vip_level=6,
+        )
+
+        self.assertEqual(vip5.charge_total, 1_650_000)
+        self.assertEqual(vip5.vip_level, 5)
+        self.assertEqual(vip6.charge_total, 8_050_000)
+        self.assertEqual(vip6.vip_level, 6)
+
+    def test_arbitrage_construction_avoids_observation_period(self) -> None:
+        current = calculate_player_tier(0, 0, 0, user_id=42)
+
+        for player_channel in ("general", PLAYER_CHANNEL_FB):
+            with self.subTest(player_channel=player_channel):
+                proposed = build_player_tier_values(
+                    current,
+                    TIER_ARBITRAGE,
+                    player_channel=player_channel,
+                )
+                self.assertLessEqual(
+                    proposed.net_profit,
+                    -Decimal(LOSS_OBSERVATION_BOUNDARY),
+                )
+                self.assertEqual(proposed.tier, TIER_ARBITRAGE)
+
+    def test_charge_limits_reject_non_segment_vip(self) -> None:
+        with self.assertRaisesRegex(ValueError, "VIP4、VIP5 或 VIP6"):
+            resolve_player_charge_limits("general", 3)
 
     def test_unknown_player_channel_is_rejected(self) -> None:
         current = calculate_player_tier(30_000, 0, 0, user_id=42)
@@ -303,7 +352,7 @@ class PlayerTierDatabaseTests(unittest.TestCase):
 
     def test_fetch_returns_user_base_segment(self) -> None:
         database = _FakeDatabase(
-            (42, 350_000, 0, 273_000, 1_900_000),
+            (42, 350_000, 0, 270_000, 3_000, 4, 1_900_000),
             user_segment=3,
         )
 
@@ -318,13 +367,21 @@ class PlayerTierDatabaseTests(unittest.TestCase):
             result = fetch_player_tier(42, DatabaseConnectionConfig())
 
         self.assertEqual(result.user_segment, 3)
+        self.assertEqual(result.money, 270_000)
+        self.assertEqual(result.bonus, 3_000)
+        self.assertEqual(result.balance, 273_000)
+        self.assertEqual(result.vip_level, 4)
+        self.assertEqual(result.net_profit, Decimal("52500.00"))
+        self.assertEqual(result.profit_rate, Decimal("0.15"))
+        query_sql = database.fake_cursor.executions[0][0]
+        self.assertIn("money, bonus", query_sql)
         segment_sql, segment_parameters = database.fake_cursor.executions[1]
         self.assertIn("FROM user_base", segment_sql)
         self.assertEqual(segment_parameters, (42,))
 
     def test_construct_updates_totals_and_balance(self) -> None:
         database = _FakeDatabase(
-            (42, 10_000, 2_000, 35_000),
+            (42, 10_000, 2_000, 30_000, 5_000, 0, 1_900_000),
             user_segment=2,
         )
 
@@ -348,10 +405,17 @@ class PlayerTierDatabaseTests(unittest.TestCase):
         self.assertEqual(result.charge_total, CONSTRUCTION_CHARGE_TOTAL)
         self.assertEqual(result.withdraw_total, 0)
         self.assertEqual(result.balance, 312_000)
+        self.assertEqual(result.money, 307_000)
+        self.assertEqual(result.bonus, 5_000)
+        self.assertEqual(result.vip_level, 4)
         self.assertEqual(result.user_segment, 2)
         update_sql, update_parameters = database.fake_cursor.executions[1]
         self.assertIn("money=%s", update_sql)
-        self.assertEqual(update_parameters, (400_000, 0, 312_000, 42))
+        self.assertIn("bonus=%s", update_sql)
+        self.assertEqual(
+            update_parameters,
+            (400_000, 0, 307_000, 5_000, 4, 42),
+        )
         segment_sql, segment_parameters = database.fake_cursor.executions[2]
         self.assertIn("FROM user_base", segment_sql)
         self.assertEqual(segment_parameters, (42,))
@@ -359,7 +423,15 @@ class PlayerTierDatabaseTests(unittest.TestCase):
     def test_construct_updates_created_at_for_selected_registration_age(self) -> None:
         now = 2_000_000
         database = _FakeDatabase(
-            (42, 10_000, 2_000, 35_000, now - 2 * SECONDS_PER_DAY),
+            (
+                42,
+                10_000,
+                2_000,
+                30_000,
+                5_000,
+                0,
+                now - 2 * SECONDS_PER_DAY,
+            ),
             user_segment=2,
         )
 
@@ -387,7 +459,37 @@ class PlayerTierDatabaseTests(unittest.TestCase):
         self.assertIn("created_at=%s", update_sql)
         self.assertEqual(
             update_parameters,
-            (400_000, 0, 312_000, expected_created_at, 42),
+            (400_000, 0, 307_000, 5_000, 4, expected_created_at, 42),
+        )
+
+    def test_construct_caps_bonus_when_it_exceeds_target_balance(self) -> None:
+        database = _FakeDatabase(
+            (42, 10_000, 2_000, 30_000, 500_000, 0, 1_900_000),
+            user_segment=2,
+        )
+
+        @contextmanager
+        def connection_context(_connection):
+            yield database
+
+        with patch(
+            "base.player_tier.open_database_connection",
+            side_effect=connection_context,
+        ):
+            result = construct_player_tier(
+                42,
+                TIER_CORE,
+                DatabaseConnectionConfig(),
+            )
+
+        self.assertEqual(result.balance, 312_000)
+        self.assertEqual(result.money, 0)
+        self.assertEqual(result.bonus, 312_000)
+        update_sql, update_parameters = database.fake_cursor.executions[1]
+        self.assertIn("bonus=%s", update_sql)
+        self.assertEqual(
+            update_parameters,
+            (400_000, 0, 0, 312_000, 4, 42),
         )
 
     def test_new_user_gets_turnover_before_registration_time_changes(self) -> None:

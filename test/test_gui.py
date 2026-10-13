@@ -105,15 +105,19 @@ class ApkConflictPromptTests(unittest.TestCase):
         self.window._switch_section(2)
         self.window.player_preview_charge.setText("10000")
         self.window.player_preview_withdraw.setText("0")
-        self.window.player_preview_balance.setText("8300")
+        self.window.player_preview_balance.setText("8000")
+        self.window.player_preview_bonus.setText("300")
         self.app.processEvents()
 
         self.assertEqual(self.window.page_title.text(), "玩家分层")
         self.assertEqual(self.window.content_stack.currentIndex(), 8)
         self.assertEqual(self.window.player_preview_tier.text(), "核心玩家")
         self.assertIn("10.00%", self.window.player_preview_result.text())
+        self.assertIn("money  8,000 分", self.window.player_preview_result.text())
+        self.assertIn("bonus  300 分", self.window.player_preview_result.text())
+        self.assertIn("当前余额  8,300 分", self.window.player_preview_result.text())
         self.assertIn("user_segment", self.window.player_preview_result.text())
-        self.assertEqual(len(self.window.player_preview_result.text().splitlines()), 4)
+        self.assertEqual(len(self.window.player_preview_result.text().splitlines()), 5)
         self.assertEqual(
             self.window.player_tier_registration_age.currentData(),
             REGISTRATION_AGE_OVER_7_DAYS,
@@ -122,6 +126,7 @@ class ApkConflictPromptTests(unittest.TestCase):
             self.window.player_tier_channel.currentData(),
             PLAYER_CHANNEL_GENERAL,
         )
+        self.assertEqual(self.window.player_tier_vip_level.currentData(), 4)
         fb_channel_index = self.window.player_tier_channel.findData(
             PLAYER_CHANNEL_FB
         )

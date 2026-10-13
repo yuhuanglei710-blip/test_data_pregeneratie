@@ -27,6 +27,15 @@ MINIMUM_TIER_CHARGE_TOTAL = 350_000
 CONSTRUCTION_CHARGE_TOTAL = 400_000
 FB_MINIMUM_TIER_CHARGE_TOTAL = 20_000
 FB_CONSTRUCTION_CHARGE_TOTAL = 25_000
+MINIMUM_VIP_LEVEL = 4
+DEFAULT_CONSTRUCTION_VIP_LEVEL = 4
+VIP_CHARGE_LIMITS = {
+    4: (350_000, 400_000),
+    5: (1_600_000, 1_650_000),
+    6: (8_000_000, 8_050_000),
+}
+# -50,000 < 净利润 < 0 会进入 5 日观察期；构造套利用户时至少落在边界。
+LOSS_OBSERVATION_BOUNDARY = 50_000
 PLAYER_CHANNEL_GENERAL = "general"
 PLAYER_CHANNEL_FB = "fb"
 PLAYER_CHANNEL_LABELS = {
@@ -98,6 +107,9 @@ class PlayerTierMetrics:
     tier: str
     user_segment: Optional[int] = None
     created_at: Optional[int] = None
+    money: int = 0
+    bonus: int = 0
+    vip_level: int = 0
 
     @property
     def tier_label(self) -> str:
@@ -151,6 +163,7 @@ def calculate_player_tier(
             net_profit,
             None,
             TIER_UNCLASSIFIED,
+            money=current_balance,
         )
     profit_rate = net_profit / Decimal(charge)
     if net_profit > TOP_NET_PROFIT_THRESHOLD:
@@ -171,6 +184,7 @@ def calculate_player_tier(
         net_profit,
         profit_rate,
         tier,
+        money=current_balance,
     )
 
 
@@ -179,15 +193,15 @@ def build_player_tier_values(
     target_tier: str,
     *,
     player_channel: str = PLAYER_CHANNEL_GENERAL,
+    target_vip_level: int = DEFAULT_CONSTRUCTION_VIP_LEVEL,
 ) -> PlayerTierMetrics:
     """保留已达标的累计充值，并调整余额构造目标分层区间。"""
     if target_tier not in TARGET_TIER_LABELS:
         raise ValueError("不支持的目标分层")
-    if player_channel not in PLAYER_CHANNEL_CHARGE_LIMITS:
-        raise ValueError("不支持的玩家初始渠道")
-    minimum_charge, construction_charge = PLAYER_CHANNEL_CHARGE_LIMITS[
-        player_channel
-    ]
+    minimum_charge, construction_charge = resolve_player_charge_limits(
+        player_channel,
+        target_vip_level,
+    )
     charge = (
         current.charge_total
         if current.charge_total > minimum_charge
@@ -200,6 +214,12 @@ def build_player_tier_values(
         target_rate = TARGET_PROFIT_RATES[target_tier]
     withdraw = 0
     target_net_profit = target_rate * Decimal(charge)
+    if target_tier == TIER_ARBITRAGE:
+        # -50,000 < 净利润 < 0 会进入观察期，无法立即得到服务端分层。
+        target_net_profit = min(
+            target_net_profit,
+            -Decimal(LOSS_OBSERVATION_BOUNDARY),
+        )
     rounding = ROUND_HALF_UP
     if (
         target_tier in {TIER_NORMAL, TIER_CORE}
@@ -223,6 +243,7 @@ def build_player_tier_values(
         balance,
         user_id=current.user_id,
     )
+    proposed = replace(proposed, vip_level=int(target_vip_level))
     expected_tier = TIER_TOP if target_tier == TARGET_NET_PROFIT_TOP else target_tier
     if proposed.tier != expected_tier:
         if target_tier == TIER_CORE and charge > 10_000_000:
@@ -237,6 +258,24 @@ def build_player_tier_values(
     ):
         raise ValueError("整数金额舍入后净利润未超过 1,000,000 分")
     return proposed
+
+
+def resolve_player_charge_limits(
+    player_channel: str,
+    vip_level: object,
+) -> tuple[int, int]:
+    """返回所选渠道和 VIP 等级对应的严格门槛及安全构造值。"""
+    normalized_vip_level = _non_negative_integer(vip_level, "VIP 等级")
+    if normalized_vip_level not in VIP_CHARGE_LIMITS:
+        raise ValueError("玩家分层只支持构造 VIP4、VIP5 或 VIP6")
+    if player_channel == PLAYER_CHANNEL_FB:
+        return (
+            FB_MINIMUM_TIER_CHARGE_TOTAL,
+            FB_CONSTRUCTION_CHARGE_TOTAL,
+        )
+    if player_channel != PLAYER_CHANNEL_GENERAL:
+        raise ValueError("不支持的玩家初始渠道")
+    return VIP_CHARGE_LIMITS[normalized_vip_level]
 
 
 def resolve_registration_created_at(
@@ -267,12 +306,28 @@ def resolve_registration_created_at(
 def _metrics_from_row(row: object, user_id: int) -> PlayerTierMetrics:
     if not isinstance(row, (tuple, list)) or len(row) < 4:
         raise ValueError("数据库返回的玩家数据格式无效")
+    money = _non_negative_integer(row[3], "money")
+    bonus = _non_negative_integer(row[4], "bonus") if len(row) >= 6 else 0
+    vip_level = _non_negative_integer(row[5], "VIP 等级") if len(row) >= 7 else 0
     metrics = calculate_player_tier(
-        row[1], row[2], row[3], user_id=int(row[0] or user_id)
+        row[1],
+        row[2],
+        money + bonus,
+        user_id=int(row[0] or user_id),
     )
-    if len(row) < 5:
+    metrics = replace(
+        metrics,
+        money=money,
+        bonus=bonus,
+        vip_level=vip_level,
+    )
+    created_at_index = 6 if len(row) >= 7 else (5 if len(row) >= 6 else 4)
+    if len(row) <= created_at_index:
         return metrics
-    return replace(metrics, created_at=_non_negative_integer(row[4], "注册时间"))
+    return replace(
+        metrics,
+        created_at=_non_negative_integer(row[created_at_index], "注册时间"),
+    )
 
 
 def _fetch_user_segment(cursor: object, user_id: int) -> Optional[int]:
@@ -300,7 +355,8 @@ def fetch_player_tier(
     with open_database_connection(connection) as database:
         with database.cursor() as cursor:
             cursor.execute(
-                "SELECT id, charge_total, withdraw_total, money, created_at "
+                "SELECT id, charge_total, withdraw_total, money, bonus, "
+                "vip_level, created_at "
                 "FROM `user` WHERE id=%s LIMIT 1",
                 (int(user_id),),
             )
@@ -347,6 +403,7 @@ def construct_player_tier(
     registration_age: Optional[str] = None,
     *,
     player_channel: str = PLAYER_CHANNEL_GENERAL,
+    target_vip_level: int = DEFAULT_CONSTRUCTION_VIP_LEVEL,
 ) -> PlayerTierMetrics:
     """锁定玩家记录并写入目标分层及所选注册时长的数据。"""
     if isinstance(user_id, bool) or int(user_id) <= 0:
@@ -355,7 +412,8 @@ def construct_player_tier(
         try:
             with database.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, charge_total, withdraw_total, money, created_at "
+                    "SELECT id, charge_total, withdraw_total, money, bonus, "
+                    "vip_level, created_at "
                     "FROM `user` WHERE id=%s LIMIT 1 FOR UPDATE",
                     (int(user_id),),
                 )
@@ -367,16 +425,27 @@ def construct_player_tier(
                     current,
                     target_tier,
                     player_channel=player_channel,
+                    target_vip_level=target_vip_level,
+                )
+                constructed_bonus = min(current.bonus, proposed.balance)
+                constructed_money = proposed.balance - constructed_bonus
+                proposed = replace(
+                    proposed,
+                    money=constructed_money,
+                    bonus=constructed_bonus,
                 )
                 if registration_age is None:
                     update_sql = (
-                        "UPDATE `user` SET charge_total=%s, withdraw_total=%s, money=%s "
+                        "UPDATE `user` SET charge_total=%s, withdraw_total=%s, "
+                        "money=%s, bonus=%s, vip_level=%s "
                         "WHERE id=%s"
                     )
                     update_parameters = (
                         proposed.charge_total,
                         proposed.withdraw_total,
-                        proposed.balance,
+                        proposed.money,
+                        proposed.bonus,
+                        proposed.vip_level,
                         proposed.user_id,
                     )
                 else:
@@ -388,13 +457,16 @@ def construct_player_tier(
                     )
                     proposed = replace(proposed, created_at=created_at)
                     update_sql = (
-                        "UPDATE `user` SET charge_total=%s, withdraw_total=%s, money=%s, "
-                        "created_at=%s WHERE id=%s"
+                        "UPDATE `user` SET charge_total=%s, withdraw_total=%s, "
+                        "money=%s, bonus=%s, "
+                        "vip_level=%s, created_at=%s WHERE id=%s"
                     )
                     update_parameters = (
                         proposed.charge_total,
                         proposed.withdraw_total,
-                        proposed.balance,
+                        proposed.money,
+                        proposed.bonus,
+                        proposed.vip_level,
                         created_at,
                         proposed.user_id,
                     )
@@ -420,6 +492,7 @@ def prepare_turnover_and_construct_player_tier(
     *,
     environment: str,
     player_channel: str = PLAYER_CHANNEL_GENERAL,
+    target_vip_level: int = DEFAULT_CONSTRUCTION_VIP_LEVEL,
     initial_balance: int = INITIAL_BALANCE,
     spin_count: int = INITIAL_SPIN_COUNT,
     bet_amount: int = DEFAULT_BET_CENTS,
@@ -469,4 +542,5 @@ def prepare_turnover_and_construct_player_tier(
         connection,
         registration_age,
         player_channel=player_channel,
+        target_vip_level=target_vip_level,
     )
