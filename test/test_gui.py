@@ -13,6 +13,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from base.apk_manager import ApkInstallResult, CachedApk
+from base.api_request import ApiTemplate
 from base.player_tier import (
     PLAYER_CHANNEL_FB,
     PLAYER_CHANNEL_GENERAL,
@@ -212,6 +213,53 @@ class ApkConflictPromptTests(unittest.TestCase):
             font.hintingPreference(),
             QFont.HintingPreference.PreferFullHinting,
         )
+
+    def test_api_selection_scaffolds_parameters_and_previews_request(self) -> None:
+        template = ApiTemplate(
+            "api-preview",
+            "查询用户",
+            "POST",
+            "https://example.test/users/{{userid}}",
+            '{"Authorization":"Bearer {{token}}"}',
+            '{"user_id":{{userid}}}',
+            12,
+        )
+        self.window.api_templates = [template]
+        self.window.api_parameters.setPlainText("{}")
+        self.window._refresh_api_templates(template.template_id)
+        self.app.processEvents()
+
+        parameters = self.window.api_parameters.toPlainText()
+        self.assertIn('"userid"', parameters)
+        self.assertIn('"token"', parameters)
+        self.assertIn("需要参数：userid, token", self.window.api_parameter_hint.text())
+        self.assertFalse(self.window.api_send_button.isEnabled())
+
+        self.window.api_parameters.setPlainText(
+            '{"userid":42,"token":"secret"}'
+        )
+        self.app.processEvents()
+
+        self.assertIn(
+            "POST https://example.test/users/42",
+            self.window.api_request_preview.toPlainText(),
+        )
+        self.assertTrue(self.window.api_send_button.isEnabled())
+
+    def test_api_invalid_json_disables_send_with_inline_error(self) -> None:
+        template = ApiTemplate(
+            "api-invalid",
+            "查询用户",
+            "GET",
+            "https://example.test/users",
+        )
+        self.window.api_templates = [template]
+        self.window._refresh_api_templates(template.template_id)
+        self.window.api_parameters.setPlainText("{")
+        self.app.processEvents()
+
+        self.assertFalse(self.window.api_send_button.isEnabled())
+        self.assertIn("请修正", self.window.api_validation_hint.text())
 
     def test_queue_writer_keeps_parallel_log_lines_atomic(self) -> None:
         output: list[str] = []

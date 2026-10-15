@@ -1,5 +1,6 @@
 """自动化测试数据桌面控制台。"""
 
+import json
 import os
 import re
 import threading
@@ -10,7 +11,17 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from PySide6.QtCore import QObject, QSize, QThread, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase, QTextCursor
+from PySide6.QtGui import (
+    QCloseEvent,
+    QColor,
+    QFont,
+    QFontDatabase,
+    QKeySequence,
+    QShortcut,
+    QSyntaxHighlighter,
+    QTextCharFormat,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
@@ -37,6 +48,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
@@ -113,9 +125,10 @@ from base.api_request import (
     load_environment_api_base_url,
     load_api_templates,
     parse_runtime_parameters,
+    prepare_api_request,
     save_api_template,
     send_api_request,
-    template_parameter_names,
+    template_parameter_names as api_template_parameter_names,
 )
 from base.app_config import load_channel_code_config, save_channel_codes
 from base.channel_source import (
@@ -157,7 +170,7 @@ from base.sql_data import (
     load_sql_templates,
     parse_runtime_parameter,
     save_sql_template,
-    template_parameter_names,
+    template_parameter_names as sql_template_parameter_names,
 )
 from base.tournment_test import (
     DEFAULT_ACCOUNT_COUNT,
@@ -295,6 +308,20 @@ QLabel#tierBadge {
     font-size: 11pt;
     font-weight: 700;
 }
+QLabel#requestBadge {
+    color: #2846a6;
+    background: #edf1ff;
+    border: 1px solid #d6defa;
+    border-radius: 7px;
+    padding: 7px 10px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-weight: 700;
+}
+QLabel#requestBadge:disabled {
+    color: #808792;
+    background: #f3f5f7;
+    border-color: #dfe3e8;
+}
 QLabel#online { color: #228653; font-weight: 700; }
 QLabel#statusPill, QLabel#connectionStatus {
     background: #ffffff;
@@ -411,6 +438,25 @@ QComboBox QAbstractItemView {
     selection-color: #17191d;
     selection-background-color: #e9edf1;
 }
+QTabWidget::pane {
+    background: #fbfcfd;
+    border: 1px solid #d6dbe1;
+    border-radius: 7px;
+    top: -1px;
+}
+QTabBar::tab {
+    color: #737b86;
+    background: #f3f5f7;
+    border: 1px solid #d6dbe1;
+    padding: 7px 14px;
+}
+QTabBar::tab:first { border-top-left-radius: 7px; }
+QTabBar::tab:last { border-top-right-radius: 7px; }
+QTabBar::tab:selected {
+    color: #20242a;
+    background: #ffffff;
+    font-weight: 700;
+}
 
 QListWidget#channelCodeList, QPlainTextEdit#terminal {
     color: #30363d;
@@ -486,6 +532,105 @@ class NumberInput(QSpinBox):
 
     def wheelEvent(self, event) -> None:
         event.ignore()
+
+
+def _text_format(color: str, *, bold: bool = False) -> QTextCharFormat:
+    text_format = QTextCharFormat()
+    text_format.setForeground(QColor(color))
+    if bold:
+        text_format.setFontWeight(QFont.Weight.Bold)
+    return text_format
+
+
+class JsonSyntaxHighlighter(QSyntaxHighlighter):
+    """为 JSON 编辑器和响应内容提供轻量语法高亮。"""
+
+    STRING_PATTERN = re.compile(r'"(?:\\.|[^"\\])*"')
+    NUMBER_PATTERN = re.compile(
+        r"(?<![\w.])-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.])"
+    )
+    LITERAL_PATTERN = re.compile(r"\b(?:true|false|null)\b")
+    PUNCTUATION_PATTERN = re.compile(r"[{}\[\],:]")
+
+    def __init__(self, document) -> None:
+        super().__init__(document)
+        self.string_format = _text_format("#228653")
+        self.key_format = _text_format("#2846a6", bold=True)
+        self.number_format = _text_format("#a05a00")
+        self.literal_format = _text_format("#7b3fb2", bold=True)
+        self.punctuation_format = _text_format("#69717d")
+
+    def highlightBlock(self, text: str) -> None:
+        for match in self.PUNCTUATION_PATTERN.finditer(text):
+            self.setFormat(match.start(), len(match.group()), self.punctuation_format)
+        for match in self.NUMBER_PATTERN.finditer(text):
+            self.setFormat(match.start(), len(match.group()), self.number_format)
+        for match in self.LITERAL_PATTERN.finditer(text):
+            self.setFormat(match.start(), len(match.group()), self.literal_format)
+        for match in self.STRING_PATTERN.finditer(text):
+            suffix = text[match.end():]
+            text_format = (
+                self.key_format
+                if re.match(r"\s*:", suffix)
+                else self.string_format
+            )
+            self.setFormat(match.start(), len(match.group()), text_format)
+
+
+class ApiPreviewHighlighter(JsonSyntaxHighlighter):
+    """在 JSON 之外强调请求方法、URL 和内容分区。"""
+
+    REQUEST_PATTERN = re.compile(r"^(GET|POST|PUT|PATCH|DELETE)\s+(.*)$")
+
+    def __init__(self, document) -> None:
+        super().__init__(document)
+        self.method_format = _text_format("#ffffff", bold=True)
+        self.method_format.setBackground(QColor("#2846a6"))
+        self.url_format = _text_format("#1559a5")
+        self.heading_format = _text_format("#20242a", bold=True)
+        self.meta_format = _text_format("#808792")
+
+    def highlightBlock(self, text: str) -> None:
+        super().highlightBlock(text)
+        request_match = self.REQUEST_PATTERN.match(text)
+        if request_match:
+            self.setFormat(
+                request_match.start(1),
+                len(request_match.group(1)),
+                self.method_format,
+            )
+            self.setFormat(
+                request_match.start(2),
+                len(request_match.group(2)),
+                self.url_format,
+            )
+        elif text in ("Headers", "Body"):
+            self.setFormat(0, len(text), self.heading_format)
+        elif text.startswith("Timeout:"):
+            self.setFormat(0, len(text), self.meta_format)
+
+
+class ApiLogHighlighter(JsonSyntaxHighlighter):
+    """强调响应日志中的请求摘要、成功状态和失败状态。"""
+
+    STATUS_PATTERN = re.compile(r"(?<!\d)([1-5]\d{2})(?!\d)")
+
+    def __init__(self, document) -> None:
+        super().__init__(document)
+        self.label_format = _text_format("#2846a6", bold=True)
+        self.success_format = _text_format("#228653", bold=True)
+        self.error_format = _text_format("#c43d47", bold=True)
+
+    def highlightBlock(self, text: str) -> None:
+        super().highlightBlock(text)
+        if text.startswith("[api]"):
+            self.setFormat(0, 5, self.label_format)
+        for match in self.STATUS_PATTERN.finditer(text):
+            status = int(match.group(1))
+            text_format = (
+                self.success_format if 200 <= status < 400 else self.error_format
+            )
+            self.setFormat(match.start(1), len(match.group(1)), text_format)
 
 
 class SearchableComboBox(QComboBox):
@@ -984,7 +1129,7 @@ class SqlTemplateDialog(QDialog):
                 "参数名只能包含字母、数字和下划线，且不能以数字开头。",
             )
             return
-        existing = template_parameter_names(
+        existing = sql_template_parameter_names(
             SqlTemplate("preview", "preview", self.sql_input.toPlainText())
         )
         if name.casefold() in {value.casefold() for value in existing}:
@@ -3095,7 +3240,7 @@ class WorkflowWindow(QMainWindow):
 
         execute_panel = QFrame()
         execute_panel.setObjectName("settingsPanel")
-        execute_panel.setFixedWidth(390)
+        execute_panel.setMinimumWidth(460)
         execute_layout = QVBoxLayout(execute_panel)
         execute_layout.setContentsMargins(22, 20, 22, 20)
         execute_layout.setSpacing(10)
@@ -3107,7 +3252,7 @@ class WorkflowWindow(QMainWindow):
         selected_caption.setObjectName("fieldLabel")
         execute_layout.addWidget(selected_caption)
         self.api_selected_title = QLabel("未选择")
-        self.api_selected_title.setObjectName("fieldHint")
+        self.api_selected_title.setObjectName("requestBadge")
         self.api_selected_title.setWordWrap(True)
         execute_layout.addWidget(self.api_selected_title)
 
@@ -3125,22 +3270,80 @@ class WorkflowWindow(QMainWindow):
         self.api_domain_hint.setWordWrap(True)
         execute_layout.addWidget(self.api_domain_hint)
 
+        self.api_request_tabs = QTabWidget()
+        parameter_tab = QWidget()
+        parameter_tab_layout = QVBoxLayout(parameter_tab)
+        parameter_tab_layout.setContentsMargins(10, 10, 10, 10)
+        parameter_tab_layout.setSpacing(7)
+        parameter_header = QHBoxLayout()
         parameters_label = QLabel("运行参数（JSON 对象）")
         parameters_label.setObjectName("fieldLabel")
-        execute_layout.addWidget(parameters_label)
+        parameter_header.addWidget(parameters_label)
+        parameter_header.addStretch()
+        self.api_fill_parameters_button = QPushButton("生成参数")
+        self.api_fill_parameters_button.setObjectName("secondaryButton")
+        self.api_fill_parameters_button.setToolTip("按模板占位符生成参数骨架")
+        self.api_fill_parameters_button.clicked.connect(self._fill_api_parameters)
+        parameter_header.addWidget(self.api_fill_parameters_button)
+        self.api_format_parameters_button = QPushButton("格式化")
+        self.api_format_parameters_button.setObjectName("secondaryButton")
+        self.api_format_parameters_button.clicked.connect(self._format_api_parameters)
+        parameter_header.addWidget(self.api_format_parameters_button)
+        parameter_tab_layout.addLayout(parameter_header)
         self.api_parameters = QPlainTextEdit()
+        self.api_parameters.setObjectName("longTextInput")
         self.api_parameters.setPlaceholderText('{"userid": 123, "token": "xxx"}')
         self.api_parameters.setPlainText("{}")
-        self.api_parameters.setMaximumHeight(150)
-        execute_layout.addWidget(self.api_parameters)
+        self.api_parameters.setMinimumHeight(100)
+        self.api_parameters.setFont(application_monospace_font(9.5))
+        self.api_parameters_highlighter = JsonSyntaxHighlighter(
+            self.api_parameters.document()
+        )
+        self.api_parameters.textChanged.connect(self._update_api_request_preview)
+        parameter_tab_layout.addWidget(self.api_parameters, 1)
         self.api_parameter_hint = QLabel("当前模板无需运行参数")
         self.api_parameter_hint.setObjectName("fieldHint")
         self.api_parameter_hint.setWordWrap(True)
-        execute_layout.addWidget(self.api_parameter_hint)
-        execute_layout.addStretch()
+        parameter_tab_layout.addWidget(self.api_parameter_hint)
+        self.api_parameter_validation = QLabel("请选择模板")
+        self.api_parameter_validation.setObjectName("fieldHint")
+        self.api_parameter_validation.setWordWrap(True)
+        parameter_tab_layout.addWidget(self.api_parameter_validation)
+        self.api_request_tabs.addTab(parameter_tab, "运行参数")
+
+        preview_tab = QWidget()
+        preview_tab_layout = QVBoxLayout(preview_tab)
+        preview_tab_layout.setContentsMargins(10, 10, 10, 10)
+        preview_tab_layout.setSpacing(7)
+        preview_header = QHBoxLayout()
+        preview_label = QLabel("发送预览")
+        preview_label.setObjectName("fieldLabel")
+        preview_header.addWidget(preview_label)
+        preview_header.addStretch()
+        self.api_copy_preview_button = QPushButton("复制")
+        self.api_copy_preview_button.setObjectName("secondaryButton")
+        self.api_copy_preview_button.clicked.connect(self._copy_api_preview)
+        preview_header.addWidget(self.api_copy_preview_button)
+        preview_tab_layout.addLayout(preview_header)
+        self.api_request_preview = QPlainTextEdit()
+        self.api_request_preview.setObjectName("terminal")
+        self.api_request_preview.setReadOnly(True)
+        self.api_request_preview.setMinimumHeight(100)
+        self.api_request_preview.setFont(application_monospace_font(9.0))
+        self.api_preview_highlighter = ApiPreviewHighlighter(
+            self.api_request_preview.document()
+        )
+        preview_tab_layout.addWidget(self.api_request_preview, 1)
+        self.api_validation_hint = QLabel("请选择模板")
+        self.api_validation_hint.setObjectName("fieldHint")
+        self.api_validation_hint.setWordWrap(True)
+        preview_tab_layout.addWidget(self.api_validation_hint)
+        self.api_request_tabs.addTab(preview_tab, "发送预览")
+        self.api_request_tabs.setMinimumHeight(230)
+        execute_layout.addWidget(self.api_request_tabs, 1)
 
         execute_buttons = QHBoxLayout()
-        self.api_send_button = QPushButton("发送")
+        self.api_send_button = QPushButton("发送请求  Ctrl+Enter")
         self.api_send_button.setObjectName("primaryButton")
         self.api_send_button.clicked.connect(self._start)
         execute_buttons.addWidget(self.api_send_button, 1)
@@ -3150,12 +3353,12 @@ class WorkflowWindow(QMainWindow):
         self.api_stop_button.clicked.connect(self._stop)
         execute_buttons.addWidget(self.api_stop_button)
         execute_layout.addLayout(execute_buttons)
-        main.addWidget(execute_panel)
+        main.addWidget(execute_panel, 3)
         layout.addLayout(main, 1)
 
         log_panel = QFrame()
         log_panel.setObjectName("terminalPanel")
-        log_panel.setFixedHeight(160)
+        log_panel.setFixedHeight(190)
         log_layout = QVBoxLayout(log_panel)
         log_layout.setContentsMargins(16, 10, 16, 12)
         log_layout.setSpacing(6)
@@ -3164,6 +3367,10 @@ class WorkflowWindow(QMainWindow):
         log_title.setObjectName("sessionTitle")
         log_header.addWidget(log_title)
         log_header.addStretch()
+        copy_log_button = QPushButton("复制响应")
+        copy_log_button.setObjectName("secondaryButton")
+        copy_log_button.clicked.connect(self._copy_api_response)
+        log_header.addWidget(copy_log_button)
         clear_log_button = QPushButton("清空")
         clear_log_button.setObjectName("secondaryButton")
         clear_log_button.clicked.connect(lambda: self.api_log.clear())
@@ -3175,6 +3382,7 @@ class WorkflowWindow(QMainWindow):
         self.api_log.setUndoRedoEnabled(False)
         self.api_log.document().setMaximumBlockCount(500)
         self.api_log.setFont(application_monospace_font(9.5))
+        self.api_log_highlighter = ApiLogHighlighter(self.api_log.document())
         log_layout.addWidget(self.api_log, 1)
         layout.addWidget(log_panel)
 
@@ -3184,6 +3392,8 @@ class WorkflowWindow(QMainWindow):
                 self.api_list,
                 self.api_environment,
                 self.api_parameters,
+                self.api_fill_parameters_button,
+                self.api_format_parameters_button,
                 self.new_api_button,
                 self.edit_api_button,
                 self.delete_api_button,
@@ -3192,6 +3402,12 @@ class WorkflowWindow(QMainWindow):
         )
         self._refresh_api_templates()
         self._on_api_environment_changed(self.api_environment.currentText())
+        self.api_send_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self)
+        self.api_send_shortcut.activated.connect(self._start_api_request_shortcut)
+        self.api_send_keypad_shortcut = QShortcut(QKeySequence("Ctrl+Enter"), self)
+        self.api_send_keypad_shortcut.activated.connect(
+            self._start_api_request_shortcut
+        )
         return page
 
     def _build_scenario_workspace(self) -> QWidget:
@@ -3645,7 +3861,7 @@ class WorkflowWindow(QMainWindow):
             else self.tournament_sql_template
         )
         template = template_override or self._template_by_id(combo.currentData())
-        parameter_names = template_parameter_names(template) if template else []
+        parameter_names = sql_template_parameter_names(template) if template else []
         manual_names = [
             name
             for name in parameter_names
@@ -3717,7 +3933,7 @@ class WorkflowWindow(QMainWindow):
         self._refresh_bound_sql_parameter_inputs(context, template)
         manual_names = [
             name
-            for name in template_parameter_names(template)
+            for name in sql_template_parameter_names(template)
             if name.casefold() not in AUTO_ACCOUNT_SQL_PARAMETERS
         ]
         missing: list[str] = []
@@ -3819,7 +4035,7 @@ class WorkflowWindow(QMainWindow):
     ) -> None:
         if not hasattr(self, "feature_sql_parameter_layout"):
             return
-        parameter_names = template_parameter_names(template) if template else []
+        parameter_names = sql_template_parameter_names(template) if template else []
         signature = (
             (template.template_id, tuple(parameter_names))
             if template is not None
@@ -4048,16 +4264,28 @@ class WorkflowWindow(QMainWindow):
             self.api_selected_title.setText(
                 f"{template.method} · {template.title}"
             )
-            names = template_parameter_names(template)
+            names = api_template_parameter_names(template)
             self.api_parameter_hint.setText(
                 f"需要参数：{', '.join(names)}"
                 if names
                 else "当前模板无需运行参数"
             )
+            if names and self.api_parameters.toPlainText().strip() in ("", "{}"):
+                self.api_parameters.setPlainText(
+                    json.dumps(
+                        {name: "" for name in names},
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+        self.api_selected_title.setEnabled(has_template)
         self._on_api_environment_changed(self.api_environment.currentText())
         self.edit_api_button.setEnabled(has_template and not self._is_running())
         self.delete_api_button.setEnabled(has_template and not self._is_running())
-        self.api_send_button.setEnabled(has_template and not self._is_running())
+        self.api_fill_parameters_button.setEnabled(
+            has_template and not self._is_running()
+        )
+        self._update_api_request_preview()
 
     @Slot(str)
     def _on_api_environment_changed(self, environment: str) -> None:
@@ -4068,14 +4296,133 @@ class WorkflowWindow(QMainWindow):
             self.api_domain_hint.setText(
                 f"固定 URL：{template.url}（不随环境切换）"
             )
+            self._update_api_request_preview()
             return
         try:
             base_url = load_environment_api_base_url(environment)
         except ValueError as error:
             self.api_domain_hint.setText(str(error))
+            self._update_api_request_preview()
             return
         path = template.url if template else ""
         self.api_domain_hint.setText(f"域名：{base_url}    路径：{path}")
+        self._update_api_request_preview()
+
+    @Slot()
+    def _fill_api_parameters(self) -> None:
+        template = self._selected_api_template()
+        if template is None:
+            return
+        try:
+            parameters = parse_runtime_parameters(
+                self.api_parameters.toPlainText()
+            )
+        except ValueError as error:
+            QMessageBox.information(
+                self,
+                "参数格式有误",
+                f"请先修正当前 JSON，再生成缺少的参数。\n\n{error}",
+            )
+            return
+        for name in api_template_parameter_names(template):
+            parameters.setdefault(name, "")
+        self.api_parameters.setPlainText(
+            json.dumps(parameters, ensure_ascii=False, indent=2)
+        )
+
+    @Slot()
+    def _format_api_parameters(self) -> None:
+        try:
+            parameters = parse_runtime_parameters(
+                self.api_parameters.toPlainText()
+            )
+        except ValueError as error:
+            QMessageBox.information(self, "无法格式化", str(error))
+            return
+        self.api_parameters.setPlainText(
+            json.dumps(parameters, ensure_ascii=False, indent=2)
+        )
+
+    @staticmethod
+    def _pretty_api_body(body: Optional[str]) -> str:
+        if body is None:
+            return "(empty)"
+        try:
+            return json.dumps(json.loads(body), ensure_ascii=False, indent=2)
+        except (json.JSONDecodeError, TypeError):
+            return body
+
+    @Slot()
+    def _update_api_request_preview(self) -> None:
+        if not hasattr(self, "api_request_preview"):
+            return
+        template = self._selected_api_template()
+        if template is None:
+            self.api_request_preview.setPlainText("选择左侧模板后显示最终请求")
+            self.api_validation_hint.setText("请选择一个 API 模板")
+            self.api_validation_hint.setStyleSheet("color: #808792;")
+            self.api_parameter_validation.setText("请选择一个 API 模板")
+            self.api_parameter_validation.setStyleSheet("color: #808792;")
+            self.api_copy_preview_button.setEnabled(False)
+            self.api_send_button.setEnabled(False)
+            return
+        try:
+            parameters = parse_runtime_parameters(
+                self.api_parameters.toPlainText()
+            )
+            empty_names = [
+                name
+                for name in api_template_parameter_names(template)
+                if name not in parameters or parameters[name] == ""
+            ]
+            if empty_names:
+                raise ValueError(f"请填写参数：{', '.join(empty_names)}")
+            prepared = prepare_api_request(
+                template,
+                parameters,
+                self.api_environment.currentText(),
+            )
+        except ValueError as error:
+            self.api_request_preview.setPlainText("请求尚未就绪")
+            self.api_validation_hint.setText(f"请修正：{error}")
+            self.api_validation_hint.setStyleSheet("color: #c43d47;")
+            self.api_parameter_validation.setText(f"请修正：{error}")
+            self.api_parameter_validation.setStyleSheet("color: #c43d47;")
+            self.api_copy_preview_button.setEnabled(False)
+            self.api_send_button.setEnabled(False)
+            return
+
+        header_text = json.dumps(
+            prepared.headers,
+            ensure_ascii=False,
+            indent=2,
+        )
+        self.api_request_preview.setPlainText(
+            f"{prepared.method} {prepared.url}\n"
+            f"Timeout: {prepared.timeout}s\n\n"
+            f"Headers\n{header_text}\n\n"
+            f"Body\n{self._pretty_api_body(prepared.body)}"
+        )
+        self.api_validation_hint.setText("✓ 请求已就绪，可发送")
+        self.api_validation_hint.setStyleSheet("color: #228653;")
+        self.api_parameter_validation.setText("✓ 参数校验通过")
+        self.api_parameter_validation.setStyleSheet("color: #228653;")
+        self.api_copy_preview_button.setEnabled(True)
+        self.api_send_button.setEnabled(not self._is_running())
+
+    @Slot()
+    def _copy_api_preview(self) -> None:
+        QApplication.clipboard().setText(self.api_request_preview.toPlainText())
+        self.api_validation_hint.setText("✓ 请求预览已复制")
+
+    @Slot()
+    def _copy_api_response(self) -> None:
+        QApplication.clipboard().setText(self.api_log.toPlainText())
+
+    @Slot()
+    def _start_api_request_shortcut(self) -> None:
+        if self.current_section == 4 and self.api_send_button.isEnabled():
+            self._start()
 
     @Slot()
     def _new_api_template(self) -> None:
@@ -6513,6 +6860,9 @@ class WorkflowWindow(QMainWindow):
         self.feature_stop_button.setEnabled(running)
         self.api_stop_button.setEnabled(running)
         self.scenario_stop_button.setEnabled(running)
+        self.api_send_button.setText(
+            "发送中…" if running else "发送请求  Ctrl+Enter"
+        )
         for button in self.navigation_buttons:
             button.setEnabled(not running)
         for widget in self.config_widgets:

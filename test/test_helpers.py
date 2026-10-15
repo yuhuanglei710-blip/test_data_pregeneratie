@@ -1025,6 +1025,28 @@ class ApiRequestTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.response_text, '{"ok":true}')
 
+    def test_prepare_request_renders_without_network_call(self):
+        template = api_request.ApiTemplate(
+            "id",
+            "preview",
+            "POST",
+            "https://example.test/users/{{userid}}",
+            '{"Authorization":"Bearer {{token}}"}',
+            '{"enabled":{{enabled}}}',
+            9,
+        )
+
+        prepared = api_request.prepare_api_request(
+            template,
+            {"userid": 42, "token": "secret", "enabled": True},
+        )
+
+        self.assertEqual(prepared.method, "POST")
+        self.assertEqual(prepared.url, "https://example.test/users/42")
+        self.assertEqual(prepared.headers, {"Authorization": "Bearer secret"})
+        self.assertEqual(prepared.body, '{"enabled":true}')
+        self.assertEqual(prepared.timeout, 9)
+
     def test_missing_runtime_parameter_is_rejected(self):
         template = api_request.ApiTemplate(
             "id",

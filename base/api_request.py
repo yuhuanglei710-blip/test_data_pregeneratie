@@ -70,6 +70,17 @@ class ApiExecutionResult:
     decoded_body: object = None
 
 
+@dataclass(frozen=True)
+class PreparedApiRequest:
+    """渲染完成、可直接发送的请求内容。"""
+
+    method: str
+    url: str
+    headers: Dict[str, str]
+    body: Optional[str]
+    timeout: int
+
+
 def load_api_templates(
     path: Union[str, Path] = API_TEMPLATES_FILE,
 ) -> List[ApiTemplate]:
@@ -336,12 +347,12 @@ def resolve_api_url(
     return f"{load_environment_api_base_url(environment)}{rendered_endpoint}"
 
 
-def execute_api_template(
+def prepare_api_request(
     template: ApiTemplate,
     parameters: Mapping[str, object],
     environment: Optional[str] = None,
-) -> ApiExecutionResult:
-    """渲染并发送一次 HTTP 请求。"""
+) -> PreparedApiRequest:
+    """渲染并校验请求，但不执行网络调用。"""
     url = resolve_api_url(template.url, environment, parameters)
     rendered_headers = render_json_template(template.headers, parameters)
     headers = _parse_headers(rendered_headers)
@@ -354,13 +365,29 @@ def execute_api_template(
         )
     else:
         body = None
+    return PreparedApiRequest(
+        method=template.method,
+        url=url,
+        headers=headers,
+        body=body,
+        timeout=template.timeout,
+    )
+
+
+def execute_api_template(
+    template: ApiTemplate,
+    parameters: Mapping[str, object],
+    environment: Optional[str] = None,
+) -> ApiExecutionResult:
+    """渲染并发送一次 HTTP 请求。"""
+    prepared = prepare_api_request(template, parameters, environment)
     started = time.perf_counter()
     response = requests.request(
-        template.method,
-        url,
-        headers=headers,
-        data=body,
-        timeout=template.timeout,
+        prepared.method,
+        prepared.url,
+        headers=prepared.headers,
+        data=prepared.body,
+        timeout=prepared.timeout,
     )
     elapsed_ms = round((time.perf_counter() - started) * 1000)
     response_text = response.text
@@ -401,7 +428,7 @@ def send_api_request(
                 json.dumps(
                     result.decoded_body,
                     ensure_ascii=False,
-                    separators=(",", ":"),
+                    indent=2,
                 )
             )
         else:
