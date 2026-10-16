@@ -183,6 +183,7 @@ from base.tournment_test import (
 from base.user import SUPPORTED_ENVIRONMENTS
 from base.user_data import EDITABLE_USER_FIELDS, update_user_fields
 from api.background import Background
+from tool_pages import QuickAccessWorkspace, SshHostWorkspace, TimestampWorkspace
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -251,6 +252,9 @@ SECTION_INFO = (
     ("设备工具", "Android 安装", "管理 APK 缓存，并对 Android 设备执行归因与安装。"),
     ("设备工具", "iOS 安装", "管理 IPA 缓存，并对 iPhone 执行归因与安装。"),
     ("设备工具", "Android 日志", "按应用、级别和关键词抓取并导出设备日志。"),
+    ("通用工具", "时间戳工具", "解析秒/毫秒时间戳与日期时间，并进行时区展示和偏移计算。"),
+    ("通用工具", "SSH 主机", "管理远程主机，测试 SSH 连接、执行命令并读取或修改主机时间。"),
+    ("通用工具", "快捷访问", "集中管理常用链接、分类和登录字段，支持检索、复制与快速打开。"),
     ("系统", "环境与参数", "维护环境渠道参数、数据库连接和 SSH 私钥。"),
 )
 
@@ -1885,6 +1889,12 @@ class WorkflowWindow(QMainWindow):
         self.content_stack.addWidget(self._build_app_log_workspace())
         self.content_stack.addWidget(self._build_player_tier_workspace())
         self.content_stack.addWidget(self._build_user_lookup_workspace())
+        self.timestamp_workspace = TimestampWorkspace()
+        self.ssh_host_workspace = SshHostWorkspace()
+        self.quick_access_workspace = QuickAccessWorkspace()
+        self.content_stack.addWidget(self.timestamp_workspace)
+        self.content_stack.addWidget(self.ssh_host_workspace)
+        self.content_stack.addWidget(self.quick_access_workspace)
         workspace.addWidget(self.content_stack, 1)
         page.addLayout(workspace, 1)
 
@@ -7025,6 +7035,12 @@ class WorkflowWindow(QMainWindow):
             self.content_stack.setCurrentIndex(7)
             if not self.app_log_devices:
                 QTimer.singleShot(0, self._refresh_app_log_devices)
+        elif index == 10:
+            self.content_stack.setCurrentIndex(10)
+        elif index == 11:
+            self.content_stack.setCurrentIndex(11)
+        elif index == 12:
+            self.content_stack.setCurrentIndex(12)
         else:
             self.content_stack.setCurrentIndex(1)
         if index == 0:
@@ -7556,6 +7572,14 @@ class WorkflowWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """任务运行时确认停止后再关闭窗口。"""
+        if self.ssh_host_workspace.is_busy():
+            QMessageBox.information(
+                self,
+                "SSH 操作进行中",
+                "当前 SSH 操作结束后才能退出。",
+            )
+            event.ignore()
+            return
         if (
             self._is_apk_busy()
             or self._is_ios_busy()

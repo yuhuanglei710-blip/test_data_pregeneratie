@@ -7,6 +7,8 @@ cache/channel_codes.json
 cache/channel_sources.json
 cache/database_connections.json
 cache/ssh_private_keys.json
+cache/ssh_hosts.json
+cache/quick_access.json
 cache/sql_templates.json
 cache/api_templates.json
 cache/feature_scenarios.json
