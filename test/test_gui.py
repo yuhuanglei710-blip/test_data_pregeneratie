@@ -1,14 +1,16 @@
 """GUI regression tests for mobile-device workflows."""
 
 import os
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, QThread, QTimer
+from PySide6.QtCore import QEventLoop, QMimeData, QThread, QTimer, QUrl
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -101,6 +103,48 @@ class ApkConflictPromptTests(unittest.TestCase):
             self.app.processEvents()
 
         run_action.assert_called_once()
+
+    def test_apk_drop_zone_accepts_one_local_apk_and_selects_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            apk_path = Path(directory) / "demo.APK"
+            apk_path.touch()
+            mime_data = QMimeData()
+            mime_data.setUrls([QUrl.fromLocalFile(str(apk_path))])
+
+            extracted = self.window.apk_drop_zone.apk_path_from_mime_data(
+                mime_data
+            )
+            self.assertEqual(Path(extracted), apk_path)
+
+            self.window.apk_drop_zone.fileDropped.emit(extracted)
+            self.app.processEvents()
+            self.assertEqual(self.window.apk_source_path.text(), str(apk_path))
+            self.assertIn("demo.APK", self.window.apk_drop_zone.hint.text())
+            self.assertIn("[drag] 已选择：demo.APK", self.window.apk_log.toPlainText())
+
+    def test_apk_drop_zone_rejects_non_apk_and_multiple_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            apk_path = Path(directory) / "demo.apk"
+            text_path = Path(directory) / "notes.txt"
+            apk_path.touch()
+            text_path.touch()
+
+            non_apk = QMimeData()
+            non_apk.setUrls([QUrl.fromLocalFile(str(text_path))])
+            self.assertEqual(
+                self.window.apk_drop_zone.apk_path_from_mime_data(non_apk), ""
+            )
+
+            multiple = QMimeData()
+            multiple.setUrls(
+                [
+                    QUrl.fromLocalFile(str(apk_path)),
+                    QUrl.fromLocalFile(str(text_path)),
+                ]
+            )
+            self.assertEqual(
+                self.window.apk_drop_zone.apk_path_from_mime_data(multiple), ""
+            )
 
     def test_player_tier_manual_preview_and_navigation(self) -> None:
         self.window._switch_section(2)

@@ -343,6 +343,27 @@ QFrame#configCard {
     border-radius: 10px;
 }
 QFrame#terminalPanel, QFrame#configCard, QFrame#navigation { background: #ffffff; }
+QFrame#apkDropZone {
+    background: #f8f9fb;
+    border: 1px dashed #b9c0ca;
+    border-radius: 7px;
+}
+QFrame#apkDropZone:hover, QFrame#apkDropZone[dragActive="true"] {
+    background: #edf1ff;
+    border-color: #4b67d1;
+}
+QFrame#apkDropZone:disabled {
+    background: #f1f3f5;
+    border-color: #dfe3e8;
+}
+QLabel#apkDropHint {
+    color: #69717c;
+    font-size: 9pt;
+}
+QFrame#apkDropZone[dragActive="true"] QLabel#apkDropHint {
+    color: #2846a6;
+    font-weight: 600;
+}
 
 QPushButton {
     min-height: 36px;
@@ -1607,6 +1628,73 @@ class FeatureScenarioDialog(QDialog):
         self.accept()
 
 
+class ApkDropZone(QFrame):
+    """接收单个本地 APK，并把文件路径交给现有缓存流程。"""
+
+    fileDropped = Signal(str)
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("apkDropZone")
+        self.setAcceptDrops(True)
+        self.setProperty("dragActive", False)
+        self.setMinimumHeight(44)
+        self.setMaximumHeight(52)
+        self.setToolTip("仅支持拖入一个本地 APK 文件")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 6, 12, 6)
+        self.hint = QLabel("拖拽 APK 到这里")
+        self.hint.setObjectName("apkDropHint")
+        self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.hint)
+
+    @staticmethod
+    def apk_path_from_mime_data(mime_data: object) -> str:
+        """从拖拽数据中提取唯一且存在的本地 APK 路径。"""
+        if not mime_data or not mime_data.hasUrls():
+            return ""
+        urls = mime_data.urls()
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            return ""
+        path = Path(urls[0].toLocalFile())
+        if path.suffix.lower() != ".apk" or not path.is_file():
+            return ""
+        return str(path)
+
+    def _set_drag_active(self, active: bool) -> None:
+        if self.property("dragActive") == active:
+            return
+        self.setProperty("dragActive", active)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def set_selected_path(self, path: str) -> None:
+        self.hint.setText(
+            f"已选择 · {Path(path).name}" if path else "拖拽 APK 到这里"
+        )
+
+    def dragEnterEvent(self, event) -> None:
+        if self.apk_path_from_mime_data(event.mimeData()):
+            self._set_drag_active(True)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._set_drag_active(False)
+        event.accept()
+
+    def dropEvent(self, event) -> None:
+        path = self.apk_path_from_mime_data(event.mimeData())
+        self._set_drag_active(False)
+        if not path:
+            event.ignore()
+            return
+        self.fileDropped.emit(path)
+        event.acceptProposedAction()
+
+
 class CachedApkDialog(QDialog):
     """编辑缓存安装包的名称、归因链接和备注。"""
 
@@ -2129,6 +2217,9 @@ class WorkflowWindow(QMainWindow):
         self.apk_choose_button.clicked.connect(self._choose_apk)
         file_row.addWidget(self.apk_choose_button)
         import_layout.addLayout(file_row)
+        self.apk_drop_zone = ApkDropZone()
+        self.apk_drop_zone.fileDropped.connect(self._on_apk_dropped)
+        import_layout.addWidget(self.apk_drop_zone)
         attribution_row = QHBoxLayout()
         self.apk_attribution_input = QPlainTextEdit()
         self.apk_attribution_input.setObjectName("longTextInput")
@@ -2198,6 +2289,7 @@ class WorkflowWindow(QMainWindow):
             self.apk_refresh_button,
             self.apk_choose_button,
             self.apk_source_path,
+            self.apk_drop_zone,
             self.apk_attribution_input,
             self.apk_cache_button,
             self.apk_table,
@@ -5245,7 +5337,16 @@ class WorkflowWindow(QMainWindow):
             self, "选择 Android 安装包", "", "Android 安装包 (*.apk)"
         )
         if selected:
-            self.apk_source_path.setText(selected)
+            self._set_apk_source_path(selected)
+
+    def _set_apk_source_path(self, path: str) -> None:
+        self.apk_source_path.setText(path)
+        self.apk_drop_zone.set_selected_path(path)
+
+    @Slot(str)
+    def _on_apk_dropped(self, path: str) -> None:
+        self._set_apk_source_path(path)
+        self._append_apk_log(f"[drag] 已选择：{Path(path).name}")
 
     def _cache_selected_apk(self) -> None:
         source = self.apk_source_path.text().strip()
@@ -5262,7 +5363,7 @@ class WorkflowWindow(QMainWindow):
     def _on_apk_cached(self, value: object) -> None:
         self.cached_apks = load_cached_apks()
         self._refresh_apk_table()
-        self.apk_source_path.clear()
+        self._set_apk_source_path("")
         self.apk_attribution_input.clear()
         if getattr(value, "duplicate", False):
             self._append_apk_log("[cache] 相同 MD5 已存在，已复用缓存并更新归因链接")
