@@ -1,78 +1,139 @@
-"""后台接口客户端。"""
+"""后台用户查询接口客户端。"""
 
-import http.client
-import json
-import os
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-from dotenv import load_dotenv
+import requests
+import jwt
+from dotenv import dotenv_values
+
+from base.add_money import login
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 API_BLUEPRINT = "/api/operationManage"
+REQUEST_TIMEOUT = 15
+
+
+def _normalize_base_url(value: str) -> str:
+    url = value.strip().rstrip("/")
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+    return url
 
 
 class Background:
-    """封装常用后台操作。"""
+    """封装后台用户查找与详情查询。"""
 
     def __init__(self, environment: str = "dev"):
-        """加载指定环境的后台接口域名。"""
-        self.environment = environment
-        load_dotenv(PROJECT_ROOT / f"{environment}.env", override=True)
+        env_file = PROJECT_ROOT / f"{environment}.env"
+        domain = str(dotenv_values(env_file).get("background_domain") or "").strip()
+        if not domain:
+            raise RuntimeError(f"未在 {env_file.name} 中配置 background_domain")
 
+        self.environment = environment
+        self.base_url = _normalize_base_url(domain)
         self.blueprint = API_BLUEPRINT
-        self.domain = os.getenv("background_domain")
         self.token: str | None = None
-        if not self.domain:
-            raise RuntimeError(f"未在 {environment}.env 中配置 background_domain")
+
+    def check_token(self, token: str) -> None:
+        """注入后台 token，主要供测试或已有会话复用。"""
+        normalized_token = token.strip()
+        if not normalized_token:
+            raise ValueError("token 不能为空")
+        self.token = normalized_token
+
+    def get_token(self) -> str:
+        """复用项目后台登录逻辑获取当前环境 token。"""
+        self.token = login(self.base_url)
+        return self.token
+
+    def _operator_user_id(self) -> str:
+        """从后台登录 token 中读取操作员 ID。"""
+        if not self.token:
+            return "1"
+        try:
+            claims = jwt.decode(
+                self.token,
+                options={"verify_signature": False, "verify_exp": False},
+            )
+        except jwt.PyJWTError:
+            return "1"
+        value = claims.get("ID", 1)
+        return str(value)
+
+    def _headers(self) -> Dict[str, str]:
+        if not self.token:
+            self.get_token()
+        return {
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+            "Origin": self.base_url,
+            "Referer": f"{self.base_url}/",
+            "X-Token": self.token,
+            "X-User-Id": self._operator_user_id(),
+        }
+
+    def _post(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        response = requests.post(
+            f"{self.base_url}{self.blueprint}/user/{endpoint}",
+            headers=self._headers(),
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        try:
+            result = response.json()
+        except ValueError as error:
+            raise RuntimeError("后台接口未返回合法 JSON") from error
+        if not isinstance(result, dict):
+            raise RuntimeError(f"后台接口返回格式异常: {result!r}")
+        if result.get("code") != 0:
+            message = str(result.get("msg") or "未知错误")
+            raise RuntimeError(f"后台接口查询失败: {message}")
+        return result
+
+    def find_users(self, user_id: int) -> List[Dict[str, Any]]:
+        """调用 GetUserList 按 UID 查找用户。"""
+        if int(user_id) <= 0:
+            raise ValueError("用户 UID 必须是正整数")
+        result = self._post(
+            "GetUserList",
+            {"id": int(user_id), "timezone": 0},
+        )
+        data = result.get("data")
+        if not isinstance(data, list):
+            raise RuntimeError("GetUserList 返回的 data 不是列表")
+        return [item for item in data if isinstance(item, dict)]
+
+    def get_user_info(self, user_id: int) -> Dict[str, Any]:
+        """调用 GetUserInfo 查询用户详细信息。"""
+        if int(user_id) <= 0:
+            raise ValueError("用户 UID 必须是正整数")
+        result = self._post(
+            "GetUserInfo",
+            {"id": int(user_id), "timezone": 0, "lang": "zh-CN"},
+        )
+        data = result.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError("GetUserInfo 返回的 data 不是对象")
+        return data
+
+    def query_user(self, user_id: int) -> Dict[str, Any]:
+        """先查找用户，再读取详情；找不到时不请求详情。"""
+        users = self.find_users(user_id)
+        if not users:
+            return {"users": [], "detail": None}
+        return {"users": users, "detail": self.get_user_info(user_id)}
 
     def pass_kyc(self, user_id: int) -> None:
-        """通过用户 KYC，功能尚未实现。"""
         raise NotImplementedError("KYC 审核接口尚未实现")
 
     def reset_kyc(self, user_id: int) -> None:
-        """重置用户 KYC，功能尚未实现。"""
         raise NotImplementedError("KYC 重置接口尚未实现")
-
-    def get_user_info(self, user_id: int) -> Dict[str, Any]:
-        """从后台接口查询一个用户。"""
-        if not self.token:
-            raise RuntimeError("请先通过 check_token 设置后台 token")
-
-        connection = http.client.HTTPSConnection(self.domain)
-        try:
-            connection.request(
-                "POST",
-                f"{self.blueprint}/user/GetUserList",
-                body=json.dumps({"user_id": user_id, "timezone": 0}),
-                headers={
-                    "Authorization": f"Bearer {self.token}",
-                    "Content-Type": "application/json",
-                },
-            )
-            response = connection.getresponse()
-            response_data = response.read().decode("utf-8")
-        finally:
-            connection.close()
-
-        print(response_data)
-        result = json.loads(response_data)
-        if not isinstance(result, dict):
-            raise RuntimeError(f"后台接口返回格式异常: {result!r}")
-        return result
-
-    def check_token(self, token: str) -> None:
-        """设置后续请求使用的后台 token。"""
-        if not token:
-            raise ValueError("token 不能为空")
-        self.token = token
-
-    def get_token(self) -> str:
-        """登录并获取后台 token，功能尚未实现。"""
-        raise NotImplementedError("后台登录接口尚未实现")
-
 
 if __name__ == "__main__":
     background = Background(environment="dev")
-    background.check_token(token="your_token_here")
+    print(background.query_user(1))

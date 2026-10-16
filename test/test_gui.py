@@ -189,6 +189,44 @@ class ApkConflictPromptTests(unittest.TestCase):
             self.window.player_tier_target.itemText(net_profit_top_index),
         )
 
+    def test_user_lookup_navigation_and_result_rendering(self) -> None:
+        self.window._switch_section(3)
+        self.window.user_lookup_uid.setValue(13425)
+        self.window._on_user_lookup_succeeded(
+            {
+                "users": [{"id": 13425, "username": "user@example.com"}],
+                "detail": {
+                    "id": 13425,
+                    "nickname": "Player_113425",
+                    "username": "user@example.com",
+                    "email": "user@example.com",
+                    "money": 100,
+                    "bonus": 20,
+                    "gc": 10000,
+                    "vip_level": 0,
+                    "level": 1,
+                    "charge_total": 0,
+                    "charge_times": 0,
+                    "distribution_channel": "gpa17drop",
+                    "platform": 3,
+                    "status": 1,
+                    "is_risk": 0,
+                    "created_at": "2026-10-16 08:51:17",
+                    "last_login_at": "2026-10-16 08:51:17",
+                    "last_login_ip": "183.6.117.29",
+                    "last_login_area_info": {
+                        "area_info": "UTC+08:00, CN - Guangdong"
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(self.window.page_title.text(), "用户查询")
+        self.assertEqual(self.window.content_stack.currentIndex(), 9)
+        self.assertIn("Player_113425", self.window.user_lookup_summary.text())
+        self.assertIn("余额  120 分", self.window.user_lookup_summary.text())
+        self.assertIn('"id": 13425', self.window.user_lookup_json.toPlainText())
+
     def test_sql_template_selection_builds_runtime_parameter_inputs(self) -> None:
         template = SqlTemplate(
             "sql-parameters",

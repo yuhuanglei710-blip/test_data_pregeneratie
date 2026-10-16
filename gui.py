@@ -181,6 +181,7 @@ from base.tournment_test import (
     create_accounts_and_bet,
 )
 from base.user import SUPPORTED_ENVIRONMENTS
+from api.background import Background
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -242,6 +243,7 @@ SECTION_INFO = (
     ("数据准备", "账号生成", "批量生成测试账号，或使用指定邮箱创建单个账号。"),
     ("数据准备", "锦标赛造数", "创建参赛账号并完成充值、下注等锦标赛数据准备。"),
     ("数据准备", "玩家分层", "按净利润优先、利润率兜底识别玩家层级，并可按 UID 构造目标分层数据。"),
+    ("数据准备", "用户查询", "按 UID 查找用户，并读取后台用户详细信息。"),
     ("接口与流程", "SQL 数据模板", "维护并执行可复用 SQL，用于快速准备业务测试数据。"),
     ("接口与流程", "API 请求模板", "保存、调试并复用环境化的 HTTP 请求。"),
     ("接口与流程", "自动化场景", "把 SQL、API、变量提取和断言编排为完整流程。"),
@@ -1774,6 +1776,8 @@ class WorkflowWindow(QMainWindow):
         self.ios_action_worker: Optional[ApkActionWorker] = None
         self.player_tier_thread: Optional[QThread] = None
         self.player_tier_worker: Optional[ApkActionWorker] = None
+        self.user_lookup_thread: Optional[QThread] = None
+        self.user_lookup_worker: Optional[ApkActionWorker] = None
         self.app_log_query_thread: Optional[QThread] = None
         self.app_log_query_worker: Optional[ApkActionWorker] = None
         self.app_log_thread: Optional[QThread] = None
@@ -1835,6 +1839,7 @@ class WorkflowWindow(QMainWindow):
         self.content_stack.addWidget(self._build_ipa_workspace())
         self.content_stack.addWidget(self._build_app_log_workspace())
         self.content_stack.addWidget(self._build_player_tier_workspace())
+        self.content_stack.addWidget(self._build_user_lookup_workspace())
         workspace.addWidget(self.content_stack, 1)
         page.addLayout(workspace, 1)
 
@@ -2166,6 +2171,81 @@ class WorkflowWindow(QMainWindow):
             self.player_tier_construct_button,
         )
         return self._scrollable_settings_page(page)
+
+    def _build_user_lookup_workspace(self) -> QWidget:
+        """构建后台用户查找与详情查询页面。"""
+        page = QWidget()
+        page.setObjectName("settingsPage")
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+
+        query_card = QFrame()
+        query_card.setObjectName("settingsPanel")
+        query_card.setMaximumWidth(430)
+        query_layout = QVBoxLayout(query_card)
+        query_layout.setContentsMargins(24, 22, 24, 22)
+        query_layout.setSpacing(12)
+
+        title = QLabel("查询条件")
+        title.setObjectName("sectionTitle")
+        query_layout.addWidget(title)
+        hint = QLabel(
+            "先调用 GetUserList 确认用户，再调用 GetUserInfo 读取详情。"
+            "后台身份由程序按所选环境自动登录获取，无需手动填写 token。"
+        )
+        hint.setObjectName("fieldHint")
+        hint.setWordWrap(True)
+        query_layout.addWidget(hint)
+
+        form = self._form_layout()
+        self.user_lookup_environment = QComboBox()
+        self.user_lookup_environment.addItems(list(SUPPORTED_ENVIRONMENTS))
+        self._add_form_row(form, 0, "运行环境", self.user_lookup_environment)
+
+        self.user_lookup_uid = self._spin_box(1, maximum=2_147_483_647)
+        self.user_lookup_uid.setMinimum(1)
+        self._add_form_row(form, 1, "用户 UID", self.user_lookup_uid)
+
+        query_layout.addLayout(form)
+
+        self.user_lookup_button = QPushButton("查找并读取详情")
+        self.user_lookup_button.setObjectName("primaryButton")
+        self.user_lookup_button.clicked.connect(self._query_user_info)
+        query_layout.addWidget(self.user_lookup_button)
+        query_layout.addStretch()
+        layout.addWidget(query_card)
+
+        result_card = QFrame()
+        result_card.setObjectName("settingsPanel")
+        result_layout = QVBoxLayout(result_card)
+        result_layout.setContentsMargins(24, 22, 24, 22)
+        result_layout.setSpacing(10)
+        result_title = QLabel("用户信息")
+        result_title.setObjectName("sectionTitle")
+        result_layout.addWidget(result_title)
+
+        self.user_lookup_summary = QLabel("尚未查询用户")
+        self.user_lookup_summary.setObjectName("metricSummary")
+        self.user_lookup_summary.setWordWrap(True)
+        result_layout.addWidget(self.user_lookup_summary)
+
+        response_label = QLabel("完整详情")
+        response_label.setObjectName("fieldLabel")
+        result_layout.addWidget(response_label)
+        self.user_lookup_json = QPlainTextEdit()
+        self.user_lookup_json.setReadOnly(True)
+        self.user_lookup_json.setFont(application_monospace_font(9.5))
+        self.user_lookup_json.setPlaceholderText("查询成功后显示 GetUserInfo 的 data")
+        result_layout.addWidget(self.user_lookup_json, 1)
+        layout.addWidget(result_card, 1)
+
+        self.user_lookup_controls = (
+            self.user_lookup_environment,
+            self.user_lookup_uid,
+            self.user_lookup_button,
+        )
+        return page
 
     def _build_apk_workspace(self) -> QWidget:
         """构建设备检测、APK 缓存、归因和安装页面。"""
@@ -4513,7 +4593,7 @@ class WorkflowWindow(QMainWindow):
 
     @Slot()
     def _start_api_request_shortcut(self) -> None:
-        if self.current_section == 4 and self.api_send_button.isEnabled():
+        if self.current_section == 5 and self.api_send_button.isEnabled():
             self._start()
 
     @Slot()
@@ -5323,6 +5403,96 @@ class WorkflowWindow(QMainWindow):
 
     def _is_player_tier_busy(self) -> bool:
         return bool(self.player_tier_thread and self.player_tier_thread.isRunning())
+
+    # 后台用户查询
+    def _query_user_info(self) -> None:
+        if self._is_user_lookup_busy():
+            return
+
+        environment = self.user_lookup_environment.currentText()
+        user_id = self.user_lookup_uid.value()
+
+        def query() -> object:
+            client = Background(environment)
+            return client.query_user(user_id)
+
+        for control in self.user_lookup_controls:
+            control.setEnabled(False)
+        for button in self.navigation_buttons:
+            button.setEnabled(False)
+        self.user_lookup_summary.setText(
+            f"正在查询 {environment} · UID {user_id} …"
+        )
+        self.user_lookup_json.clear()
+        self._set_status("●  USER QUERY RUNNING", "#228653")
+
+        self.user_lookup_thread = QThread(self)
+        self.user_lookup_worker = ApkActionWorker(query)
+        self.user_lookup_worker.moveToThread(self.user_lookup_thread)
+        self.user_lookup_thread.started.connect(self.user_lookup_worker.run)
+        self.user_lookup_worker.succeeded.connect(self._on_user_lookup_succeeded)
+        self.user_lookup_worker.failed.connect(self._on_user_lookup_failed)
+        self.user_lookup_worker.done.connect(self.user_lookup_thread.quit)
+        self.user_lookup_worker.done.connect(self.user_lookup_worker.deleteLater)
+        self.user_lookup_thread.finished.connect(self._on_user_lookup_finished)
+        self.user_lookup_thread.finished.connect(self.user_lookup_thread.deleteLater)
+        self.user_lookup_thread.start()
+
+    @Slot(object)
+    def _on_user_lookup_succeeded(self, value: object) -> None:
+        if not isinstance(value, dict):
+            self._on_user_lookup_failed("后台返回了无法识别的用户查询结果")
+            return
+        users = value.get("users")
+        detail = value.get("detail")
+        if not isinstance(users, list) or not users:
+            self.user_lookup_summary.setText(
+                f"未找到 UID {self.user_lookup_uid.value()} 对应的用户。"
+            )
+            self.user_lookup_json.setPlainText("[]")
+            self._set_status("●  USER NOT FOUND", "#a66b13")
+            return
+        if not isinstance(detail, dict):
+            self._on_user_lookup_failed("用户存在，但详情接口未返回有效对象")
+            return
+
+        balance = int(detail.get("money") or 0) + int(detail.get("bonus") or 0)
+        summary_lines = (
+            f"UID  {detail.get('id', '')}　　昵称  {detail.get('nickname', '')}",
+            f"账号  {detail.get('username', '')}　　邮箱  {detail.get('email', '')}",
+            f"余额  {balance:,} 分（money {int(detail.get('money') or 0):,} + "
+            f"bonus {int(detail.get('bonus') or 0):,}）　　GC  {int(detail.get('gc') or 0):,}",
+            f"VIP  {detail.get('vip_level', '')}　　等级  {detail.get('level', '')}　　"
+            f"充值  {int(detail.get('charge_total') or 0):,} 分 / {detail.get('charge_times', 0)} 次",
+            f"渠道  {detail.get('distribution_channel', '')}　　平台  {detail.get('platform', '')}　　"
+            f"状态  {detail.get('status', '')}　　风控  {detail.get('is_risk', '')}",
+            f"注册时间  {detail.get('created_at', '')}　　最后登录  {detail.get('last_login_at', '')}",
+            f"最后登录 IP  {detail.get('last_login_ip', '')}　　地区  "
+            f"{(detail.get('last_login_area_info') or {}).get('area_info', '') if isinstance(detail.get('last_login_area_info'), dict) else ''}",
+        )
+        self.user_lookup_summary.setText("\n".join(summary_lines))
+        self.user_lookup_json.setPlainText(
+            json.dumps(detail, ensure_ascii=False, indent=2)
+        )
+        self._set_status("●  USER QUERY DONE", "#228653")
+
+    @Slot(str)
+    def _on_user_lookup_failed(self, message: str) -> None:
+        self.user_lookup_summary.setText(f"查询失败\n{message}")
+        self.user_lookup_json.clear()
+        self._set_status("●  USER QUERY FAILED", "#c43d47")
+
+    @Slot()
+    def _on_user_lookup_finished(self) -> None:
+        self.user_lookup_worker = None
+        self.user_lookup_thread = None
+        for control in self.user_lookup_controls:
+            control.setEnabled(True)
+        for button in self.navigation_buttons:
+            button.setEnabled(True)
+
+    def _is_user_lookup_busy(self) -> bool:
+        return bool(self.user_lookup_thread and self.user_lookup_thread.isRunning())
 
     # Android 设备、APK 缓存和归因安装
     def _append_apk_log(self, text: str) -> None:
@@ -6439,18 +6609,20 @@ class WorkflowWindow(QMainWindow):
         elif index == 2:
             self.content_stack.setCurrentIndex(8)
         elif index == 3:
-            self.content_stack.setCurrentIndex(2)
+            self.content_stack.setCurrentIndex(9)
         elif index == 4:
-            self.content_stack.setCurrentIndex(3)
+            self.content_stack.setCurrentIndex(2)
         elif index == 5:
-            self.content_stack.setCurrentIndex(4)
+            self.content_stack.setCurrentIndex(3)
         elif index == 6:
+            self.content_stack.setCurrentIndex(4)
+        elif index == 7:
             self.content_stack.setCurrentIndex(5)
             QTimer.singleShot(0, self._refresh_android_devices)
-        elif index == 7:
+        elif index == 8:
             self.content_stack.setCurrentIndex(6)
             QTimer.singleShot(0, self._refresh_ios_devices)
-        elif index == 8:
+        elif index == 9:
             self.content_stack.setCurrentIndex(7)
             if not self.app_log_devices:
                 QTimer.singleShot(0, self._refresh_app_log_devices)
@@ -6708,7 +6880,7 @@ class WorkflowWindow(QMainWindow):
                 "create-accounts-batch",
             )
 
-        if self.current_section == 3:
+        if self.current_section == 4:
             environment = self.feature_environment.currentText()
             template = self._selected_feature_sql_template()
             if template is None:
@@ -6738,7 +6910,7 @@ class WorkflowWindow(QMainWindow):
                 "generate-feature-data",
             )
 
-        if self.current_section == 4:
+        if self.current_section == 5:
             template = self._selected_api_template()
             if template is None:
                 raise ValueError("请先从列表选择 API 模板")
@@ -6754,7 +6926,7 @@ class WorkflowWindow(QMainWindow):
                 "send-api-request",
             )
 
-        if self.current_section == 5:
+        if self.current_section == 6:
             scenario = self._selected_feature_scenario()
             if scenario is None:
                 raise ValueError("请先从列表选择自动化场景")
@@ -6930,11 +7102,11 @@ class WorkflowWindow(QMainWindow):
 
     @Slot(str)
     def _append_log(self, text: str) -> None:
-        if self.current_section == 3:
+        if self.current_section == 4:
             target = self.feature_log
-        elif self.current_section == 4:
-            target = self.api_log
         elif self.current_section == 5:
+            target = self.api_log
+        elif self.current_section == 6:
             target = self.scenario_log
         else:
             target = self.log
@@ -6946,11 +7118,11 @@ class WorkflowWindow(QMainWindow):
 
     @Slot()
     def _clear_log(self) -> None:
-        if self.current_section == 3:
+        if self.current_section == 4:
             self.feature_log.clear()
-        elif self.current_section == 4:
-            self.api_log.clear()
         elif self.current_section == 5:
+            self.api_log.clear()
+        elif self.current_section == 6:
             self.scenario_log.clear()
         else:
             self.log.clear()
@@ -6990,11 +7162,12 @@ class WorkflowWindow(QMainWindow):
             or self._is_ios_busy()
             or self._is_app_log_query_busy()
             or self._is_player_tier_busy()
+            or self._is_user_lookup_busy()
         ):
             QMessageBox.information(
                 self,
                 "后台操作进行中",
-                "当前安装、设备检测、应用列表读取或玩家分层操作结束后才能退出。",
+                "当前安装、设备检测、应用列表读取、玩家分层或用户查询操作结束后才能退出。",
             )
             event.ignore()
             return
