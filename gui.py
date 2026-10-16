@@ -181,6 +181,7 @@ from base.tournment_test import (
     create_accounts_and_bet,
 )
 from base.user import SUPPORTED_ENVIRONMENTS
+from base.user_data import EDITABLE_USER_FIELDS, update_user_fields
 from api.background import Background
 
 
@@ -310,6 +311,15 @@ QLabel#tierBadge {
     font-size: 11pt;
     font-weight: 700;
 }
+QLabel#statusTag {
+    color: #58616d;
+    background: #f2f4f7;
+    border: 1px solid #dfe3e8;
+    border-radius: 11px;
+    padding: 4px 9px;
+    font-size: 8.5pt;
+    font-weight: 600;
+}
 QLabel#requestBadge {
     color: #2846a6;
     background: #edf1ff;
@@ -345,6 +355,37 @@ QFrame#configCard {
     border-radius: 10px;
 }
 QFrame#terminalPanel, QFrame#configCard, QFrame#navigation { background: #ffffff; }
+QFrame#userProfileCard {
+    background: #f8f9fc;
+    border: 1px solid #e0e4ee;
+    border-radius: 10px;
+}
+QLabel#userFieldValue {
+    color: #252a31;
+    background: #f7f8fa;
+    border-radius: 6px;
+    padding: 7px 9px;
+}
+QPushButton#kycSwitch {
+    min-width: 104px;
+    max-width: 104px;
+    min-height: 30px;
+    color: #b33b45;
+    background: #fff0f1;
+    border: 1px solid #f1cdd1;
+    border-radius: 15px;
+    padding: 0 10px;
+}
+QPushButton#kycSwitch:checked {
+    color: #207a4d;
+    background: #eaf7f0;
+    border-color: #c9ead8;
+}
+QPushButton#kycSwitch:disabled {
+    color: #8a919c;
+    background: #f1f3f5;
+    border-color: #dfe3e8;
+}
 QFrame#apkDropZone {
     background: #f8f9fb;
     border: 1px dashed #b9c0ca;
@@ -1778,6 +1819,10 @@ class WorkflowWindow(QMainWindow):
         self.player_tier_worker: Optional[ApkActionWorker] = None
         self.user_lookup_thread: Optional[QThread] = None
         self.user_lookup_worker: Optional[ApkActionWorker] = None
+        self.user_lookup_loaded_id: Optional[int] = None
+        self.user_lookup_loaded_environment = ""
+        self.user_lookup_kyc_code: Optional[int] = None
+        self.user_lookup_action_kind = "query"
         self.app_log_query_thread: Optional[QThread] = None
         self.app_log_query_worker: Optional[ApkActionWorker] = None
         self.app_log_thread: Optional[QThread] = None
@@ -2230,20 +2275,146 @@ class WorkflowWindow(QMainWindow):
         self.user_lookup_summary.setWordWrap(True)
         result_layout.addWidget(self.user_lookup_summary)
 
-        response_label = QLabel("完整详情")
-        response_label.setObjectName("fieldLabel")
-        result_layout.addWidget(response_label)
-        self.user_lookup_json = QPlainTextEdit()
-        self.user_lookup_json.setReadOnly(True)
-        self.user_lookup_json.setFont(application_monospace_font(9.5))
-        self.user_lookup_json.setPlaceholderText("查询成功后显示 GetUserInfo 的 data")
-        result_layout.addWidget(self.user_lookup_json, 1)
+        self.user_lookup_content = QWidget()
+        content_layout = QVBoxLayout(self.user_lookup_content)
+        content_layout.setContentsMargins(0, 4, 0, 0)
+        content_layout.setSpacing(12)
+
+        fields_card = QFrame()
+        fields_card.setObjectName("configCard")
+        fields_layout = QVBoxLayout(fields_card)
+        fields_layout.setContentsMargins(18, 15, 18, 17)
+        fields_layout.setSpacing(10)
+        fields_title = QLabel("用户数据")
+        fields_title.setObjectName("sectionTitle")
+        fields_layout.addWidget(fields_title)
+        fields_grid = QGridLayout()
+        fields_grid.setHorizontalSpacing(10)
+        fields_grid.setVerticalSpacing(10)
+        self.user_lookup_field_values: Dict[str, QLabel] = {}
+        detail_fields = (
+            ("uid", "UID"),
+            ("email", "邮箱"),
+            ("balance", "余额"),
+            ("charge_total", "累充"),
+            ("withdraw_total", "累提"),
+            ("charge_times", "充值次数"),
+            ("withdraw_times", "提现次数"),
+            ("platform", "平台"),
+            ("distribution_channel", "渠道"),
+            ("login_distribution_channel", "登录渠道"),
+            ("channel_code", "Channel Code"),
+            ("vip_level", "VIP 等级"),
+            ("kyc_status", "KYC 状态"),
+            ("advertising_id", "Advertising ID"),
+        )
+        for index, (key, label_text) in enumerate(detail_fields):
+            row = index // 2
+            column = (index % 2) * 2
+            field_label = QLabel(label_text)
+            field_label.setObjectName("fieldLabel")
+            fields_grid.addWidget(field_label, row, column)
+            if key == "kyc_status":
+                self.user_lookup_kyc_switch = QPushButton("未查询")
+                self.user_lookup_kyc_switch.setObjectName("kycSwitch")
+                self.user_lookup_kyc_switch.setCheckable(True)
+                self.user_lookup_kyc_switch.setEnabled(False)
+                self.user_lookup_kyc_switch.clicked.connect(
+                    self._toggle_user_kyc_status
+                )
+                fields_grid.addWidget(
+                    self.user_lookup_kyc_switch,
+                    row,
+                    column + 1,
+                    alignment=Qt.AlignmentFlag.AlignLeft,
+                )
+            else:
+                field_value = QLabel("—")
+                field_value.setObjectName("userFieldValue")
+                field_value.setWordWrap(True)
+                field_value.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                fields_grid.addWidget(field_value, row, column + 1)
+                self.user_lookup_field_values[key] = field_value
+        fields_grid.setColumnStretch(1, 1)
+        fields_grid.setColumnStretch(3, 1)
+        fields_layout.addLayout(fields_grid)
+        content_layout.addWidget(fields_card)
+
+        database_card = QFrame()
+        database_card.setObjectName("configCard")
+        database_layout = QVBoxLayout(database_card)
+        database_layout.setContentsMargins(18, 15, 18, 17)
+        database_layout.setSpacing(10)
+        database_title = QLabel("数据库修改")
+        database_title.setObjectName("sectionTitle")
+        database_layout.addWidget(database_title)
+        database_hint = QLabel(
+            "直接按 user.id 更新；金额单位为数据库原值“分”。保存前会显示变更确认。"
+        )
+        database_hint.setObjectName("fieldHint")
+        database_hint.setWordWrap(True)
+        database_layout.addWidget(database_hint)
+        database_grid = QGridLayout()
+        database_grid.setHorizontalSpacing(10)
+        database_grid.setVerticalSpacing(9)
+        self.user_lookup_database_inputs: Dict[str, QLineEdit] = {}
+        database_fields = (
+            ("vip_level", "VIP 等级"),
+            ("money", "余额 money"),
+            ("charge_total", "支付总金额"),
+            ("withdraw_total", "累计提现"),
+            ("charge_times", "充值次数"),
+            ("withdraw_times", "提现次数"),
+        )
+        for index, (key, label_text) in enumerate(database_fields):
+            row = index // 2
+            column = (index % 2) * 2
+            label = QLabel(label_text)
+            label.setObjectName("fieldLabel")
+            field = QLineEdit()
+            field.setPlaceholderText("非负整数")
+            field.setEnabled(False)
+            database_grid.addWidget(label, row, column)
+            database_grid.addWidget(field, row, column + 1)
+            self.user_lookup_database_inputs[key] = field
+        database_grid.setColumnStretch(1, 1)
+        database_grid.setColumnStretch(3, 1)
+        database_layout.addLayout(database_grid)
+        self.user_lookup_database_save_button = QPushButton("保存数据库修改")
+        self.user_lookup_database_save_button.setObjectName("primaryButton")
+        self.user_lookup_database_save_button.setEnabled(False)
+        self.user_lookup_database_save_button.clicked.connect(
+            self._save_user_database_fields
+        )
+        database_layout.addWidget(self.user_lookup_database_save_button)
+        content_layout.addWidget(database_card)
+        content_layout.addStretch()
+
+        result_scroll = QScrollArea()
+        result_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        result_scroll.setWidgetResizable(True)
+        result_scroll.setWidget(self.user_lookup_content)
+        result_scroll.setVisible(False)
+        self.user_lookup_result_scroll = result_scroll
+        result_layout.addWidget(result_scroll, 1)
         layout.addWidget(result_card, 1)
 
         self.user_lookup_controls = (
             self.user_lookup_environment,
             self.user_lookup_uid,
             self.user_lookup_button,
+        )
+        self.user_lookup_database_controls = (
+            *self.user_lookup_database_inputs.values(),
+            self.user_lookup_database_save_button,
+        )
+        self.user_lookup_environment.currentTextChanged.connect(
+            self._invalidate_user_lookup_result
+        )
+        self.user_lookup_uid.valueChanged.connect(
+            self._invalidate_user_lookup_result
         )
         return page
 
@@ -5405,32 +5576,68 @@ class WorkflowWindow(QMainWindow):
         return bool(self.player_tier_thread and self.player_tier_thread.isRunning())
 
     # 后台用户查询
+    def _invalidate_user_lookup_result(self, _value: object = None) -> None:
+        if self._is_user_lookup_busy() or not self.user_lookup_loaded_id:
+            return
+        self.user_lookup_loaded_id = None
+        self.user_lookup_loaded_environment = ""
+        self.user_lookup_kyc_code = None
+        self.user_lookup_kyc_switch.setEnabled(False)
+        for control in self.user_lookup_database_controls:
+            control.setEnabled(False)
+        self.user_lookup_result_scroll.setVisible(False)
+        self.user_lookup_summary.setText("查询条件已改变，请重新查询用户。")
+        self.user_lookup_summary.setVisible(True)
+
     def _query_user_info(self) -> None:
         if self._is_user_lookup_busy():
             return
 
         environment = self.user_lookup_environment.currentText()
         user_id = self.user_lookup_uid.value()
+        self.user_lookup_loaded_id = None
+        self.user_lookup_loaded_environment = ""
+        self.user_lookup_kyc_code = None
+        self.user_lookup_kyc_switch.setEnabled(False)
+        for control in self.user_lookup_database_controls:
+            control.setEnabled(False)
+        self.user_lookup_summary.setVisible(True)
+        self.user_lookup_result_scroll.setVisible(False)
+        self.user_lookup_summary.setText(
+            f"正在查询 {environment} · UID {user_id} …"
+        )
 
         def query() -> object:
             client = Background(environment)
             return client.query_user(user_id)
 
+        self._run_user_lookup_action(
+            query,
+            self._on_user_lookup_succeeded,
+            "query",
+        )
+
+    def _run_user_lookup_action(
+        self,
+        action: Callable[[], object],
+        on_success: Callable[[object], None],
+        action_kind: str,
+    ) -> None:
         for control in self.user_lookup_controls:
+            control.setEnabled(False)
+        self.user_lookup_kyc_switch.setEnabled(False)
+        for control in self.user_lookup_database_controls:
             control.setEnabled(False)
         for button in self.navigation_buttons:
             button.setEnabled(False)
-        self.user_lookup_summary.setText(
-            f"正在查询 {environment} · UID {user_id} …"
-        )
-        self.user_lookup_json.clear()
+        self.user_lookup_action_kind = action_kind
         self._set_status("●  USER QUERY RUNNING", "#228653")
 
         self.user_lookup_thread = QThread(self)
-        self.user_lookup_worker = ApkActionWorker(query)
+        self.user_lookup_worker = ApkActionWorker(action)
         self.user_lookup_worker.moveToThread(self.user_lookup_thread)
         self.user_lookup_thread.started.connect(self.user_lookup_worker.run)
-        self.user_lookup_worker.succeeded.connect(self._on_user_lookup_succeeded)
+        self.user_lookup_worker.succeeded.connect(on_success)
         self.user_lookup_worker.failed.connect(self._on_user_lookup_failed)
         self.user_lookup_worker.done.connect(self.user_lookup_thread.quit)
         self.user_lookup_worker.done.connect(self.user_lookup_worker.deleteLater)
@@ -5446,40 +5653,228 @@ class WorkflowWindow(QMainWindow):
         users = value.get("users")
         detail = value.get("detail")
         if not isinstance(users, list) or not users:
+            self.user_lookup_summary.setVisible(True)
+            self.user_lookup_result_scroll.setVisible(False)
             self.user_lookup_summary.setText(
                 f"未找到 UID {self.user_lookup_uid.value()} 对应的用户。"
             )
-            self.user_lookup_json.setPlainText("[]")
             self._set_status("●  USER NOT FOUND", "#a66b13")
             return
         if not isinstance(detail, dict):
             self._on_user_lookup_failed("用户存在，但详情接口未返回有效对象")
             return
 
-        balance = int(detail.get("money") or 0) + int(detail.get("bonus") or 0)
-        summary_lines = (
-            f"UID  {detail.get('id', '')}　　昵称  {detail.get('nickname', '')}",
-            f"账号  {detail.get('username', '')}　　邮箱  {detail.get('email', '')}",
-            f"余额  {balance:,} 分（money {int(detail.get('money') or 0):,} + "
-            f"bonus {int(detail.get('bonus') or 0):,}）　　GC  {int(detail.get('gc') or 0):,}",
-            f"VIP  {detail.get('vip_level', '')}　　等级  {detail.get('level', '')}　　"
-            f"充值  {int(detail.get('charge_total') or 0):,} 分 / {detail.get('charge_times', 0)} 次",
-            f"渠道  {detail.get('distribution_channel', '')}　　平台  {detail.get('platform', '')}　　"
-            f"状态  {detail.get('status', '')}　　风控  {detail.get('is_risk', '')}",
-            f"注册时间  {detail.get('created_at', '')}　　最后登录  {detail.get('last_login_at', '')}",
-            f"最后登录 IP  {detail.get('last_login_ip', '')}　　地区  "
-            f"{(detail.get('last_login_area_info') or {}).get('area_info', '') if isinstance(detail.get('last_login_area_info'), dict) else ''}",
+        def number(field: str) -> int:
+            try:
+                return int(detail.get(field) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        money = number("money")
+        balance = money
+        charge_total = number("charge_total")
+        withdraw_total = number("withdraw_total")
+        platform = {1: "Web", 2: "Android", 3: "iOS"}.get(
+            number("platform"),
+            str(detail.get("platform") or "—"),
         )
-        self.user_lookup_summary.setText("\n".join(summary_lines))
-        self.user_lookup_json.setPlainText(
-            json.dumps(detail, ensure_ascii=False, indent=2)
+
+        field_values = {
+            "uid": detail.get("id") or "—",
+            "email": detail.get("email") or detail.get("username") or "—",
+            "balance": f"{balance:,} 分",
+            "charge_total": f"{charge_total:,} 分",
+            "withdraw_total": f"{withdraw_total:,} 分",
+            "charge_times": f"{number('charge_times'):,} 次",
+            "withdraw_times": f"{number('withdraw_times'):,} 次",
+            "platform": platform,
+            "distribution_channel": detail.get("distribution_channel") or "—",
+            "login_distribution_channel": detail.get("login_distribution_channel") or "—",
+            "channel_code": detail.get("channel_code") or "—",
+            "vip_level": f"VIP{detail.get('vip_level', 0)}",
+            "advertising_id": detail.get("advertising_id") or "—",
+        }
+        for key, label in self.user_lookup_field_values.items():
+            label.setText(str(field_values.get(key, "—")))
+
+        database_values = {
+            "vip_level": number("vip_level"),
+            "charge_total": charge_total,
+            "money": money,
+            "withdraw_total": withdraw_total,
+            "charge_times": number("charge_times"),
+            "withdraw_times": number("withdraw_times"),
+        }
+        self.user_lookup_database_original = database_values
+        for key, field in self.user_lookup_database_inputs.items():
+            field.setText(str(database_values[key]))
+
+        self.user_lookup_loaded_id = int(detail.get("id") or 0)
+        self.user_lookup_loaded_environment = (
+            self.user_lookup_environment.currentText()
         )
+        self._render_user_kyc_status(value.get("kyc_status"))
+        self.user_lookup_summary.setVisible(False)
+        self.user_lookup_result_scroll.setVisible(True)
         self._set_status("●  USER QUERY DONE", "#228653")
+
+    def _render_user_kyc_status(self, status: object) -> None:
+        try:
+            code = int(status) if status is not None else None
+        except (TypeError, ValueError):
+            code = None
+        self.user_lookup_kyc_code = code
+        self.user_lookup_kyc_switch.blockSignals(True)
+        self.user_lookup_kyc_switch.setChecked(code == 3)
+        self.user_lookup_kyc_switch.setText(
+            "● 已通过" if code == 3 else "○ 已失败" if code == 2 else "○ 未设置"
+        )
+        self.user_lookup_kyc_switch.blockSignals(False)
+
+    @Slot(bool)
+    def _toggle_user_kyc_status(self, checked: bool) -> None:
+        self._update_user_kyc_status(3 if checked else 2)
+
+    def _update_user_kyc_status(self, status: int) -> None:
+        if self._is_user_lookup_busy() or not self.user_lookup_loaded_id:
+            return
+        status_label = "通过" if status == 3 else "失败"
+        answer = QMessageBox.question(
+            self,
+            f"确认 KYC {status_label}",
+            f"确认将 UID {self.user_lookup_loaded_id} 的 KYC 状态设为"
+            f"“{status_label}（{status}）”吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self._render_user_kyc_status(self.user_lookup_kyc_code)
+            return
+        user_id = self.user_lookup_loaded_id
+        environment = self.user_lookup_loaded_environment
+
+        def update() -> object:
+            client = Background(environment)
+            updated_status = client.update_kyc_status(user_id, status)
+            return updated_status if updated_status is not None else status
+
+        self._run_user_lookup_action(
+            update,
+            self._on_user_kyc_updated,
+            "kyc",
+        )
+
+    @Slot(object)
+    def _on_user_kyc_updated(self, value: object) -> None:
+        self._render_user_kyc_status(value)
+        self._set_status("●  KYC UPDATED", "#228653")
+
+    def _save_user_database_fields(self) -> None:
+        if self._is_user_lookup_busy() or not self.user_lookup_loaded_id:
+            return
+        environment = self.user_lookup_loaded_environment
+        connection = self.database_connections_by_environment[environment]
+        if not is_database_connection_configured(connection):
+            QMessageBox.information(
+                self,
+                "数据库未配置",
+                f"请先在“环境与参数”页完成 {environment} 环境的数据库连接配置。",
+            )
+            return
+
+        values: Dict[str, int] = {}
+        for key in EDITABLE_USER_FIELDS:
+            text = self.user_lookup_database_inputs[key].text().replace(",", "").strip()
+            if not text.isdigit():
+                QMessageBox.information(
+                    self,
+                    "输入无效",
+                    f"{key} 必须是非负整数。",
+                )
+                return
+            values[key] = int(text)
+
+        original = getattr(self, "user_lookup_database_original", {})
+        labels = {
+            "vip_level": "VIP 等级",
+            "charge_total": "支付总金额",
+            "money": "余额 money",
+            "withdraw_total": "累计提现",
+            "charge_times": "充值次数",
+            "withdraw_times": "提现次数",
+        }
+        changes = [
+            f"{labels[key]}：{original.get(key, '—')} → {values[key]}"
+            for key in EDITABLE_USER_FIELDS
+            if original.get(key) != values[key]
+        ]
+        if not changes:
+            QMessageBox.information(self, "无需保存", "字段值没有变化。")
+            return
+        answer = QMessageBox.question(
+            self,
+            "确认修改用户数据库",
+            (
+                f"将在 {environment} 环境按 user.id={self.user_lookup_loaded_id} 更新：\n\n"
+                + "\n".join(changes)
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        user_id = self.user_lookup_loaded_id
+
+        self._run_user_lookup_action(
+            lambda: update_user_fields(user_id, values, connection),
+            self._on_user_database_updated,
+            "database",
+        )
+
+    @Slot(object)
+    def _on_user_database_updated(self, value: object) -> None:
+        if not isinstance(value, dict):
+            self._on_user_lookup_failed("数据库返回了无法识别的用户数据")
+            return
+        updated = {key: int(value.get(key) or 0) for key in EDITABLE_USER_FIELDS}
+        self.user_lookup_database_original = updated
+        for key, field in self.user_lookup_database_inputs.items():
+            field.setText(str(updated[key]))
+        self.user_lookup_field_values["balance"].setText(
+            f"{updated['money']:,} 分"
+        )
+        self.user_lookup_field_values["charge_total"].setText(
+            f"{updated['charge_total']:,} 分"
+        )
+        self.user_lookup_field_values["withdraw_total"].setText(
+            f"{updated['withdraw_total']:,} 分"
+        )
+        self.user_lookup_field_values["charge_times"].setText(
+            f"{updated['charge_times']:,} 次"
+        )
+        self.user_lookup_field_values["withdraw_times"].setText(
+            f"{updated['withdraw_times']:,} 次"
+        )
+        self.user_lookup_field_values["vip_level"].setText(
+            f"VIP{updated['vip_level']}"
+        )
+        self._set_status("●  DATABASE UPDATED", "#228653")
 
     @Slot(str)
     def _on_user_lookup_failed(self, message: str) -> None:
-        self.user_lookup_summary.setText(f"查询失败\n{message}")
-        self.user_lookup_json.clear()
+        if self.user_lookup_action_kind in {"kyc", "database"}:
+            title = (
+                "KYC 更新失败"
+                if self.user_lookup_action_kind == "kyc"
+                else "数据库修改失败"
+            )
+            if self.user_lookup_action_kind == "kyc":
+                self._render_user_kyc_status(self.user_lookup_kyc_code)
+            QMessageBox.critical(self, title, message)
+        else:
+            self.user_lookup_summary.setVisible(True)
+            self.user_lookup_result_scroll.setVisible(False)
+            self.user_lookup_summary.setText(f"查询失败\n{message}")
         self._set_status("●  USER QUERY FAILED", "#c43d47")
 
     @Slot()
@@ -5488,6 +5883,10 @@ class WorkflowWindow(QMainWindow):
         self.user_lookup_thread = None
         for control in self.user_lookup_controls:
             control.setEnabled(True)
+        can_edit = bool(self.user_lookup_loaded_id)
+        self.user_lookup_kyc_switch.setEnabled(can_edit)
+        for control in self.user_lookup_database_controls:
+            control.setEnabled(can_edit)
         for button in self.navigation_buttons:
             button.setEnabled(True)
 

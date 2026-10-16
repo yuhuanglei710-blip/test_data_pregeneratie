@@ -20,17 +20,23 @@ class BackgroundUserQueryTests(unittest.TestCase):
             "code": 0,
             "data": {"id": 13425, "nickname": "Player_113425"},
         }
+        kyc_response = Mock()
+        kyc_response.json.return_value = {
+            "code": 0,
+            "data": [{"key": "10011", "status": 3}],
+        }
 
         with patch(
             "api.background.requests.post",
-            side_effect=(list_response, detail_response),
+            side_effect=(list_response, detail_response, kyc_response),
         ) as post:
             client = Background("huidu")
             client.check_token("test-token")
             result = client.query_user(13425)
 
         self.assertEqual(result["detail"]["nickname"], "Player_113425")
-        self.assertEqual(post.call_count, 2)
+        self.assertEqual(result["kyc_status"], 3)
+        self.assertEqual(post.call_count, 3)
         first = post.call_args_list[0]
         self.assertTrue(first.args[0].endswith("/user/GetUserList"))
         self.assertEqual(first.kwargs["json"], {"id": 13425, "timezone": 0})
@@ -42,6 +48,9 @@ class BackgroundUserQueryTests(unittest.TestCase):
             second.kwargs["json"],
             {"id": 13425, "timezone": 0, "lang": "zh-CN"},
         )
+        third = post.call_args_list[2]
+        self.assertTrue(third.args[0].endswith("/user/GetKycStatus"))
+        self.assertEqual(third.kwargs["json"], {"user_id": 13425})
 
     def test_query_user_does_not_request_detail_when_user_is_not_found(self) -> None:
         response = Mock()
@@ -52,7 +61,10 @@ class BackgroundUserQueryTests(unittest.TestCase):
             client.check_token("test-token")
             result = client.query_user(999)
 
-        self.assertEqual(result, {"users": [], "detail": None})
+        self.assertEqual(
+            result,
+            {"users": [], "detail": None, "kyc_status": None},
+        )
         post.assert_called_once()
 
     def test_query_automatically_logs_in_and_uses_returned_identity(self) -> None:
@@ -70,10 +82,38 @@ class BackgroundUserQueryTests(unittest.TestCase):
         ):
             result = Background("huidu").query_user(13425)
 
-        self.assertEqual(result, {"users": [], "detail": None})
+        self.assertEqual(
+            result,
+            {"users": [], "detail": None, "kyc_status": None},
+        )
         login.assert_called_once_with("https://hdadmin.ushdev.top")
         self.assertEqual(post.call_args.kwargs["headers"]["X-Token"], token)
         self.assertEqual(post.call_args.kwargs["headers"]["X-User-Id"], "9")
+
+    def test_update_kyc_uses_fixed_key_and_refreshes_status(self) -> None:
+        update_response = Mock()
+        update_response.json.return_value = {"code": 0, "data": {}}
+        status_response = Mock()
+        status_response.json.return_value = {
+            "code": 0,
+            "data": {"key": "10011", "status": 2},
+        }
+
+        with patch(
+            "api.background.requests.post",
+            side_effect=(update_response, status_response),
+        ) as post:
+            client = Background("huidu")
+            client.check_token("test-token")
+            status = client.update_kyc_status(607425, 2)
+
+        self.assertEqual(status, 2)
+        update = post.call_args_list[0]
+        self.assertTrue(update.args[0].endswith("/user/UpdateKycStatus"))
+        self.assertEqual(
+            update.kwargs["json"],
+            {"user_id": 607425, "key": "10011", "status": 2},
+        )
 
     def test_business_error_is_raised(self) -> None:
         response = Mock()

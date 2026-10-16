@@ -202,30 +202,73 @@ class ApkConflictPromptTests(unittest.TestCase):
                     "email": "user@example.com",
                     "money": 100,
                     "bonus": 20,
-                    "gc": 10000,
                     "vip_level": 0,
-                    "level": 1,
                     "charge_total": 0,
-                    "charge_times": 0,
+                    "withdraw_total": 30,
+                    "charge_times": 4,
+                    "withdraw_times": 2,
                     "distribution_channel": "gpa17drop",
+                    "login_distribution_channel": "login-drop",
+                    "channel_code": "Applovin-iOS",
+                    "advertising_id": "advertising-123",
                     "platform": 3,
-                    "status": 1,
-                    "is_risk": 0,
-                    "created_at": "2026-10-16 08:51:17",
-                    "last_login_at": "2026-10-16 08:51:17",
-                    "last_login_ip": "183.6.117.29",
-                    "last_login_area_info": {
-                        "area_info": "UTC+08:00, CN - Guangdong"
-                    },
                 },
+                "kyc_status": 3,
             }
         )
 
         self.assertEqual(self.window.page_title.text(), "用户查询")
         self.assertEqual(self.window.content_stack.currentIndex(), 9)
-        self.assertIn("Player_113425", self.window.user_lookup_summary.text())
-        self.assertIn("余额  120 分", self.window.user_lookup_summary.text())
-        self.assertIn('"id": 13425', self.window.user_lookup_json.toPlainText())
+        self.assertFalse(self.window.user_lookup_result_scroll.isHidden())
+        self.assertEqual(
+            self.window.user_lookup_field_values["platform"].text(),
+            "iOS",
+        )
+        self.assertEqual(
+            self.window.user_lookup_field_values["balance"].text(),
+            "100 分",
+        )
+        self.assertEqual(
+            self.window.user_lookup_field_values["advertising_id"].text(),
+            "advertising-123",
+        )
+        self.assertEqual(
+            self.window.user_lookup_field_values["charge_times"].text(),
+            "4 次",
+        )
+        self.assertEqual(
+            self.window.user_lookup_field_values["withdraw_times"].text(),
+            "2 次",
+        )
+        self.assertTrue(self.window.user_lookup_kyc_switch.isChecked())
+        self.assertEqual(self.window.user_lookup_kyc_switch.text(), "● 已通过")
+        self.assertEqual(
+            self.window.user_lookup_database_inputs["money"].text(),
+            "100",
+        )
+
+        self.window._on_user_database_updated(
+            {
+                "vip_level": 5,
+                "charge_total": 250000,
+                "money": 88000,
+                "withdraw_total": 32000,
+                "charge_times": 9,
+                "withdraw_times": 3,
+            }
+        )
+        self.assertEqual(
+            self.window.user_lookup_field_values["vip_level"].text(),
+            "VIP5",
+        )
+        self.assertEqual(
+            self.window.user_lookup_field_values["balance"].text(),
+            "88,000 分",
+        )
+        self.assertEqual(
+            self.window.user_lookup_field_values["charge_times"].text(),
+            "9 次",
+        )
 
     def test_sql_template_selection_builds_runtime_parameter_inputs(self) -> None:
         template = SqlTemplate(

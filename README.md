@@ -111,9 +111,16 @@ iOS 安装、Android 日志和环境与参数之间切换；环境与参数页�
 ## 用户查询
 
 “用户查询”页按运行环境和 UID 依次调用后台 `GetUserList` 与 `GetUserInfo`：先确认用户存在，
-再展示账号、余额、VIP、充值、渠道、平台、状态、注册/登录时间等摘要和完整详情 JSON。
+再展示 UID、邮箱、余额、累充、累提、充值次数、提现次数、平台、渠道、登录渠道、
+Channel Code、VIP 等级和 Advertising ID。查询用户时还会调用 `GetKycStatus` 获取 KYC 状态；
+状态 `3` 显示为已通过，状态 `2` 显示为已失败。KYC 以用户数据中的开关展示，可通过
+`UpdateKycStatus` 在通过和失败间切换，业务键固定为 `10011`，更新成功后会重新读取最新状态。
 程序会复用已有后台登录逻辑，按所选环境自动获取认证 Token，无需在页面手动填写。
 所选环境需要在对应的 `*.env` 中配置 `background_domain`。
+页面还支持通过所选环境的数据库连接，使用参数化 SQL 严格按 `user.id` 修改
+`vip_level`、`charge_total`、`money`、`withdraw_total`、`charge_times` 和
+`withdraw_times`。金额使用数据库原值“分”；保存前会列出实际变更并要求确认，未配置数据库
+连接时不会执行写入。
 
 ## Android 设备安装
 
