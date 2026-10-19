@@ -1,11 +1,17 @@
-# test_data_pregeneratie
+# Automation Console
 
 通过前台接口、后台接口和测试工具预生成测试数据，用于简化复杂功能的测试准备工作。
+
+第一次参与开发，请先阅读 [零基础开发说明书](doc/DEVELOPMENT_GUIDE.md)。它包含启动步骤、
+代码地图、一次操作的完整调用链、新增页面/API/后台任务的方法、测试命令和常见故障处理。
 
 ## 目录结构
 
 - `api/`：后台等通用 API 客户端。
 - `base/`：用户注册、加钱、下注及批量账号工作流。
+- `gui.py`：主窗口页面组装和业务交互。
+- `gui_theme.py`、`gui_widgets.py`、`gui_workers.py`、`gui_dialogs.py`：界面主题、通用控件、后台任务和弹窗。
+- `tool_pages.py`：时间戳、SSH 主机和快捷访问页面。
 - `tools/`：时间戳等无业务依赖的工具。
 - `test/`：不访问网络的单元测试。
 - `cache/`：token 等临时缓存。
@@ -225,6 +231,17 @@ Linux 主机时间。私钥复用“环境与参数”页的 SSH 私钥库，也
 “快捷访问”支持链接分类、置顶、检索、浏览器打开和摘要复制；每条链接可维护账号、密码、
 AppKey 等任意键值字段，数据保存在 `cache/quick_access.json`。这两个本地 JSON 文件均已由
 `cache/` 规则排除版本控制，但字段和密码仍属于本机明文数据，请妥善保护项目目录。
+
+通用工具的数据文件位置统一在项目根目录 `.env` 中配置，包括 `TOOL_DATA_DIR`、
+`QUICK_ACCESS_FILE`、`SSH_HOSTS_FILE`、`SSH_PRIVATE_KEYS_FILE` 和 `SSH_PRIVATE_KEY_DIR`。
+从旧 Java 测试平台重新迁移数据时，配置 `LEGACY_TEST_TOOL_*` 后执行：
+
+```powershell
+python -m base.legacy_tool_migration
+```
+
+迁移会合并本地新增数据，以 `legacy-*` 标识并更新旧平台记录；重复执行不会产生重复项。
+旧平台数据库中的私钥会保存到 `SSH_PRIVATE_KEY_DIR`，对应目录和迁移备份均被 Git 忽略。
 
 ## SQL 数据模板
 

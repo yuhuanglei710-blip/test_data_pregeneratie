@@ -12,10 +12,9 @@ from pathlib import Path
 from typing import Union
 
 from .database_config import load_ssh_private_keys
+from .local_tool_config import SSH_HOSTS_FILE
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SSH_HOSTS_FILE = PROJECT_ROOT / "cache" / "ssh_hosts.json"
 AUTH_KEY_PREFERRED = "key_preferred"
 AUTH_KEY_ONLY = "key_only"
 AUTH_PASSWORD_ONLY = "password_only"

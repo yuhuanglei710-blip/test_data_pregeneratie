@@ -23,7 +23,13 @@ from base.player_tier import (
     TARGET_NET_PROFIT_TOP,
 )
 from base.sql_data import SqlTemplate
-from gui import QueueWriter, WorkflowWindow, configure_application_fonts
+from gui import (
+    QueueWriter,
+    SECTION_CONTENT_INDEX,
+    SECTION_INDEX,
+    WorkflowWindow,
+    configure_application_fonts,
+)
 
 
 class ApkConflictPromptTests(unittest.TestCase):
@@ -338,6 +344,31 @@ class ApkConflictPromptTests(unittest.TestCase):
             font.hintingPreference(),
             QFont.HintingPreference.PreferFullHinting,
         )
+
+    def test_device_refresh_guards_follow_navigation_sections(self) -> None:
+        cases = (
+            ("Android 安装", "_run_apk_action", "_refresh_android_devices"),
+            ("iOS 安装", "_run_ios_action", "_refresh_ios_devices"),
+            ("Android 日志", "_run_app_log_query", "_refresh_app_log_devices"),
+        )
+        for title, runner, refresh in cases:
+            with self.subTest(title=title), patch.object(self.window, runner) as run:
+                self.window.current_section = SECTION_INDEX[title]
+                getattr(self.window, refresh)()
+                run.assert_called_once()
+
+    def test_every_navigation_item_opens_its_declared_page(self) -> None:
+        with (
+            patch.object(self.window, "_refresh_android_devices"),
+            patch.object(self.window, "_refresh_ios_devices"),
+            patch.object(self.window, "_refresh_app_log_devices"),
+        ):
+            for title, page_index in SECTION_CONTENT_INDEX.items():
+                with self.subTest(title=title):
+                    self.window._switch_section(SECTION_INDEX[title])
+                    self.assertEqual(
+                        self.window.content_stack.currentIndex(), page_index
+                    )
 
     def test_api_selection_scaffolds_parameters_and_previews_request(self) -> None:
         template = ApiTemplate(

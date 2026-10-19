@@ -9,9 +9,7 @@ from pathlib import Path
 from typing import Iterable, Union
 from urllib.parse import urlparse
 
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-QUICK_ACCESS_FILE = PROJECT_ROOT / "cache" / "quick_access.json"
+from .local_tool_config import QUICK_ACCESS_FILE
 
 
 @dataclass

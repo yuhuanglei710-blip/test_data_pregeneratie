@@ -1,35 +1,24 @@
 """自动化测试数据桌面控制台。"""
 
 import json
-import os
-import re
-import threading
-from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
-from PySide6.QtCore import QObject, QSize, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QSize, QThread, QTimer, Qt, Slot
 from PySide6.QtGui import (
     QCloseEvent,
-    QColor,
-    QFont,
-    QFontDatabase,
     QKeySequence,
     QShortcut,
-    QSyntaxHighlighter,
-    QTextCharFormat,
     QTextCursor,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QAbstractSpinBox,
     QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
-    QCompleter,
     QDialog,
     QFileDialog,
     QFrame,
@@ -77,7 +66,6 @@ from base.apk_manager import (
     update_cached_apk,
 )
 from base.android_log import (
-    AndroidLogCapture,
     LogcatCaptureConfig,
     list_installed_packages,
 )
@@ -126,41 +114,29 @@ from base.api_request import (
     load_api_templates,
     parse_runtime_parameters,
     prepare_api_request,
-    save_api_template,
     send_api_request,
     template_parameter_names as api_template_parameter_names,
 )
 from base.app_config import load_channel_code_config, save_channel_codes
 from base.channel_source import (
     ChannelSource,
-    fetch_channel_sources,
     load_channel_source_config,
-    log_database_name_for_environment,
     resolve_registration_channel,
-    save_channel_sources,
 )
 from base.database_config import (
     DatabaseConnectionConfig,
-    SshPrivateKey,
     import_ssh_private_key,
     is_database_connection_configured,
     load_database_connections,
     load_ssh_private_keys,
     remove_ssh_private_key,
-    save_database_connection,
-    test_database_connection,
-    validate_database_connection,
 )
 from base.enums import Platform
 from base.feature_scenario import (
-    ASSERT_OPERATORS,
     FeatureScenario,
-    ScenarioStep,
     delete_feature_scenario,
     load_feature_scenarios,
-    new_step,
     run_feature_scenario,
-    save_feature_scenario,
     scenario_needs_database,
 )
 from base.sql_data import (
@@ -169,7 +145,6 @@ from base.sql_data import (
     generate_feature_data,
     load_sql_templates,
     parse_runtime_parameter,
-    save_sql_template,
     template_parameter_names as sql_template_parameter_names,
 )
 from base.tournment_test import (
@@ -183,1619 +158,45 @@ from base.tournment_test import (
 from base.user import SUPPORTED_ENVIRONMENTS
 from base.user_data import EDITABLE_USER_FIELDS, update_user_fields
 from api.background import Background
+from gui_dialogs import (
+    ApiTemplateDialog,
+    ApkDropZone,
+    CachedApkDialog,
+    DatabaseConnectionDialog,
+    FeatureScenarioDialog,
+    SqlTemplateDialog,
+)
+from gui_theme import (
+    APP_STYLESHEET,
+    SECTION_CONTENT_INDEX,
+    SECTION_INDEX,
+    SECTION_INFO,
+    application_monospace_font,
+    configure_application_fonts,
+)
+from gui_widgets import (
+    ApiLogHighlighter,
+    ApiPreviewHighlighter,
+    JsonSyntaxHighlighter,
+    NumberInput,
+    SearchableComboBox,
+    add_form_row,
+    action_button_row,
+)
+from gui_workers import (
+    AndroidLogWorker,
+    ApkActionWorker,
+    ChannelSourceUpdateWorker,
+    QueueWriter,
+    WorkflowWorker,
+)
 from tool_pages import QuickAccessWorkspace, SshHostWorkspace, TimestampWorkspace
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-WINDOWS_FONT_DIR = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
-UI_FONT_CANDIDATES = (
-    "Noto Sans SC",
-    "Microsoft YaHei UI",
-    "DengXian",
-    "Segoe UI",
-)
-MONOSPACE_FONT_CANDIDATES = (
-    "Cascadia Mono",
-    "Consolas",
-)
 AUTO_ACCOUNT_SQL_PARAMETERS = {"uid", "userid"}
 
 
-def _best_font_family(candidates: tuple[str, ...]) -> str:
-    available = set(QFontDatabase.families())
-    return next((family for family in candidates if family in available), candidates[-1])
-
-
-def _quality_font(family: str, point_size: float) -> QFont:
-    font = QFont(family)
-    font.setPointSizeF(point_size)
-    font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
-    font.setStyleStrategy(
-        QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality
-    )
-    return font
-
-
-def configure_application_fonts(app: QApplication) -> tuple[str, str]:
-    """加载高清中文字体，并为所有 Qt 控件设置高质量矢量字体。"""
-    for filename in (
-        "Noto Sans SC (TrueType).otf",
-        "Noto Sans SC Medium (TrueType).otf",
-        "Noto Sans SC Bold (TrueType).otf",
-    ):
-        font_path = WINDOWS_FONT_DIR / filename
-        if font_path.is_file():
-            QFontDatabase.addApplicationFont(str(font_path))
-    ui_family = _best_font_family(UI_FONT_CANDIDATES)
-    monospace_family = _best_font_family(MONOSPACE_FONT_CANDIDATES)
-    app.setFont(_quality_font(ui_family, 10.0))
-    app.setProperty("uiFontFamily", ui_family)
-    app.setProperty("monospaceFontFamily", monospace_family)
-    return ui_family, monospace_family
-
-
-def application_monospace_font(point_size: float) -> QFont:
-    app = QApplication.instance()
-    configured = app.property("monospaceFontFamily") if app is not None else ""
-    family = str(configured or _best_font_family(MONOSPACE_FONT_CANDIDATES))
-    return _quality_font(family, point_size)
-
-
-SECTION_INFO = (
-    ("数据准备", "账号生成", "批量生成测试账号，或使用指定邮箱创建单个账号。"),
-    ("数据准备", "锦标赛造数", "创建参赛账号并完成充值、下注等锦标赛数据准备。"),
-    ("数据准备", "玩家分层", "按净利润优先、利润率兜底识别玩家层级，并可按 UID 构造目标分层数据。"),
-    ("数据准备", "用户查询", "按 UID 查找用户，并读取后台用户详细信息。"),
-    ("接口与流程", "SQL 数据模板", "维护并执行可复用 SQL，用于快速准备业务测试数据。"),
-    ("接口与流程", "API 请求模板", "保存、调试并复用环境化的 HTTP 请求。"),
-    ("接口与流程", "自动化场景", "把 SQL、API、变量提取和断言编排为完整流程。"),
-    ("设备工具", "Android 安装", "管理 APK 缓存，并对 Android 设备执行归因与安装。"),
-    ("设备工具", "iOS 安装", "管理 IPA 缓存，并对 iPhone 执行归因与安装。"),
-    ("设备工具", "Android 日志", "按应用、级别和关键词抓取并导出设备日志。"),
-    ("通用工具", "时间戳工具", "解析秒/毫秒时间戳与日期时间，并进行时区展示和偏移计算。"),
-    ("通用工具", "SSH 主机", "管理远程主机，测试 SSH 连接、执行命令并读取或修改主机时间。"),
-    ("通用工具", "快捷访问", "集中管理常用链接、分类和登录字段，支持检索、复制与快速打开。"),
-    ("系统", "环境与参数", "维护环境渠道参数、数据库连接和 SSH 私钥。"),
-)
-
-
-APP_STYLESHEET = """
-QWidget {
-    color: #20242a;
-    font-family: "Noto Sans SC", "Microsoft YaHei UI", "DengXian", "Segoe UI";
-    font-size: 10pt;
-}
-QWidget#root { background: #f3f5f8; }
-QDialog, QMessageBox { background: #ffffff; }
-QFrame#topBar {
-    background: #ffffff;
-    border: 1px solid #dfe3e8;
-    border-radius: 12px;
-}
-
-QLabel#title { color: #17191d; font-size: 18pt; font-weight: 700; }
-QLabel#sectionTitle { color: #20242a; font-size: 11pt; font-weight: 600; }
-QLabel#fieldLabel { color: #5d6470; font-size: 9pt; }
-QLabel#pageDescription, QLabel#terminalMeta, QLabel#fieldHint,
-QLabel#navigationMeta {
-    color: #808792;
-    font-size: 9pt;
-}
-QLabel#pageDescription { font-size: 9pt; }
-QLabel#navigationMeta, QLabel#terminalMeta {
-    font-family: "Cascadia Mono", "Consolas", monospace;
-}
-QLabel#navigationBrand, QLabel#sessionTitle {
-    color: #17191d;
-    font-weight: 700;
-}
-QLabel#navigationBrand { font-size: 13pt; }
-QLabel#sessionTitle { font-family: "Cascadia Mono", "Consolas", monospace; font-size: 10pt; }
-QLabel#navigationGroup {
-    color: #8a919c;
-    font-size: 8pt;
-    font-weight: 700;
-    padding: 10px 10px 3px 10px;
-}
-QLabel#metricSummary {
-    color: #343a42;
-    background: #f7f8fa;
-    border: 1px solid #e0e4ea;
-    border-radius: 8px;
-    padding: 14px;
-    font-family: "Cascadia Mono", "Consolas", monospace;
-    line-height: 1.5;
-}
-QLabel#tierBadge {
-    color: #2846a6;
-    background: #edf1ff;
-    border: 1px solid #d6defa;
-    border-radius: 8px;
-    padding: 10px 12px;
-    font-size: 11pt;
-    font-weight: 700;
-}
-QLabel#statusTag {
-    color: #58616d;
-    background: #f2f4f7;
-    border: 1px solid #dfe3e8;
-    border-radius: 11px;
-    padding: 4px 9px;
-    font-size: 8.5pt;
-    font-weight: 600;
-}
-QLabel#requestBadge {
-    color: #2846a6;
-    background: #edf1ff;
-    border: 1px solid #d6defa;
-    border-radius: 7px;
-    padding: 7px 10px;
-    font-family: "Cascadia Mono", "Consolas", monospace;
-    font-weight: 700;
-}
-QLabel#requestBadge:disabled {
-    color: #808792;
-    background: #f3f5f7;
-    border-color: #dfe3e8;
-}
-QLabel#online { color: #228653; font-weight: 700; }
-QLabel#statusPill, QLabel#connectionStatus {
-    background: #ffffff;
-    border: 1px solid #d9dde3;
-    border-radius: 7px;
-    padding: 8px 12px;
-}
-QLabel#statusPill {
-    border-radius: 14px;
-    font-family: "Cascadia Mono", "Consolas", monospace;
-    font-size: 9pt;
-    font-weight: 600;
-}
-
-QFrame#settingsPanel, QFrame#terminalPanel, QFrame#navigation,
-QFrame#configCard {
-    background: #ffffff;
-    border: 1px solid #dfe3e8;
-    border-radius: 10px;
-}
-QFrame#terminalPanel, QFrame#configCard, QFrame#navigation { background: #ffffff; }
-QFrame#userProfileCard {
-    background: #f8f9fc;
-    border: 1px solid #e0e4ee;
-    border-radius: 10px;
-}
-QLabel#userFieldValue {
-    color: #252a31;
-    background: #f7f8fa;
-    border-radius: 6px;
-    padding: 7px 9px;
-}
-QPushButton#kycSwitch {
-    min-width: 104px;
-    max-width: 104px;
-    min-height: 30px;
-    color: #b33b45;
-    background: #fff0f1;
-    border: 1px solid #f1cdd1;
-    border-radius: 15px;
-    padding: 0 10px;
-}
-QPushButton#kycSwitch:checked {
-    color: #207a4d;
-    background: #eaf7f0;
-    border-color: #c9ead8;
-}
-QPushButton#kycSwitch:disabled {
-    color: #8a919c;
-    background: #f1f3f5;
-    border-color: #dfe3e8;
-}
-QFrame#apkDropZone {
-    background: #f8f9fb;
-    border: 1px dashed #b9c0ca;
-    border-radius: 7px;
-}
-QFrame#apkDropZone:hover, QFrame#apkDropZone[dragActive="true"] {
-    background: #edf1ff;
-    border-color: #4b67d1;
-}
-QFrame#apkDropZone:disabled {
-    background: #f1f3f5;
-    border-color: #dfe3e8;
-}
-QLabel#apkDropHint {
-    color: #69717c;
-    font-size: 9pt;
-}
-QFrame#apkDropZone[dragActive="true"] QLabel#apkDropHint {
-    color: #2846a6;
-    font-weight: 600;
-}
-
-QPushButton {
-    min-height: 36px;
-    border-radius: 7px;
-    padding: 0 14px;
-    font-weight: 600;
-}
-QPushButton#navigationButton {
-    min-height: 38px;
-    color: #656c76;
-    background: transparent;
-    border: 0;
-    border-left: 3px solid transparent;
-    border-radius: 6px;
-    padding: 0 12px;
-    text-align: left;
-}
-QPushButton#navigationButton:hover {
-    color: #17191d;
-    background: #f2f4f7;
-}
-QPushButton#navigationButton:checked {
-    color: #2846a6;
-    background: #edf1ff;
-    border-left: 3px solid #4b67d1;
-    font-weight: 700;
-}
-QPushButton#primaryButton, QPushButton#modeButton:checked {
-    color: #ffffff;
-    background: #20242a;
-    border: 1px solid #20242a;
-}
-QPushButton#primaryButton:hover, QPushButton#modeButton:checked:hover {
-    background: #000000;
-    border-color: #000000;
-}
-QPushButton#secondaryButton, QPushButton#stopButton,
-QPushButton#browseButton, QPushButton#modeButton {
-    color: #3f4650;
-    background: #ffffff;
-    border: 1px solid #cfd4db;
-}
-QPushButton#modeButton { color: #737b86; background: #f7f8f9; }
-QPushButton#secondaryButton:hover, QPushButton#stopButton:hover,
-QPushButton#browseButton:hover, QPushButton#modeButton:hover {
-    color: #17191d;
-    background: #f0f2f4;
-    border-color: #aeb5bf;
-}
-QPushButton:disabled, QPushButton#navigationButton:disabled {
-    color: #abb1ba;
-    background: #f1f3f5;
-    border-color: #e2e5e9;
-}
-
-QLineEdit, QSpinBox, QComboBox {
-    min-height: 36px;
-    color: #20242a;
-    background: #ffffff;
-    border: 1px solid #cfd4db;
-    border-radius: 7px;
-    padding: 0 10px;
-    selection-color: #ffffff;
-    selection-background-color: #343a42;
-}
-QLineEdit:hover, QSpinBox:hover, QComboBox:hover { border-color: #9fa7b2; }
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: #343a42; }
-QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {
-    color: #a2a8b1;
-    background: #f0f2f4;
-    border-color: #e2e5e9;
-}
-QPlainTextEdit#longTextInput {
-    color: #20242a;
-    background: #ffffff;
-    border: 1px solid #cfd4db;
-    border-radius: 7px;
-    padding: 8px 10px;
-    selection-color: #ffffff;
-    selection-background-color: #343a42;
-}
-QPlainTextEdit#longTextInput:hover { border-color: #9fa7b2; }
-QPlainTextEdit#longTextInput:focus { border-color: #343a42; }
-QComboBox::drop-down {
-    width: 24px;
-    background: #f3f5f7;
-    border: 0;
-}
-QComboBox QAbstractItemView {
-    color: #20242a;
-    background: #ffffff;
-    border: 1px solid #cfd4db;
-    selection-color: #17191d;
-    selection-background-color: #e9edf1;
-}
-QTabWidget::pane {
-    background: #fbfcfd;
-    border: 1px solid #d6dbe1;
-    border-radius: 7px;
-    top: -1px;
-}
-QTabBar::tab {
-    color: #737b86;
-    background: #f3f5f7;
-    border: 1px solid #d6dbe1;
-    padding: 7px 14px;
-}
-QTabBar::tab:first { border-top-left-radius: 7px; }
-QTabBar::tab:last { border-top-right-radius: 7px; }
-QTabBar::tab:selected {
-    color: #20242a;
-    background: #ffffff;
-    font-weight: 700;
-}
-
-QListWidget#channelCodeList, QPlainTextEdit#terminal {
-    color: #30363d;
-    background: #fbfcfd;
-    border: 1px solid #d6dbe1;
-    border-radius: 7px;
-    padding: 6px;
-}
-QListWidget#channelCodeList::item { min-height: 32px; padding: 4px 8px; }
-QListWidget#channelCodeList::item:selected { color: #17191d; background: #e8ebef; }
-QTableWidget#apkTable {
-    color: #30363d;
-    background: #ffffff;
-    alternate-background-color: #f8f9fa;
-    border: 1px solid #d6dbe1;
-    border-radius: 7px;
-    gridline-color: #e4e7eb;
-}
-QTableWidget#apkTable::item { padding: 6px; }
-QTableWidget#apkTable QHeaderView::section {
-    color: #5d6470;
-    background: #f3f5f7;
-    border: 0;
-    border-bottom: 1px solid #d6dbe1;
-    padding: 8px;
-    font-size: 9pt;
-    font-weight: 600;
-}
-QPlainTextEdit#terminal {
-    padding: 12px;
-    font-family: "Cascadia Mono", "Consolas", monospace;
-    font-size: 9pt;
-}
-
-QCheckBox { color: #4d545e; spacing: 8px; }
-QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    background: #ffffff;
-    border: 1px solid #b9c0c9;
-    border-radius: 4px;
-}
-QCheckBox::indicator:checked { background: #20242a; border-color: #20242a; }
-
-QProgressBar {
-    min-height: 5px;
-    max-height: 5px;
-    background: #e4e7eb;
-    border: 0;
-    border-radius: 2px;
-}
-QProgressBar::chunk { background: #20242a; border-radius: 2px; }
-
-QScrollArea#settingsScroll, QWidget#settingsPage { background: transparent; border: 0; }
-QScrollBar:vertical { width: 9px; margin: 4px 2px; background: transparent; }
-QScrollBar::handle:vertical {
-    min-height: 28px;
-    background: #c7ccd3;
-    border-radius: 4px;
-}
-QScrollBar::handle:vertical:hover { background: #9da5af; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-"""
-
-
-class NumberInput(QSpinBox):
-    """仅允许直接输入数字，不提供步进按钮或滚轮调节。"""
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.setAlignment(Qt.AlignmentFlag.AlignLeft)
-
-    def wheelEvent(self, event) -> None:
-        event.ignore()
-
-
-def _text_format(color: str, *, bold: bool = False) -> QTextCharFormat:
-    text_format = QTextCharFormat()
-    text_format.setForeground(QColor(color))
-    if bold:
-        text_format.setFontWeight(QFont.Weight.Bold)
-    return text_format
-
-
-class JsonSyntaxHighlighter(QSyntaxHighlighter):
-    """为 JSON 编辑器和响应内容提供轻量语法高亮。"""
-
-    STRING_PATTERN = re.compile(r'"(?:\\.|[^"\\])*"')
-    NUMBER_PATTERN = re.compile(
-        r"(?<![\w.])-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.])"
-    )
-    LITERAL_PATTERN = re.compile(r"\b(?:true|false|null)\b")
-    PUNCTUATION_PATTERN = re.compile(r"[{}\[\],:]")
-
-    def __init__(self, document) -> None:
-        super().__init__(document)
-        self.string_format = _text_format("#228653")
-        self.key_format = _text_format("#2846a6", bold=True)
-        self.number_format = _text_format("#a05a00")
-        self.literal_format = _text_format("#7b3fb2", bold=True)
-        self.punctuation_format = _text_format("#69717d")
-
-    def highlightBlock(self, text: str) -> None:
-        for match in self.PUNCTUATION_PATTERN.finditer(text):
-            self.setFormat(match.start(), len(match.group()), self.punctuation_format)
-        for match in self.NUMBER_PATTERN.finditer(text):
-            self.setFormat(match.start(), len(match.group()), self.number_format)
-        for match in self.LITERAL_PATTERN.finditer(text):
-            self.setFormat(match.start(), len(match.group()), self.literal_format)
-        for match in self.STRING_PATTERN.finditer(text):
-            suffix = text[match.end():]
-            text_format = (
-                self.key_format
-                if re.match(r"\s*:", suffix)
-                else self.string_format
-            )
-            self.setFormat(match.start(), len(match.group()), text_format)
-
-
-class ApiPreviewHighlighter(JsonSyntaxHighlighter):
-    """在 JSON 之外强调请求方法、URL 和内容分区。"""
-
-    REQUEST_PATTERN = re.compile(r"^(GET|POST|PUT|PATCH|DELETE)\s+(.*)$")
-
-    def __init__(self, document) -> None:
-        super().__init__(document)
-        self.method_format = _text_format("#ffffff", bold=True)
-        self.method_format.setBackground(QColor("#2846a6"))
-        self.url_format = _text_format("#1559a5")
-        self.heading_format = _text_format("#20242a", bold=True)
-        self.meta_format = _text_format("#808792")
-
-    def highlightBlock(self, text: str) -> None:
-        super().highlightBlock(text)
-        request_match = self.REQUEST_PATTERN.match(text)
-        if request_match:
-            self.setFormat(
-                request_match.start(1),
-                len(request_match.group(1)),
-                self.method_format,
-            )
-            self.setFormat(
-                request_match.start(2),
-                len(request_match.group(2)),
-                self.url_format,
-            )
-        elif text in ("Headers", "Body"):
-            self.setFormat(0, len(text), self.heading_format)
-        elif text.startswith("Timeout:"):
-            self.setFormat(0, len(text), self.meta_format)
-
-
-class ApiLogHighlighter(JsonSyntaxHighlighter):
-    """强调响应日志中的请求摘要、成功状态和失败状态。"""
-
-    STATUS_PATTERN = re.compile(r"(?<!\d)([1-5]\d{2})(?!\d)")
-
-    def __init__(self, document) -> None:
-        super().__init__(document)
-        self.label_format = _text_format("#2846a6", bold=True)
-        self.success_format = _text_format("#228653", bold=True)
-        self.error_format = _text_format("#c43d47", bold=True)
-
-    def highlightBlock(self, text: str) -> None:
-        super().highlightBlock(text)
-        if text.startswith("[api]"):
-            self.setFormat(0, 5, self.label_format)
-        for match in self.STATUS_PATTERN.finditer(text):
-            status = int(match.group(1))
-            text_format = (
-                self.success_format if 200 <= status < 400 else self.error_format
-            )
-            self.setFormat(match.start(1), len(match.group(1)), text_format)
-
-
-class SearchableComboBox(QComboBox):
-    """可按标题模糊检索的下拉选择框。"""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.setEditable(True)
-        self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.completer().setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        self.completer().setFilterMode(Qt.MatchFlag.MatchContains)
-        self.completer().setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-        line_edit = self.lineEdit()
-        if line_edit is not None:
-            line_edit.setPlaceholderText("输入标题检索")
-
-
-# 后台线程与输出转发
-class QueueWriter:
-    """把工作线程的标准输出转发给 Qt 信号。"""
-
-    def __init__(self, emit: Callable[[str], None]):
-        self.emit = emit
-        self._lock = threading.Lock()
-        self._buffers: Dict[int, str] = {}
-
-    def write(self, text: str) -> int:
-        if not text:
-            return 0
-        thread_id = threading.get_ident()
-        with self._lock:
-            buffered = self._buffers.get(thread_id, "") + text
-            while "\n" in buffered:
-                line, buffered = buffered.split("\n", 1)
-                self.emit(f"{line}\n")
-            if buffered:
-                self._buffers[thread_id] = buffered
-            else:
-                self._buffers.pop(thread_id, None)
-        return len(text)
-
-    def flush(self) -> None:
-        with self._lock:
-            for text in self._buffers.values():
-                if text:
-                    self.emit(text)
-            self._buffers.clear()
-
-
-class WorkflowWorker(QObject):
-    """在 Qt 工作线程中执行账号任务。"""
-
-    log = Signal(str)
-    progress = Signal(int, int, int)
-    completed = Signal(int, bool)
-    failed = Signal(str)
-    done = Signal()
-
-    def __init__(self, workflow: Callable[..., int], parameters: dict):
-        super().__init__()
-        self.workflow = workflow
-        self.parameters = parameters
-        self.stop_event = threading.Event()
-
-    def request_stop(self) -> None:
-        self.stop_event.set()
-
-    @Slot()
-    def run(self) -> None:
-        """执行任务并发送日志、进度和结果。"""
-        writer = QueueWriter(self.log.emit)
-        try:
-            with redirect_stdout(writer), redirect_stderr(writer):
-                success_count = self.workflow(
-                    **self.parameters,
-                    stop_requested=self.stop_event.is_set,
-                    progress_callback=self.progress.emit,
-                )
-            self.completed.emit(success_count, self.stop_event.is_set())
-        except Exception as error:
-            self.failed.emit(f"任务异常：{error}")
-        finally:
-            self.done.emit()
-
-
-class DatabaseTestWorker(QObject):
-    """在线程中测试数据库连接，避免阻塞界面。"""
-
-    succeeded = Signal(str)
-    failed = Signal(str)
-    done = Signal()
-
-    def __init__(self, connection: DatabaseConnectionConfig):
-        super().__init__()
-        self.connection = connection
-
-    @Slot()
-    def run(self) -> None:
-        """测试连接并发送简短结果。"""
-        try:
-            self.succeeded.emit(test_database_connection(self.connection))
-        except Exception as error:
-            self.failed.emit(str(error))
-        finally:
-            self.done.emit()
-
-
-class ChannelSourceUpdateWorker(QObject):
-    """在后台从日志库更新账号渠道参数缓存。"""
-
-    succeeded = Signal(str, object)
-    failed = Signal(str, str)
-    done = Signal()
-
-    def __init__(
-        self,
-        environment: str,
-        connection: DatabaseConnectionConfig,
-    ) -> None:
-        super().__init__()
-        self.environment = environment
-        self.connection = connection
-
-    @Slot()
-    def run(self) -> None:
-        try:
-            sources = fetch_channel_sources(self.environment, self.connection)
-            saved_sources = save_channel_sources(self.environment, sources)
-            self.succeeded.emit(self.environment, saved_sources)
-        except Exception as error:
-            self.failed.emit(self.environment, str(error))
-        finally:
-            self.done.emit()
-
-
-class ApkActionWorker(QObject):
-    """在后台执行单个移动设备操作，避免阻塞界面。"""
-
-    succeeded = Signal(object)
-    failed = Signal(str)
-    done = Signal()
-
-    def __init__(self, action: Callable[[], object]) -> None:
-        super().__init__()
-        self.action = action
-
-    @Slot()
-    def run(self) -> None:
-        try:
-            self.succeeded.emit(self.action())
-        except Exception as error:
-            self.failed.emit(str(error))
-        finally:
-            self.done.emit()
-
-
-class AndroidLogWorker(QObject):
-    """在独立线程中持续转发 ADB Logcat 输出。"""
-
-    output = Signal(str)
-    failed = Signal(str)
-    done = Signal()
-
-    def __init__(self, config: LogcatCaptureConfig) -> None:
-        super().__init__()
-        self.capture = AndroidLogCapture(config, self.output.emit)
-
-    def request_stop(self) -> None:
-        self.capture.request_stop()
-
-    @Slot()
-    def run(self) -> None:
-        try:
-            self.capture.run()
-        except Exception as error:
-            if not self.capture.cancel_requested.is_set():
-                self.failed.emit(str(error))
-        finally:
-            self.done.emit()
-
-
-# 数据库连接弹窗
-class DatabaseConnectionDialog(QDialog):
-    """编辑单个环境的 SSH 数据库连接。"""
-
-    def __init__(
-        self,
-        environment: str,
-        connection: DatabaseConnectionConfig,
-        private_keys: Dict[str, SshPrivateKey],
-        parent: QWidget,
-    ):
-        super().__init__(parent)
-        self.environment = environment
-        self.saved_connection: Optional[DatabaseConnectionConfig] = None
-        self.test_thread: Optional[QThread] = None
-        self.test_worker: Optional[DatabaseTestWorker] = None
-        self.setWindowTitle(f"数据库连接 · {environment}")
-        self.setModal(True)
-        self.resize(640, 650)
-        self.setMinimumSize(560, 600)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(14)
-
-        title = QLabel(f"{environment} · SSH 数据库连接")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
-        description = QLabel(
-            "SSH 仅使用导入的私钥文件；不使用 SSH 密码、Agent 或自动密钥搜索。"
-        )
-        description.setObjectName("fieldHint")
-        description.setWordWrap(True)
-        layout.addWidget(description)
-
-        form = QGridLayout()
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(11)
-        form.setColumnStretch(1, 1)
-
-        self.ssh_host = QLineEdit(connection.ssh_host)
-        self.ssh_host.setPlaceholderText("SSH 跳板机地址")
-        self._add_row(form, 0, "SSH 主机", self.ssh_host)
-
-        self.ssh_port = self._port_spin(connection.ssh_port)
-        self._add_row(form, 1, "SSH 端口", self.ssh_port)
-
-        self.ssh_username = QLineEdit(connection.ssh_username)
-        self.ssh_username.setPlaceholderText("SSH 用户名")
-        self._add_row(form, 2, "SSH 用户", self.ssh_username)
-
-        self.ssh_private_key = QComboBox()
-        for key in private_keys.values():
-            self.ssh_private_key.addItem(key.name, key.key_id)
-        if self.ssh_private_key.count() == 0:
-            self.ssh_private_key.addItem("请先在“环境与参数”中导入私钥", None)
-            self.ssh_private_key.setEnabled(False)
-        selected_key = self.ssh_private_key.findData(
-            connection.ssh_private_key_id
-        )
-        if selected_key >= 0:
-            self.ssh_private_key.setCurrentIndex(selected_key)
-        self._add_row(form, 3, "SSH 私钥", self.ssh_private_key)
-
-        self.database_host = QLineEdit(connection.database_host)
-        self.database_host.setPlaceholderText("SSH 服务器可访问的数据库地址")
-        self._add_row(form, 4, "数据库主机", self.database_host)
-
-        self.database_port = self._port_spin(connection.database_port)
-        self._add_row(form, 5, "数据库端口", self.database_port)
-
-        self.database_name = QLineEdit(connection.database_name)
-        self._add_row(form, 6, "数据库名称", self.database_name)
-
-        self.log_database_name = QLineEdit(
-            connection.log_database_name
-            or log_database_name_for_environment(environment, connection)
-        )
-        self.log_database_name.setPlaceholderText("渠道参数所在的日志库")
-        self._add_row(form, 7, "日志库名称", self.log_database_name)
-
-        self.database_username = QLineEdit(connection.database_username)
-        self._add_row(form, 8, "数据库用户", self.database_username)
-
-        self.database_password = QLineEdit(connection.database_password)
-        self.database_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self._add_row(form, 9, "数据库密码", self.database_password)
-        layout.addLayout(form)
-
-        self.connection_status = QLabel("可先测试连接，确认无误后保存。")
-        self.connection_status.setObjectName("connectionStatus")
-        self.connection_status.setWordWrap(True)
-        layout.addWidget(self.connection_status)
-        layout.addStretch()
-
-        buttons = QHBoxLayout()
-        self.cancel_button = QPushButton("取消")
-        self.cancel_button.setObjectName("secondaryButton")
-        self.cancel_button.clicked.connect(self.reject)
-        buttons.addWidget(self.cancel_button)
-        buttons.addStretch()
-        self.test_button = QPushButton("测试连接")
-        self.test_button.setObjectName("secondaryButton")
-        self.test_button.clicked.connect(self._test_connection)
-        buttons.addWidget(self.test_button)
-        self.save_button = QPushButton("保存")
-        self.save_button.setObjectName("primaryButton")
-        self.save_button.clicked.connect(self._save)
-        buttons.addWidget(self.save_button)
-        layout.addLayout(buttons)
-
-        self.editable_widgets = [
-            self.ssh_host,
-            self.ssh_port,
-            self.ssh_username,
-            self.ssh_private_key,
-            self.database_host,
-            self.database_port,
-            self.database_name,
-            self.log_database_name,
-            self.database_username,
-            self.database_password,
-            self.cancel_button,
-            self.test_button,
-            self.save_button,
-        ]
-
-    @staticmethod
-    def _port_spin(value: int) -> QSpinBox:
-        widget = NumberInput()
-        widget.setRange(1, 65535)
-        widget.setValue(value)
-        widget.setGroupSeparatorShown(True)
-        return widget
-
-    @staticmethod
-    def _add_row(
-        layout: QGridLayout,
-        row: int,
-        label_text: str,
-        widget: QWidget,
-    ) -> None:
-        label = QLabel(label_text)
-        label.setObjectName("fieldLabel")
-        label.setFixedWidth(96)
-        label.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
-        layout.addWidget(label, row, 0)
-        layout.addWidget(widget, row, 1)
-
-    def connection(self) -> DatabaseConnectionConfig:
-        """把当前表单整理为连接配置。"""
-        selected_key_id = self.ssh_private_key.currentData()
-        return DatabaseConnectionConfig(
-            ssh_host=self.ssh_host.text().strip(),
-            ssh_port=self.ssh_port.value(),
-            ssh_username=self.ssh_username.text().strip(),
-            ssh_private_key_id=selected_key_id or "",
-            database_host=self.database_host.text().strip(),
-            database_port=self.database_port.value(),
-            database_name=self.database_name.text().strip(),
-            log_database_name=self.log_database_name.text().strip(),
-            database_username=self.database_username.text().strip(),
-            database_password=self.database_password.text(),
-        )
-
-    @Slot()
-    def _save(self) -> None:
-        """校验并保存当前环境连接。"""
-        connection = self.connection()
-        try:
-            self.saved_connection = save_database_connection(
-                self.environment,
-                connection,
-            )
-        except (OSError, ValueError) as error:
-            QMessageBox.critical(self, "保存失败", str(error))
-            return
-        self.accept()
-
-    @Slot()
-    def _test_connection(self) -> None:
-        """异步测试当前表单中的连接。"""
-        if self.test_thread and self.test_thread.isRunning():
-            return
-        connection = self.connection()
-        try:
-            validate_database_connection(connection)
-        except ValueError as error:
-            QMessageBox.critical(self, "参数错误", str(error))
-            return
-
-        self._set_testing(True)
-        self.connection_status.setText("正在通过 SSH 私钥建立连接…")
-        self.test_thread = QThread(self)
-        self.test_worker = DatabaseTestWorker(connection)
-        self.test_worker.moveToThread(self.test_thread)
-        self.test_thread.started.connect(self.test_worker.run)
-        self.test_worker.succeeded.connect(self.connection_status.setText)
-        self.test_worker.failed.connect(
-            lambda message: self.connection_status.setText(
-                f"连接失败：{message or '请检查 SSH 与数据库配置'}"
-            )
-        )
-        self.test_worker.done.connect(self.test_thread.quit)
-        self.test_worker.done.connect(self.test_worker.deleteLater)
-        self.test_thread.finished.connect(self._test_finished)
-        self.test_thread.finished.connect(self.test_thread.deleteLater)
-        self.test_thread.start()
-
-    @Slot()
-    def _test_finished(self) -> None:
-        self.test_worker = None
-        self.test_thread = None
-        self._set_testing(False)
-
-    def _set_testing(self, testing: bool) -> None:
-        for widget in self.editable_widgets:
-            widget.setEnabled(not testing)
-
-    def reject(self) -> None:
-        if self.test_thread and self.test_thread.isRunning():
-            QMessageBox.information(self, "正在测试连接", "连接测试结束后才能关闭。")
-            return
-        super().reject()
-
-    def closeEvent(self, event: QCloseEvent) -> None:
-        if self.test_thread and self.test_thread.isRunning():
-            QMessageBox.information(self, "正在测试连接", "连接测试结束后才能关闭。")
-            event.ignore()
-            return
-        event.accept()
-
-
-class SqlTemplateDialog(QDialog):
-    """新增或编辑一条可复用 SQL 模板。"""
-
-    def __init__(
-        self,
-        parent: QWidget,
-        template: Optional[SqlTemplate] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.template = template
-        self.saved_template: Optional[SqlTemplate] = None
-        self.setWindowTitle("编辑 SQL 模板" if template else "新增 SQL 模板")
-        self.resize(760, 560)
-        self.setMinimumSize(620, 460)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(12)
-
-        title_label = QLabel("标题")
-        title_label.setObjectName("fieldLabel")
-        layout.addWidget(title_label)
-        self.title_input = QLineEdit(template.title if template else "")
-        self.title_input.setPlaceholderText("例如：开通 VIP 测试数据")
-        layout.addWidget(self.title_input)
-
-        parameter_label = QLabel("添加参数")
-        parameter_label.setObjectName("fieldLabel")
-        layout.addWidget(parameter_label)
-        parameter_row = QHBoxLayout()
-        self.parameter_name_input = QLineEdit()
-        self.parameter_name_input.setPlaceholderText("例如：viplevel")
-        self.parameter_name_input.returnPressed.connect(self._add_parameter)
-        parameter_row.addWidget(self.parameter_name_input, 1)
-        add_parameter_button = QPushButton("添加声明")
-        add_parameter_button.setObjectName("secondaryButton")
-        add_parameter_button.clicked.connect(self._add_parameter)
-        parameter_row.addWidget(add_parameter_button)
-        layout.addLayout(parameter_row)
-
-        sql_label = QLabel("SQL（使用 @参数名=xxx; 声明运行参数）")
-        sql_label.setObjectName("fieldLabel")
-        layout.addWidget(sql_label)
-        self.sql_input = QPlainTextEdit()
-        self.sql_input.setPlaceholderText(
-            "@userid=xxx;\n"
-            "@viplevel=xxx;\n"
-            "UPDATE user SET vip_level=@viplevel WHERE id=@userid;"
-        )
-        self.sql_input.setPlainText(template.sql if template else "@userid=xxx;\n")
-        layout.addWidget(self.sql_input, 1)
-
-        hint = QLabel(
-            "参数名只能包含字母、数字和下划线，且不能以数字开头。"
-            "单次执行时会自动生成参数输入框；正文可直接引用 @参数名。"
-        )
-        hint.setObjectName("fieldHint")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        cancel_button = QPushButton("取消")
-        cancel_button.setObjectName("secondaryButton")
-        cancel_button.clicked.connect(self.reject)
-        buttons.addWidget(cancel_button)
-        save_button = QPushButton("保存")
-        save_button.setObjectName("primaryButton")
-        save_button.clicked.connect(self._save)
-        buttons.addWidget(save_button)
-        layout.addLayout(buttons)
-
-    @Slot()
-    def _add_parameter(self) -> None:
-        name = self.parameter_name_input.text().strip()
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-            QMessageBox.information(
-                self,
-                "参数名无效",
-                "参数名只能包含字母、数字和下划线，且不能以数字开头。",
-            )
-            return
-        existing = sql_template_parameter_names(
-            SqlTemplate("preview", "preview", self.sql_input.toPlainText())
-        )
-        if name.casefold() in {value.casefold() for value in existing}:
-            QMessageBox.information(self, "参数已存在", f"@{name} 已在 SQL 中声明。")
-            return
-        cursor = self.sql_input.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        cursor.insertText(f"@{name}=xxx;\n")
-        self.sql_input.setTextCursor(cursor)
-        self.parameter_name_input.clear()
-        self.sql_input.setFocus()
-
-    @Slot()
-    def _save(self) -> None:
-        try:
-            self.saved_template = save_sql_template(
-                self.title_input.text(),
-                self.sql_input.toPlainText(),
-                template_id=self.template.template_id if self.template else None,
-            )
-        except (OSError, ValueError) as error:
-            QMessageBox.critical(self, "保存失败", str(error))
-            return
-        self.accept()
-
-
-class ApiTemplateDialog(QDialog):
-    """新增或编辑一条可复用 API 请求模板。"""
-
-    def __init__(
-        self,
-        parent: QWidget,
-        template: Optional[ApiTemplate] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.template = template
-        self.saved_template: Optional[ApiTemplate] = None
-        self.setWindowTitle("编辑 API 模板" if template else "新增 API 模板")
-        self.resize(780, 680)
-        self.setMinimumSize(640, 560)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(10)
-
-        title_label = QLabel("标题")
-        title_label.setObjectName("fieldLabel")
-        layout.addWidget(title_label)
-        self.title_input = QLineEdit(template.title if template else "")
-        self.title_input.setPlaceholderText("例如：查询用户信息")
-        layout.addWidget(self.title_input)
-
-        request_row = QHBoxLayout()
-        self.method_input = QComboBox()
-        self.method_input.addItems(["GET", "POST", "PUT", "PATCH", "DELETE"])
-        if template:
-            self.method_input.setCurrentText(template.method)
-        self.method_input.setFixedWidth(110)
-        request_row.addWidget(self.method_input)
-        self.url_input = QLineEdit(template.url if template else "")
-        self.url_input.setPlaceholderText("/v1/user/{{userid}}")
-        request_row.addWidget(self.url_input, 1)
-        layout.addLayout(request_row)
-
-        headers_label = QLabel("Headers（JSON 对象）")
-        headers_label.setObjectName("fieldLabel")
-        layout.addWidget(headers_label)
-        self.headers_input = QPlainTextEdit()
-        self.headers_input.setPlaceholderText(
-            '{"Content-Type":"application/json","Authorization":"Bearer {{token}}"}'
-        )
-        self.headers_input.setPlainText(template.headers if template else "{}")
-        self.headers_input.setMaximumHeight(130)
-        layout.addWidget(self.headers_input)
-
-        body_label = QLabel("Body（可留空）")
-        body_label.setObjectName("fieldLabel")
-        layout.addWidget(body_label)
-        self.body_input = QPlainTextEdit()
-        self.body_input.setPlaceholderText('{"user_id":{{userid}}}')
-        self.body_input.setPlainText(template.body if template else "")
-        layout.addWidget(self.body_input, 1)
-
-        timeout_row = QHBoxLayout()
-        timeout_label = QLabel("超时时间（秒）")
-        timeout_label.setObjectName("fieldLabel")
-        timeout_row.addWidget(timeout_label)
-        self.timeout_input = NumberInput()
-        self.timeout_input.setRange(1, 300)
-        self.timeout_input.setValue(template.timeout if template else 30)
-        self.timeout_input.setFixedWidth(110)
-        timeout_row.addWidget(self.timeout_input)
-        timeout_row.addStretch()
-        layout.addLayout(timeout_row)
-
-        hint = QLabel(
-            "接口路径以 / 开头时会自动使用发送页所选环境的 domain；完整 URL 固定域名。"
-            "路径、Headers 和 Body 均可使用 {{参数名}}。"
-        )
-        hint.setObjectName("fieldHint")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        cancel_button = QPushButton("取消")
-        cancel_button.setObjectName("secondaryButton")
-        cancel_button.clicked.connect(self.reject)
-        buttons.addWidget(cancel_button)
-        save_button = QPushButton("保存")
-        save_button.setObjectName("primaryButton")
-        save_button.clicked.connect(self._save)
-        buttons.addWidget(save_button)
-        layout.addLayout(buttons)
-
-    @Slot()
-    def _save(self) -> None:
-        try:
-            self.saved_template = save_api_template(
-                self.title_input.text(),
-                self.method_input.currentText(),
-                self.url_input.text(),
-                self.headers_input.toPlainText(),
-                self.body_input.toPlainText(),
-                self.timeout_input.value(),
-                template_id=self.template.template_id if self.template else None,
-            )
-        except (OSError, ValueError) as error:
-            QMessageBox.critical(self, "保存失败", str(error))
-            return
-        self.accept()
-
-
-STEP_TYPE_LABELS = {
-    "sql": "SQL",
-    "api": "API",
-    "extract": "提取变量",
-    "assert": "断言",
-}
-ASSERT_OPERATOR_LABELS = {
-    "equals": "等于",
-    "not_equals": "不等于",
-    "exists": "字段存在",
-    "not_exists": "字段不存在",
-    "contains": "包含",
-    "greater_than": "大于",
-    "less_than": "小于",
-}
-
-
-class ScenarioStepDialog(QDialog):
-    """新增或编辑一个场景步骤。"""
-
-    def __init__(
-        self,
-        parent: QWidget,
-        step_type: str,
-        sql_templates: list[SqlTemplate],
-        api_templates: list[ApiTemplate],
-        step: Optional[ScenarioStep] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.step_type = step_type
-        self.original_step = step
-        self.saved_step: Optional[ScenarioStep] = None
-        self.setWindowTitle(
-            f"{'编辑' if step else '新增'}{STEP_TYPE_LABELS[step_type]}步骤"
-        )
-        self.resize(540, 330)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(11)
-
-        title_label = QLabel("步骤标题")
-        title_label.setObjectName("fieldLabel")
-        layout.addWidget(title_label)
-        default_title = STEP_TYPE_LABELS[step_type]
-        self.title_input = QLineEdit(step.title if step else default_title)
-        layout.addWidget(self.title_input)
-
-        config = step.config if step else {}
-        if step_type == "sql":
-            label = QLabel("SQL 模板")
-            label.setObjectName("fieldLabel")
-            layout.addWidget(label)
-            self.template_input = SearchableComboBox()
-            for template in sql_templates:
-                self.template_input.addItem(template.title, template.template_id)
-            selected = self.template_input.findData(config.get("template_id"))
-            if selected >= 0:
-                self.template_input.setCurrentIndex(selected)
-            layout.addWidget(self.template_input)
-        elif step_type == "api":
-            label = QLabel("API 模板")
-            label.setObjectName("fieldLabel")
-            layout.addWidget(label)
-            self.template_input = SearchableComboBox()
-            for template in api_templates:
-                self.template_input.addItem(
-                    f"{template.method} · {template.title}",
-                    template.template_id,
-                )
-            selected = self.template_input.findData(config.get("template_id"))
-            if selected >= 0:
-                self.template_input.setCurrentIndex(selected)
-            layout.addWidget(self.template_input)
-        elif step_type == "extract":
-            path_label = QLabel("来源字段路径")
-            path_label.setObjectName("fieldLabel")
-            layout.addWidget(path_label)
-            self.path_input = QLineEdit(str(config.get("path", "")))
-            self.path_input.setPlaceholderText("例如：response.data.order_id")
-            layout.addWidget(self.path_input)
-            variable_label = QLabel("保存为变量")
-            variable_label.setObjectName("fieldLabel")
-            layout.addWidget(variable_label)
-            self.variable_input = QLineEdit(str(config.get("variable", "")))
-            self.variable_input.setPlaceholderText("例如：order_id")
-            layout.addWidget(self.variable_input)
-        else:
-            path_label = QLabel("实际值字段路径")
-            path_label.setObjectName("fieldLabel")
-            layout.addWidget(path_label)
-            self.path_input = QLineEdit(str(config.get("path", "")))
-            self.path_input.setPlaceholderText("例如：response.code")
-            layout.addWidget(self.path_input)
-            assertion_row = QHBoxLayout()
-            self.operator_input = QComboBox()
-            for operator in ASSERT_OPERATORS:
-                self.operator_input.addItem(
-                    ASSERT_OPERATOR_LABELS[operator],
-                    operator,
-                )
-            selected = self.operator_input.findData(config.get("operator"))
-            if selected >= 0:
-                self.operator_input.setCurrentIndex(selected)
-            assertion_row.addWidget(self.operator_input)
-            self.expected_input = QLineEdit(
-                "" if config.get("expected") is None else str(config.get("expected"))
-            )
-            self.expected_input.setPlaceholderText("期望值，可使用 {{变量名}}")
-            assertion_row.addWidget(self.expected_input, 1)
-            layout.addLayout(assertion_row)
-            self.operator_input.currentIndexChanged.connect(
-                self._sync_expected_input
-            )
-            self._sync_expected_input()
-
-        self.cleanup_input = QCheckBox("作为清理步骤（前面失败后仍会执行）")
-        self.cleanup_input.setChecked(step.cleanup if step else False)
-        layout.addWidget(self.cleanup_input)
-        layout.addStretch()
-
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        cancel_button = QPushButton("取消")
-        cancel_button.setObjectName("secondaryButton")
-        cancel_button.clicked.connect(self.reject)
-        buttons.addWidget(cancel_button)
-        save_button = QPushButton("保存步骤")
-        save_button.setObjectName("primaryButton")
-        save_button.clicked.connect(self._save)
-        buttons.addWidget(save_button)
-        layout.addLayout(buttons)
-
-    def _sync_expected_input(self) -> None:
-        if not hasattr(self, "expected_input"):
-            return
-        self.expected_input.setEnabled(
-            self.operator_input.currentData() not in ("exists", "not_exists")
-        )
-
-    @Slot()
-    def _save(self) -> None:
-        title = self.title_input.text().strip()
-        if not title:
-            QMessageBox.critical(self, "参数错误", "步骤标题不能为空")
-            return
-        if self.step_type in ("sql", "api"):
-            template_id = self.template_input.currentData()
-            if not template_id:
-                QMessageBox.critical(self, "参数错误", "请先创建并选择模板")
-                return
-            config = {"template_id": template_id}
-        elif self.step_type == "extract":
-            path = self.path_input.text().strip()
-            variable = self.variable_input.text().strip()
-            if not path or not variable:
-                QMessageBox.critical(self, "参数错误", "字段路径和变量名不能为空")
-                return
-            config = {"path": path, "variable": variable}
-        else:
-            path = self.path_input.text().strip()
-            if not path:
-                QMessageBox.critical(self, "参数错误", "字段路径不能为空")
-                return
-            config = {
-                "path": path,
-                "operator": self.operator_input.currentData(),
-                "expected": self.expected_input.text(),
-            }
-        created = new_step(
-            self.step_type,
-            title,
-            config,
-            cleanup=self.cleanup_input.isChecked(),
-        )
-        self.saved_step = (
-            ScenarioStep(
-                self.original_step.step_id,
-                created.step_type,
-                created.title,
-                created.config,
-                created.cleanup,
-            )
-            if self.original_step
-            else created
-        )
-        self.accept()
-
-
-class FeatureScenarioDialog(QDialog):
-    """通过有序步骤列表新增或编辑功能场景。"""
-
-    def __init__(
-        self,
-        parent: QWidget,
-        sql_templates: list[SqlTemplate],
-        api_templates: list[ApiTemplate],
-        scenario: Optional[FeatureScenario] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.scenario = scenario
-        self.sql_templates = sql_templates
-        self.api_templates = api_templates
-        self.steps = list(scenario.steps) if scenario else []
-        self.saved_scenario: Optional[FeatureScenario] = None
-        self.setWindowTitle("编辑自动化场景" if scenario else "新增自动化场景")
-        self.resize(760, 610)
-        self.setMinimumSize(650, 500)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(10)
-        title_label = QLabel("场景标题")
-        title_label.setObjectName("fieldLabel")
-        layout.addWidget(title_label)
-        self.title_input = QLineEdit(scenario.title if scenario else "")
-        self.title_input.setPlaceholderText("例如：广告触发与状态校验")
-        layout.addWidget(self.title_input)
-
-        step_label = QLabel("执行步骤（按列表顺序运行）")
-        step_label.setObjectName("fieldLabel")
-        layout.addWidget(step_label)
-        self.step_list = QListWidget()
-        self.step_list.setObjectName("channelCodeList")
-        self.step_list.itemDoubleClicked.connect(lambda _item: self._edit_step())
-        layout.addWidget(self.step_list, 1)
-
-        add_buttons = QHBoxLayout()
-        for label, step_type in (
-            ("+ SQL", "sql"),
-            ("+ API", "api"),
-            ("+ 提取", "extract"),
-            ("+ 断言", "assert"),
-        ):
-            button = QPushButton(label)
-            button.setObjectName("secondaryButton")
-            button.clicked.connect(
-                lambda _checked=False, selected=step_type: self._add_step(selected)
-            )
-            add_buttons.addWidget(button)
-        add_buttons.addStretch()
-        layout.addLayout(add_buttons)
-
-        manage_buttons = QHBoxLayout()
-        edit_button = QPushButton("编辑步骤")
-        edit_button.setObjectName("secondaryButton")
-        edit_button.clicked.connect(self._edit_step)
-        manage_buttons.addWidget(edit_button)
-        delete_button = QPushButton("删除步骤")
-        delete_button.setObjectName("stopButton")
-        delete_button.clicked.connect(self._delete_step)
-        manage_buttons.addWidget(delete_button)
-        up_button = QPushButton("上移")
-        up_button.setObjectName("secondaryButton")
-        up_button.clicked.connect(lambda: self._move_step(-1))
-        manage_buttons.addWidget(up_button)
-        down_button = QPushButton("下移")
-        down_button.setObjectName("secondaryButton")
-        down_button.clicked.connect(lambda: self._move_step(1))
-        manage_buttons.addWidget(down_button)
-        manage_buttons.addStretch()
-        layout.addLayout(manage_buttons)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        cancel_button = QPushButton("取消")
-        cancel_button.setObjectName("secondaryButton")
-        cancel_button.clicked.connect(self.reject)
-        buttons.addWidget(cancel_button)
-        save_button = QPushButton("保存场景")
-        save_button.setObjectName("primaryButton")
-        save_button.clicked.connect(self._save)
-        buttons.addWidget(save_button)
-        layout.addLayout(buttons)
-        self._refresh_steps()
-
-    def _refresh_steps(self, selected: int = -1) -> None:
-        self.step_list.clear()
-        for index, step in enumerate(self.steps, 1):
-            cleanup = "清理 · " if step.cleanup else ""
-            self.step_list.addItem(
-                f"{index}. {cleanup}{STEP_TYPE_LABELS[step.step_type]} · {step.title}"
-            )
-        if self.steps:
-            self.step_list.setCurrentRow(
-                min(max(0, selected), len(self.steps) - 1)
-            )
-
-    def _add_step(self, step_type: str) -> None:
-        dialog = ScenarioStepDialog(
-            self,
-            step_type,
-            self.sql_templates,
-            self.api_templates,
-        )
-        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.saved_step:
-            self.steps.append(dialog.saved_step)
-            self._refresh_steps(len(self.steps) - 1)
-
-    def _edit_step(self) -> None:
-        row = self.step_list.currentRow()
-        if row < 0:
-            return
-        step = self.steps[row]
-        dialog = ScenarioStepDialog(
-            self,
-            step.step_type,
-            self.sql_templates,
-            self.api_templates,
-            step,
-        )
-        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.saved_step:
-            self.steps[row] = dialog.saved_step
-            self._refresh_steps(row)
-
-    def _delete_step(self) -> None:
-        row = self.step_list.currentRow()
-        if row < 0:
-            return
-        self.steps.pop(row)
-        self._refresh_steps(row)
-
-    def _move_step(self, offset: int) -> None:
-        row = self.step_list.currentRow()
-        target = row + offset
-        if row < 0 or target < 0 or target >= len(self.steps):
-            return
-        self.steps[row], self.steps[target] = self.steps[target], self.steps[row]
-        self._refresh_steps(target)
-
-    @Slot()
-    def _save(self) -> None:
-        try:
-            self.saved_scenario = save_feature_scenario(
-                self.title_input.text(),
-                self.steps,
-                scenario_id=self.scenario.scenario_id if self.scenario else None,
-            )
-        except (OSError, ValueError) as error:
-            QMessageBox.critical(self, "保存失败", str(error))
-            return
-        self.accept()
-
-
-class ApkDropZone(QFrame):
-    """接收单个本地 APK，并把文件路径交给现有缓存流程。"""
-
-    fileDropped = Signal(str)
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("apkDropZone")
-        self.setAcceptDrops(True)
-        self.setProperty("dragActive", False)
-        self.setMinimumHeight(44)
-        self.setMaximumHeight(52)
-        self.setToolTip("仅支持拖入一个本地 APK 文件")
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 6, 12, 6)
-        self.hint = QLabel("拖拽 APK 到这里")
-        self.hint.setObjectName("apkDropHint")
-        self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.hint)
-
-    @staticmethod
-    def apk_path_from_mime_data(mime_data: object) -> str:
-        """从拖拽数据中提取唯一且存在的本地 APK 路径。"""
-        if not mime_data or not mime_data.hasUrls():
-            return ""
-        urls = mime_data.urls()
-        if len(urls) != 1 or not urls[0].isLocalFile():
-            return ""
-        path = Path(urls[0].toLocalFile())
-        if path.suffix.lower() != ".apk" or not path.is_file():
-            return ""
-        return str(path)
-
-    def _set_drag_active(self, active: bool) -> None:
-        if self.property("dragActive") == active:
-            return
-        self.setProperty("dragActive", active)
-        self.style().unpolish(self)
-        self.style().polish(self)
-
-    def set_selected_path(self, path: str) -> None:
-        self.hint.setText(
-            f"已选择 · {Path(path).name}" if path else "拖拽 APK 到这里"
-        )
-
-    def dragEnterEvent(self, event) -> None:
-        if self.apk_path_from_mime_data(event.mimeData()):
-            self._set_drag_active(True)
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dragLeaveEvent(self, event) -> None:
-        self._set_drag_active(False)
-        event.accept()
-
-    def dropEvent(self, event) -> None:
-        path = self.apk_path_from_mime_data(event.mimeData())
-        self._set_drag_active(False)
-        if not path:
-            event.ignore()
-            return
-        self.fileDropped.emit(path)
-        event.acceptProposedAction()
-
-
-class CachedApkDialog(QDialog):
-    """编辑缓存安装包的名称、归因链接和备注。"""
-
-    def __init__(self, package: CachedApk | CachedIpa, parent: QWidget) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("编辑缓存安装包")
-        self.setModal(True)
-        self.resize(560, 330)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(12)
-
-        title = QLabel("编辑缓存安装包")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
-
-        form = QGridLayout()
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(10)
-        self.name_input = QLineEdit(package.name)
-        self.attribution_input = QPlainTextEdit(package.attribution)
-        self.attribution_input.setObjectName("longTextInput")
-        self.attribution_input.setFixedHeight(90)
-        self.attribution_input.setPlaceholderText("https://...")
-        self.note_input = QLineEdit(package.note)
-        self.note_input.setPlaceholderText("例如：渠道、环境或版本说明")
-        WorkflowWindow._add_form_row(form, 0, "安装包名称", self.name_input)
-        WorkflowWindow._add_form_row(form, 1, "归因链接", self.attribution_input)
-        WorkflowWindow._add_form_row(form, 2, "备注", self.note_input)
-        layout.addLayout(form)
-        layout.addStretch()
-
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        cancel = QPushButton("取消")
-        cancel.setObjectName("secondaryButton")
-        cancel.clicked.connect(self.reject)
-        buttons.addWidget(cancel)
-        save = QPushButton("保存修改")
-        save.setObjectName("primaryButton")
-        save.clicked.connect(self.accept)
-        buttons.addWidget(save)
-        layout.addLayout(buttons)
-
-    def values(self) -> tuple[str, str, str]:
-        return (
-            self.name_input.text().strip(),
-            self.attribution_input.toPlainText().strip(),
-            self.note_input.text().strip(),
-        )
-
-
-# 主窗口
 class WorkflowWindow(QMainWindow):
     """Termius 风格的自动化控制台主窗口。"""
 
@@ -5133,19 +3534,7 @@ class WorkflowWindow(QMainWindow):
         widget: QWidget,
         suffix: str = "",
     ) -> QLabel:
-        label = QLabel(label_text)
-        label.setObjectName("fieldLabel")
-        label.setFixedWidth(100)
-        label.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
-        layout.addWidget(label, row, 0)
-        layout.addWidget(widget, row, 1)
-        if suffix:
-            hint = QLabel(suffix)
-            hint.setObjectName("fieldHint")
-            layout.addWidget(hint, row, 2)
-        return label
+        return add_form_row(layout, row, label_text, widget, suffix)
 
     @Slot(bool)
     def _toggle_random_inputs(self, enabled: bool) -> None:
@@ -5979,10 +4368,6 @@ class WorkflowWindow(QMainWindow):
             )
             self.apk_table.setItem(row, 2, attribution_item)
 
-            actions = QWidget()
-            action_layout = QHBoxLayout(actions)
-            action_layout.setContentsMargins(4, 3, 4, 3)
-            action_layout.setSpacing(5)
             specs = (
                 ("安装", lambda pid=package.package_id: self._install_cached_apk(pid, False), True),
                 ("归因", lambda pid=package.package_id: self._attribute_cached_apk(pid), bool(package.attribution)),
@@ -5990,15 +4375,7 @@ class WorkflowWindow(QMainWindow):
                 ("编辑", lambda pid=package.package_id: self._edit_cached_apk(pid), True),
                 ("移除", lambda pid=package.package_id: self._remove_cached_apk(pid), True),
             )
-            for label, callback, enabled in specs:
-                button = QPushButton(label)
-                button.setObjectName(
-                    "primaryButton" if label == "归因+安装" else "secondaryButton"
-                )
-                button.setEnabled(enabled)
-                button.clicked.connect(lambda _checked=False, fn=callback: fn())
-                action_layout.addWidget(button)
-            self.apk_table.setCellWidget(row, 3, actions)
+            self.apk_table.setCellWidget(row, 3, action_button_row(specs))
             self.apk_table.setRowHeight(row, 54)
 
     def _cached_apk_by_id(self, package_id: str) -> Optional[CachedApk]:
@@ -6065,7 +4442,10 @@ class WorkflowWindow(QMainWindow):
 
     @Slot()
     def _refresh_android_devices(self) -> None:
-        if self.current_section != 6 or self._is_apk_busy():
+        if (
+            self.current_section != SECTION_INDEX["Android 安装"]
+            or self._is_apk_busy()
+        ):
             return
         current_serial = str(self.apk_device_combo.currentData() or "")
         self._run_apk_action(
@@ -6394,10 +4774,6 @@ class WorkflowWindow(QMainWindow):
             )
             self.ipa_table.setItem(row, 2, attribution_item)
 
-            actions = QWidget()
-            action_layout = QHBoxLayout(actions)
-            action_layout.setContentsMargins(4, 3, 4, 3)
-            action_layout.setSpacing(5)
             specs = (
                 ("安装", lambda pid=package.package_id: self._install_cached_ipa(pid, False), True),
                 ("归因", lambda pid=package.package_id: self._attribute_cached_ipa(pid), bool(package.attribution)),
@@ -6405,15 +4781,7 @@ class WorkflowWindow(QMainWindow):
                 ("编辑", lambda pid=package.package_id: self._edit_cached_ipa(pid), True),
                 ("移除", lambda pid=package.package_id: self._remove_cached_ipa(pid), True),
             )
-            for label, callback, enabled in specs:
-                button = QPushButton(label)
-                button.setObjectName(
-                    "primaryButton" if label == "归因+安装" else "secondaryButton"
-                )
-                button.setEnabled(enabled)
-                button.clicked.connect(lambda _checked=False, fn=callback: fn())
-                action_layout.addWidget(button)
-            self.ipa_table.setCellWidget(row, 3, actions)
+            self.ipa_table.setCellWidget(row, 3, action_button_row(specs))
             self.ipa_table.setRowHeight(row, 54)
 
     def _cached_ipa_by_id(self, package_id: str) -> Optional[CachedIpa]:
@@ -6475,7 +4843,10 @@ class WorkflowWindow(QMainWindow):
 
     @Slot()
     def _refresh_ios_devices(self) -> None:
-        if self.current_section != 7 or self._is_ios_busy():
+        if (
+            self.current_section != SECTION_INDEX["iOS 安装"]
+            or self._is_ios_busy()
+        ):
             return
         current_udid = str(self.ios_device_combo.currentData() or "")
         self._run_ios_action(
@@ -6751,7 +5122,7 @@ class WorkflowWindow(QMainWindow):
     @Slot()
     def _refresh_app_log_devices(self) -> None:
         if (
-            self.current_section != 8
+            self.current_section != SECTION_INDEX["Android 日志"]
             or self._is_app_log_query_busy()
             or self._is_app_log_running()
         ):
@@ -6996,18 +5367,20 @@ class WorkflowWindow(QMainWindow):
     # 参数维护
     def _switch_section(self, index: int) -> None:
         self.current_section = index
-        if index < len(self.navigation_buttons):
+        if 0 <= index < len(SECTION_INFO):
             self.navigation_buttons[index].setChecked(True)
             _group, title, description = SECTION_INFO[index]
             self.page_title.setText(title)
             self.page_description.setText(description)
-        if index == 0:
-            self.content_stack.setCurrentIndex(0)
+        else:
+            return
+
+        self.content_stack.setCurrentIndex(SECTION_CONTENT_INDEX[title])
+        if title == "账号生成":
             self.settings_stack.setCurrentIndex(0)
             self.settings_title.setText("账号生成设置")
             self._on_account_creation_mode_changed()
-        elif index == 1:
-            self.content_stack.setCurrentIndex(0)
+        elif title == "锦标赛造数":
             self.settings_stack.setCurrentIndex(1)
             self.settings_title.setText("锦标赛造数设置")
             self.mode_hint.setText(
@@ -7015,37 +5388,18 @@ class WorkflowWindow(QMainWindow):
             )
             self.start_button.setText("生成锦标赛数据")
             self.session_title.setText("TOURNAMENT DATA")
-        elif index == 2:
-            self.content_stack.setCurrentIndex(8)
-        elif index == 3:
-            self.content_stack.setCurrentIndex(9)
-        elif index == 4:
-            self.content_stack.setCurrentIndex(2)
-        elif index == 5:
-            self.content_stack.setCurrentIndex(3)
-        elif index == 6:
-            self.content_stack.setCurrentIndex(4)
-        elif index == 7:
-            self.content_stack.setCurrentIndex(5)
+
+        if title == "Android 安装":
             QTimer.singleShot(0, self._refresh_android_devices)
-        elif index == 8:
-            self.content_stack.setCurrentIndex(6)
+        elif title == "iOS 安装":
             QTimer.singleShot(0, self._refresh_ios_devices)
-        elif index == 9:
-            self.content_stack.setCurrentIndex(7)
+        elif title == "Android 日志":
             if not self.app_log_devices:
                 QTimer.singleShot(0, self._refresh_app_log_devices)
-        elif index == 10:
-            self.content_stack.setCurrentIndex(10)
-        elif index == 11:
-            self.content_stack.setCurrentIndex(11)
-        elif index == 12:
-            self.content_stack.setCurrentIndex(12)
-        else:
-            self.content_stack.setCurrentIndex(1)
-        if index == 0:
+
+        if title == "账号生成":
             self._refresh_bound_sql_parameter_inputs("account")
-        elif index == 1:
+        elif title == "锦标赛造数":
             self._refresh_bound_sql_parameter_inputs("tournament")
         elif hasattr(self, "bound_sql_parameter_panel"):
             self.bound_sql_parameter_panel.hide()

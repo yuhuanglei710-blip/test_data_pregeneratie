@@ -14,12 +14,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, Iterator, Tuple, Union
 
+from .local_tool_config import SSH_PRIVATE_KEYS_FILE
 from .user import SUPPORTED_ENVIRONMENTS
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATABASE_CONNECTIONS_FILE = PROJECT_ROOT / "cache" / "database_connections.json"
-SSH_PRIVATE_KEYS_FILE = PROJECT_ROOT / "cache" / "ssh_private_keys.json"
 MAX_CONCURRENT_DATABASE_CONNECTIONS = 8
 _database_connection_slots = threading.BoundedSemaphore(
     MAX_CONCURRENT_DATABASE_CONNECTIONS
