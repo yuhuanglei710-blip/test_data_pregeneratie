@@ -2,13 +2,21 @@
 
 from enum import Enum
 
+try:  # Support package and direct script imports.
+    from .env_config import config_section
+except ImportError:  # pragma: no cover - compatibility for direct execution.
+    from env_config import config_section
+
+
+_PLATFORM_CONFIG = config_section("platform")
+
 
 class Platform(Enum):
     """支持的账号注册平台。"""
 
-    web = 1
-    android = 2
-    ios = 3
+    web = int(_PLATFORM_CONFIG["web"])
+    android = int(_PLATFORM_CONFIG["android"])
+    ios = int(_PLATFORM_CONFIG["ios"])
 
 
 class ComplianceStatus(Enum):

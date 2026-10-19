@@ -21,6 +21,9 @@ from PySide6.QtWidgets import (
 )
 
 
+ACTION_TABLE_ROW_HEIGHT = 48
+
+
 def add_form_row(
     layout: QGridLayout,
     row: int,

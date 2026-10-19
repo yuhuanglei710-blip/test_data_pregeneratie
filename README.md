@@ -15,7 +15,7 @@
 - `tools/`：时间戳等无业务依赖的工具。
 - `test/`：不访问网络的单元测试。
 - `cache/`：token 等临时缓存。
-- `*.env`：不同运行环境的本地配置，不提交到 Git。
+- `env.json`：运行环境、平台、下注和本地工具的统一配置。
 
 ## 安装
 
@@ -25,12 +25,21 @@
 pip install -r requirements.txt
 ```
 
-复制 `.env_example` 或新建对应环境文件，例如 `dev.env`：
+启动前检查根目录 `env.json`。前台和后台地址按环境集中配置：
 
-```dotenv
-domain="前台接口域名，例如 hdapi.ushdev.top"
-background_domain="后台接口域名，例如 hdadmin.ushdev.top"
+```json
+{
+  "environment": {
+    "dev": {
+      "domain": "前台接口域名",
+      "back_ground_url": "后台接口域名"
+    }
+  }
+}
 ```
+
+下注接口、Origin、游戏参数、默认单注和请求重试配置统一位于 `spin`；本地数据路径及旧系统
+迁移参数位于 `local`。程序不再读取 `.env`、`dev.env` 等传统环境文件。
 
 ## 使用
 
@@ -122,7 +131,7 @@ Channel Code、VIP 等级和 Advertising ID。查询用户时还会调用 `GetKy
 状态 `3` 显示为已通过，状态 `2` 显示为已失败。KYC 以用户数据中的开关展示，可通过
 `UpdateKycStatus` 在通过和失败间切换，业务键固定为 `10011`，更新成功后会重新读取最新状态。
 程序会复用已有后台登录逻辑，按所选环境自动获取认证 Token，无需在页面手动填写。
-所选环境需要在对应的 `*.env` 中配置 `background_domain`。
+所选环境需要在 `env.json` 的 `environment.<环境>.back_ground_url` 中配置后台地址。
 页面还支持通过所选环境的数据库连接，使用参数化 SQL 严格按 `user.id` 修改
 `vip_level`、`charge_total`、`money`、`withdraw_total`、`charge_times` 和
 `withdraw_times`。金额使用数据库原值“分”；保存前会列出实际变更并要求确认，未配置数据库
@@ -201,7 +210,7 @@ python -m base.tournment_test
 ```
 
 批量脚本会真实调用开发环境接口，并将成功创建的账号写入项目根目录下的
-`accounts.txt`。运行前请确认环境文件和脚本顶部的数量、金额、下注次数符合预期。
+`accounts.txt`。运行前请确认 `env.json` 和界面中的数量、金额、下注次数符合预期。
 
 注册默认使用精简日志；每次下注会输出一行紧凑的 JSON 结果。需要查看接口状态与完整
 响应时，可在代码调用中传入 `verbose=True`。失败响应会保留状态码和截断后的响应内容。
@@ -210,13 +219,12 @@ python -m base.tournment_test
 可以分别设置，默认都是 5。
 选择 `huidu` 灰度环境时，游戏 token 会从灰度 `self_game_url` 获取，网页 Origin、token
 缓存和游戏 session 也会按环境隔离，不会与测试环境混用。
-选择 `yy` 环境时，游戏 token 使用
-`https://yyapi.ushdev.top/v1/gamehall/self_game_url`，请求 Origin 和退出/收银地址使用
-`https://yyres.ushdev.top`，不会回退到个人服接口。
-所有环境的游戏 token 接口都会读取所选环境 `.env` 的 `domain`：`dev`、`huidu`、
+选择 `yy` 环境时，游戏 token 接口读取 `environment.yy.domain`，请求 Origin 和退出/收银
+地址读取 `spin.environments.yy.web_origin`，不会回退到个人服接口。
+所有环境的游戏 token 接口都会读取 `env.json` 中所选环境的 `domain`：`dev`、`huidu`、
 `yy` 和 `individual` 分别使用自己的前台 API。未配置的环境会直接报错，禁止
 静默回退到 dev 或个人服，避免把登录 Token 发送到错误服务。
-默认单次下注金额为 `1000` 美分，可通过 `bet_amount` 参数调整。
+默认单次下注金额读取 `spin.default_bet_cents`，也可通过 `bet_amount` 参数调整。
 
 ## 通用工具
 
@@ -224,7 +232,8 @@ python -m base.tournment_test
 UTC+8、UTC-8、相对时间及秒/毫秒值，并支持按小时计算偏移。
 
 “SSH 主机”支持本地维护主机、密码或私钥认证、连接测试、执行远程命令，以及读取和修改
-Linux 主机时间。私钥复用“环境与参数”页的 SSH 私钥库，也可以在新增/编辑主机时导入；
+Linux 主机时间。主机时间页完整集成时间戳解析和偏移工具，支持 3 秒自动刷新、秒/毫秒复制；
+首次读取会将主机时间填入编辑器，后续自动刷新不会覆盖正在编辑的目标时间。私钥复用“环境与参数”页的 SSH 私钥库，也可以在新增/编辑主机时导入；
 主机信息保存在 `cache/ssh_hosts.json`。SSH 不使用 Agent 或自动密钥搜索。修改远程系统时间
 通常需要 root 或等效权限。
 
@@ -232,7 +241,7 @@ Linux 主机时间。私钥复用“环境与参数”页的 SSH 私钥库，也
 AppKey 等任意键值字段，数据保存在 `cache/quick_access.json`。这两个本地 JSON 文件均已由
 `cache/` 规则排除版本控制，但字段和密码仍属于本机明文数据，请妥善保护项目目录。
 
-通用工具的数据文件位置统一在项目根目录 `.env` 中配置，包括 `TOOL_DATA_DIR`、
+通用工具的数据文件位置统一在项目根目录 `env.json` 的 `local` 对象中配置，包括 `TOOL_DATA_DIR`、
 `QUICK_ACCESS_FILE`、`SSH_HOSTS_FILE`、`SSH_PRIVATE_KEYS_FILE` 和 `SSH_PRIVATE_KEY_DIR`。
 从旧 Java 测试平台重新迁移数据时，配置 `LEGACY_TEST_TOOL_*` 后执行：
 
@@ -269,8 +278,8 @@ SQL 模板选择框支持按标题模糊检索；执行日志只输出模板名�
 “API 请求模板”页可按标题保存、检索、编辑和删除 HTTP 请求模板。模板支持
 `GET`、`POST`、`PUT`、`PATCH` 和 `DELETE`，可配置接口路径、JSON 格式的 Headers、
 Body 与请求超时时间。模板保存在本机 `cache/api_templates.json`（已排除版本控制）。
-发送页选择 `dev`、`huidu`、`yy` 或 `individual` 后，会读取对应 `.env` 文件中的
-`domain` 并自动拼接以 `/` 开头的接口路径；例如 `yy` 会使用 `https://yyapi.ushdev.top`。
+发送页选择 `dev`、`huidu`、`yy` 或 `individual` 后，会读取 `env.json` 中对应环境的
+`domain` 并自动拼接以 `/` 开头的接口路径。
 模板也可保存以 `http://` 或 `https://` 开头的完整 URL，此时域名固定，不随环境切换。
 
 URL、Headers 和 Body 均支持 `{{参数名}}` 占位符，例如：

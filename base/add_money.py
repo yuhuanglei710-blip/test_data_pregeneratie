@@ -3,19 +3,21 @@
 import os
 import threading
 import time
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 import jwt
 import requests
-from dotenv import dotenv_values
+
+try:  # Support package and direct script imports.
+    from .env_config import environment_config, required_string
+except ImportError:  # pragma: no cover - compatibility for direct execution.
+    from env_config import environment_config, required_string
 
 
 BASE_URL = os.getenv("ADMIN_BASE_URL", "https://admin.ushdev.top")
 USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 PASSWORD = os.getenv("ADMIN_PASSWORD", "us.1us.1")
 REQUEST_TIMEOUT = 10
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 _token_cache: Dict[str, str] = {}
 _token_lock = threading.Lock()
@@ -30,14 +32,14 @@ def _normalize_base_url(value: str) -> str:
 
 
 def base_url_for_environment(environment: str) -> str:
-    """从环境文件读取后台接口地址。"""
-    env_file = PROJECT_ROOT / f"{environment}.env"
-    domain = dotenv_values(env_file).get("background_domain")
-    if domain:
-        return _normalize_base_url(domain)
-    if environment == "dev":
-        return _normalize_base_url(BASE_URL)
-    raise RuntimeError(f"{env_file.name} 未配置 background_domain")
+    """从 ``env.json`` 读取后台接口地址。"""
+    config = environment_config(environment)
+    domain = required_string(
+        config,
+        "back_ground_url",
+        context=f"environment.{environment}",
+    )
+    return _normalize_base_url(domain)
 
 
 def _browser_headers(base_url: str = BASE_URL) -> Dict[str, str]:

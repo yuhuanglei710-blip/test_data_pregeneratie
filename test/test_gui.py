@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QMimeData, QThread, QTimer, QUrl
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 
 from base.apk_manager import ApkInstallResult, CachedApk
 from base.api_request import ApiTemplate
@@ -23,6 +23,8 @@ from base.player_tier import (
     TARGET_NET_PROFIT_TOP,
 )
 from base.sql_data import SqlTemplate
+from base.quick_access import QuickAccessLink
+from base.ssh_host import SshHostConfig, SshHostTime
 from gui import (
     QueueWriter,
     SECTION_CONTENT_INDEX,
@@ -30,6 +32,7 @@ from gui import (
     WorkflowWindow,
     configure_application_fonts,
 )
+from gui_widgets import ACTION_TABLE_ROW_HEIGHT
 
 
 class ApkConflictPromptTests(unittest.TestCase):
@@ -369,6 +372,99 @@ class ApkConflictPromptTests(unittest.TestCase):
                     self.assertEqual(
                         self.window.content_stack.currentIndex(), page_index
                     )
+
+    def test_tool_action_tables_leave_full_height_for_buttons(self) -> None:
+        ssh_workspace = self.window.ssh_host_workspace
+        ssh_workspace.hosts = [
+            SshHostConfig(name="开发机", host="127.0.0.1", username="root")
+        ]
+        with patch("tool_pages.load_ssh_private_keys", return_value={}):
+            ssh_workspace._refresh_hosts()
+
+        quick_workspace = self.window.quick_access_workspace
+        quick_workspace.links = [
+            QuickAccessLink(name="测试后台", url="https://example.test")
+        ]
+        quick_workspace._refresh()
+        self.app.processEvents()
+
+        for table in (ssh_workspace.table, quick_workspace.table):
+            with self.subTest(table=table):
+                self.assertGreaterEqual(
+                    table.rowHeight(0), ACTION_TABLE_ROW_HEIGHT
+                )
+                action_cell = table.cellWidget(0, 5)
+                self.assertIsNotNone(action_cell)
+                self.assertEqual(
+                    len(action_cell.findChildren(QPushButton)),
+                    4,
+                )
+
+    def test_ssh_time_page_keeps_full_timestamp_tool(self) -> None:
+        workspace = self.window.ssh_host_workspace
+        host = SshHostConfig(
+            name="开发机",
+            host="127.0.0.1",
+            username="root",
+        )
+        workspace.hosts = [host]
+        with patch("tool_pages.load_ssh_private_keys", return_value={}):
+            workspace._refresh_hosts()
+        workspace.time_host_combo.setCurrentIndex(
+            workspace.time_host_combo.findData(host.host_id)
+        )
+
+        first = SshHostTime("2024-01-01 00:00:00", 1704067200, 1704067200123)
+        workspace._show_remote_time(first)
+        panel = workspace.remote_timestamp_panel
+
+        self.assertEqual(workspace.tabs.count(), 3)
+        self.assertEqual(panel.result.epoch_seconds, 1704067200)
+        self.assertEqual(workspace.remote_epoch_seconds.text(), "1704067200")
+        self.assertEqual(
+            workspace.remote_epoch_milliseconds.text(),
+            "1704067200123",
+        )
+        self.assertEqual(
+            set(panel.offset_values),
+            {
+                "local_time",
+                "utc_plus_8",
+                "epoch_milliseconds",
+                "epoch_seconds",
+            },
+        )
+
+        panel.set_input("1704060000")
+        refreshed = SshHostTime("2024-01-01 00:00:03", 1704067203, 1704067203000)
+        workspace._show_remote_time(refreshed)
+        self.assertEqual(panel.result.epoch_seconds, 1704060000)
+
+    def test_ssh_time_auto_refresh_does_not_overlap_actions(self) -> None:
+        workspace = self.window.ssh_host_workspace
+        host = SshHostConfig(
+            name="开发机",
+            host="127.0.0.1",
+            username="root",
+        )
+        workspace.hosts = [host]
+        with patch("tool_pages.load_ssh_private_keys", return_value={}):
+            workspace._refresh_hosts()
+        workspace.tabs.setCurrentIndex(2)
+
+        with (
+            patch.object(workspace, "_load_remote_time") as load_time,
+            patch.object(workspace, "is_busy", return_value=False),
+        ):
+            workspace._auto_refresh_remote_time()
+            load_time.assert_called_once_with()
+
+        with (
+            patch.object(workspace, "_load_remote_time") as load_time,
+            patch.object(workspace, "is_busy", return_value=True),
+        ):
+            workspace._auto_refresh_remote_time()
+            load_time.assert_not_called()
 
     def test_api_selection_scaffolds_parameters_and_previews_request(self) -> None:
         template = ApiTemplate(

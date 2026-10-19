@@ -7,26 +7,32 @@ import random
 import string
 import threading
 import time
-from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import jwt
-from dotenv import dotenv_values
 
 try:  # Support ``python -m base.user``.
+    from .env_config import config_section, environment_config, required_string
     from .enums import Platform
 except ImportError:  # Support ``python base/user.py``.
+    from env_config import config_section, environment_config, required_string
     from enums import Platform
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SUPPORTED_ENVIRONMENTS = {
+_ENVIRONMENT_LABELS = {
     "dev": "测试环境",
     "huidu": "灰度环境",
     "yy": "运营环境",
     "individual": "个人服环境",
 }
-PLATFORM_NAMES = {1: "web", 2: "android", 3: "ios"}
+SUPPORTED_ENVIRONMENTS = {
+    name: _ENVIRONMENT_LABELS.get(name, name)
+    for name in config_section("environment")
+}
+PLATFORM_NAMES = {
+    int(value): str(name)
+    for name, value in config_section("platform").items()
+}
 
 DEFAULT_PASSWORD = "123456"
 DEFAULT_PASSWORD_HASH = "e10adc3949ba59abbe56e057f20f883e"
@@ -56,16 +62,15 @@ class User:
 
     @staticmethod
     def _load_domain(environment: str) -> str:
-        """从环境文件读取前台接口域名。"""
+        """从 ``env.json`` 读取前台接口域名。"""
         if environment not in SUPPORTED_ENVIRONMENTS:
             supported = ", ".join(SUPPORTED_ENVIRONMENTS)
             raise ValueError(f"不支持的环境 {environment!r}，可选值：{supported}")
-
-        env_file = PROJECT_ROOT / f"{environment}.env"
-        domain = dotenv_values(env_file).get("domain")
-        if not domain:
-            raise RuntimeError(f"未在 {env_file.name} 中配置 domain")
-        return domain
+        return required_string(
+            environment_config(environment),
+            "domain",
+            context=f"environment.{environment}",
+        )
 
     @staticmethod
     def _generate_email() -> str:

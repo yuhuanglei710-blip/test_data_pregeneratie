@@ -1,20 +1,24 @@
-"""从项目根目录 .env 加载通用工具的本地路径配置。"""
+"""从项目根目录 ``env.json`` 加载通用工具的本地路径配置。"""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-from dotenv import dotenv_values
+from .env_config import config_section
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_DOTENV = dotenv_values(PROJECT_ROOT / ".env")
+_LOCAL_CONFIG = config_section("local")
 
 
 def env_value(name: str, default: str = "") -> str:
-    """优先读取进程环境，其次读取根目录 .env。"""
-    return str(os.environ.get(name) or _DOTENV.get(name) or default).strip()
+    """优先读取进程环境，其次读取根目录 ``env.json``。"""
+    process_value = os.environ.get(name)
+    if process_value is not None:
+        return process_value.strip()
+    value = _LOCAL_CONFIG.get(name, default)
+    return str(value if value is not None else default).strip()
 
 
 def configured_path(name: str, default: str) -> Path:

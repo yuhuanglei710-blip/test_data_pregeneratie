@@ -1093,11 +1093,14 @@ class ApiRequestTests(unittest.TestCase):
             timeout=30,
         )
 
-    def test_environment_domain_is_loaded_from_env_file(self):
+    def test_environment_domain_is_loaded_from_json_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            env_file = f"{temp_dir}/yy.env"
+            env_file = f"{temp_dir}/env.json"
             with open(env_file, "w", encoding="utf-8") as stream:
-                stream.write("domain='yyapi.example.test'\n")
+                json.dump(
+                    {"environment": {"yy": {"domain": "yyapi.example.test"}}},
+                    stream,
+                )
 
             base_url = api_request.load_environment_api_base_url("yy", temp_dir)
 
@@ -1605,21 +1608,21 @@ class ApiParsingTests(unittest.TestCase):
         self.assertEqual(token, "dev-game-token")
         self.assertEqual(
             post.call_args.args[0],
-            "https://devapi.ushdev.top/v1/gamehall/self_game_url",
+            "https://dev.hotspin777.top/v1/gamehall/self_game_url",
         )
 
     def test_every_supported_spin_environment_uses_its_own_api_domain(self):
         expected = {
             "dev": (
-                "https://devapi.ushdev.top/v1/gamehall/self_game_url",
+                "https://dev.hotspin777.top/v1/gamehall/self_game_url",
                 "https://webnew.hotspin777.com",
             ),
             "huidu": (
-                "https://hdapi.ushdev.top/v1/gamehall/self_game_url",
+                "https://huidu.hotspin777.top/v1/gamehall/self_game_url",
                 "https://newhdweb.ushdev.top",
             ),
             "yy": (
-                "https://yyapi.ushdev.top/v1/gamehall/self_game_url",
+                "https://yy.hotspin777.top/v1/gamehall/self_game_url",
                 "https://yyres.ushdev.top",
             ),
             "individual": (
@@ -1660,7 +1663,7 @@ class ApiParsingTests(unittest.TestCase):
         request = post.call_args
         self.assertEqual(
             request.args[0],
-            "https://hdapi.ushdev.top/v1/gamehall/self_game_url",
+            "https://huidu.hotspin777.top/v1/gamehall/self_game_url",
         )
         self.assertEqual(
             request.kwargs["headers"]["Origin"],
@@ -1697,7 +1700,7 @@ class ApiParsingTests(unittest.TestCase):
         request = post.call_args
         self.assertEqual(
             request.args[0],
-            "https://yyapi.ushdev.top/v1/gamehall/self_game_url",
+            "https://yy.hotspin777.top/v1/gamehall/self_game_url",
         )
         self.assertEqual(
             request.kwargs["headers"]["Origin"],

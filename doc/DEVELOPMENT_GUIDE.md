@@ -18,7 +18,6 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-Copy-Item .env_example .env
 python main.py
 ```
 
@@ -31,20 +30,28 @@ python main.py
 
 界面能打开，就说明本地 Python 和 Qt 已经正常。数据库、后台接口、ADB 和 iPhone 驱动可以按实际开发任务再配置。
 
-## 2. 先分清两类配置文件
+## 2. 配置文件
 
-项目根目录存在两类 `.env` 文件，它们用途不同。
+项目根目录的 `env.json` 是统一配置入口，不再读取传统 `.env` 文件。
 
-| 文件 | 用途 | 常用字段 |
+| 配置段 | 用途 | 常用字段 |
 | --- | --- | --- |
-| `dev.env`、`huidu.env`、`yy.env`、`individual.env` | 某个业务环境的接口地址 | `domain`、`background_domain` |
-| `.env` | 本机工具数据和旧系统迁移配置 | `TOOL_DATA_DIR`、`QUICK_ACCESS_FILE`、`LEGACY_TEST_TOOL_*` |
+| `environment` | 各业务环境的接口地址 | `domain`、`back_ground_url` |
+| `platform` | 平台名称与协议数值 | `web`、`android`、`ios` |
+| `spin` | 游戏 Token 和下注请求参数 | `spin_api`、`default_bet_cents`、`environments` |
+| `local` | 本机工具数据和旧系统迁移配置 | `TOOL_DATA_DIR`、`QUICK_ACCESS_FILE`、`LEGACY_TEST_TOOL_*` |
 
 最小业务环境配置：
 
-```dotenv
-domain="前台 API 域名"
-background_domain="后台 API 域名"
+```json
+{
+  "environment": {
+    "dev": {
+      "domain": "前台 API 域名",
+      "back_ground_url": "后台 API 域名"
+    }
+  }
+}
 ```
 
 注意：
@@ -67,6 +74,7 @@ main.py
       ├─ api/background.py     后台管理接口
       └─ base/                 可测试的业务逻辑和本地存储
           ├─ user.py           注册、登录
+          ├─ env_config.py     env.json 读取与校验
           ├─ account_batch.py  批量/自定义账号创建
           ├─ add_money.py      加钱
           ├─ spin.py           游戏 Token 和下注
@@ -270,7 +278,8 @@ python -c "import sys, PySide6; print(sys.executable, PySide6.__version__)"
 
 ### 点击接口功能后提示环境未配置
 
-检查所选环境对应的 `<环境>.env`，不是根目录 `.env`。例如选择 `dev` 就检查 `dev.env`。
+检查根目录 `env.json` 的 `environment.<环境>`，前台接口使用 `domain`，后台接口使用
+`back_ground_url`；下注特有参数在 `spin` 配置段。
 
 ### 数据库连接失败
 

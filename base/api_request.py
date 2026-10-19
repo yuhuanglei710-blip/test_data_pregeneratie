@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 
 import requests
-from dotenv import dotenv_values
+
+try:  # Support package and direct script imports.
+    from .env_config import environment_config, required_string
+except ImportError:  # pragma: no cover - compatibility for direct execution.
+    from env_config import environment_config, required_string
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -323,11 +327,13 @@ def load_environment_api_base_url(
     environment: str,
     project_root: Union[str, Path] = PROJECT_ROOT,
 ) -> str:
-    """读取环境文件中的前台 API 域名并转换成基础 URL。"""
-    env_file = Path(project_root) / f"{environment}.env"
-    domain = str(dotenv_values(env_file).get("domain") or "").strip()
-    if not domain:
-        raise ValueError(f"{env_file.name} 未配置 domain")
+    """读取 ``env.json`` 中的前台 API 域名并转换成基础 URL。"""
+    config = environment_config(environment, project_root)
+    domain = required_string(
+        config,
+        "domain",
+        context=f"environment.{environment}",
+    )
     if domain.startswith(("http://", "https://")):
         return domain.rstrip("/")
     return f"https://{domain.rstrip('/')}"

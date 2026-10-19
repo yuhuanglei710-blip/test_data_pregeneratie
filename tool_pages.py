@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
-import time
 from typing import Callable, Optional
 
-from PySide6.QtCore import QObject, QThread, Qt, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QFont, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -26,6 +25,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QTableWidget,
@@ -57,6 +57,7 @@ from base.ssh_host import (
     set_ssh_host_time,
     test_ssh_host,
 )
+from gui_widgets import ACTION_TABLE_ROW_HEIGHT, action_button_row
 from tools.timestamp_tool import TimestampResult, offset_timestamp, parse_timestamp
 
 
@@ -160,6 +161,36 @@ class TimestampPanel(QWidget):
         )
         layout.addWidget(self.offset_result)
 
+        offset_grid = QGridLayout()
+        offset_grid.setHorizontalSpacing(12)
+        offset_grid.setVerticalSpacing(9)
+        self.offset_values: dict[str, QLabel] = {}
+        offset_fields = (
+            ("偏移后本地时间", "local_time"),
+            ("偏移后 UTC+8", "utc_plus_8"),
+            ("偏移后毫秒时间戳", "epoch_milliseconds"),
+            ("偏移后秒时间戳", "epoch_seconds"),
+        )
+        for row, (label_text, key) in enumerate(offset_fields):
+            label = QLabel(label_text)
+            label.setObjectName("fieldLabel")
+            offset_grid.addWidget(label, row, 0)
+            value = QLabel("—")
+            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            if key.startswith("epoch"):
+                value.setFont(QFont("Consolas", 10))
+            offset_grid.addWidget(value, row, 1)
+            copy_button = QPushButton("复制")
+            copy_button.setObjectName("secondaryButton")
+            copy_button.clicked.connect(
+                lambda _checked=False, field=key: self._copy_offset_result(field)
+            )
+            offset_grid.addWidget(copy_button, row, 2)
+            self.offset_values[key] = value
+        offset_grid.setColumnStretch(1, 1)
+        layout.addLayout(offset_grid)
+        self.offset_value: Optional[TimestampResult] = None
+
     def use_now(self) -> None:
         from time import time
 
@@ -186,24 +217,31 @@ class TimestampPanel(QWidget):
         for key, label in self.values.items():
             label.setText("—" if self.result is None else str(getattr(self.result, key)))
         self.offset_result.setText("偏移结果：—")
+        self.offset_value = None
+        for label in self.offset_values.values():
+            label.setText("—")
 
     def _copy_result(self, field: str) -> None:
         if self.result is not None:
             _copy_text(self, getattr(self.result, field))
 
+    def _copy_offset_result(self, field: str) -> None:
+        if self.offset_value is not None:
+            _copy_text(self, getattr(self.offset_value, field))
+
     def _apply_offset(self) -> None:
         if self.result is None:
             self.error.setText("请先输入有效时间")
             return
-        value = offset_timestamp(
+        self.offset_value = offset_timestamp(
             self.result.epoch_milliseconds,
             self.offset_hours.value(),
         )
         self.offset_result.setText(
-            "偏移结果："
-            f"{value.local_time}  ·  {value.utc_plus_8}\n"
-            f"毫秒 {value.epoch_milliseconds}  ·  秒 {value.epoch_seconds}"
+            f"偏移结果：已在原时间上偏移 {self.offset_hours.value()} 小时"
         )
+        for key, label in self.offset_values.items():
+            label.setText(str(getattr(self.offset_value, key)))
 
 
 class TimestampWorkspace(QWidget):
@@ -386,13 +424,18 @@ class SshHostWorkspace(QWidget):
         self.action_thread: Optional[QThread] = None
         self.action_worker: Optional[_ActionWorker] = None
         self.success_callback: Optional[Callable[[object], None]] = None
+        self.time_input_host_id = ""
+        self.auto_refresh_timer = QTimer(self)
+        self.auto_refresh_timer.setInterval(3000)
+        self.auto_refresh_timer.timeout.connect(self._auto_refresh_remote_time)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         self.tabs.addTab(self._build_hosts_tab(), "SSH 主机")
-        self.tabs.addTab(self._build_console_tab(), "命令与时间")
+        self.tabs.addTab(self._build_console_tab(), "命令控制台")
+        self.tabs.addTab(self._build_time_tab(), "主机时间")
         self._refresh_hosts()
 
     def _build_hosts_tab(self) -> QWidget:
@@ -418,6 +461,7 @@ class SshHostWorkspace(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(ACTION_TABLE_ROW_HEIGHT)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -442,9 +486,9 @@ class SshHostWorkspace(QWidget):
         test_button = QPushButton("测试连接")
         test_button.clicked.connect(self._test_selected_host)
         host_row.addWidget(test_button)
-        refresh_time = QPushButton("读取主机时间")
-        refresh_time.clicked.connect(self._load_remote_time)
-        host_row.addWidget(refresh_time)
+        open_time = QPushButton("主机时间")
+        open_time.clicked.connect(self._open_selected_time_panel)
+        host_row.addWidget(open_time)
         layout.addLayout(host_row)
 
         command_row = QHBoxLayout()
@@ -461,39 +505,107 @@ class SshHostWorkspace(QWidget):
         self.output.setReadOnly(True)
         self.output.setPlaceholderText("连接测试、命令输出和时间操作结果会显示在这里。")
         layout.addWidget(self.output, 1)
-
-        time_card = QFrame()
-        time_card.setObjectName("configCard")
-        time_layout = QVBoxLayout(time_card)
-        self.remote_time = QLabel("远程时间：尚未读取")
-        self.remote_time.setObjectName("metricSummary")
-        time_layout.addWidget(self.remote_time)
-        time_row = QHBoxLayout()
-        self.remote_timestamp = QLineEdit()
-        self.remote_timestamp.setPlaceholderText("输入秒/毫秒时间戳")
-        time_row.addWidget(self.remote_timestamp, 1)
-        now_button = QPushButton("填入当前")
-        now_button.clicked.connect(
-            lambda: self.remote_timestamp.setText(str(int(time.time())))
-        )
-        time_row.addWidget(now_button)
-        set_button = QPushButton("修改主机时间")
-        set_button.setObjectName("primaryButton")
-        set_button.clicked.connect(self._set_remote_time)
-        time_row.addWidget(set_button)
-        time_layout.addLayout(time_row)
-        warning = QLabel("修改时间通常需要远程用户拥有 root 或等效权限。")
-        warning.setObjectName("fieldHint")
-        time_layout.addWidget(warning)
-        layout.addWidget(time_card)
         self.console_controls = [
             self.host_combo,
             test_button,
-            refresh_time,
+            open_time,
             self.command,
             execute,
-            self.remote_timestamp,
-            now_button,
+        ]
+        return page
+
+    def _build_time_tab(self) -> QWidget:
+        page = QScrollArea()
+        page.setWidgetResizable(True)
+        page.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        page.setWidget(content)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(12)
+
+        host_row = QHBoxLayout()
+        host_row.addWidget(QLabel("当前主机"))
+        self.time_host_combo = QComboBox()
+        self.time_host_combo.currentIndexChanged.connect(self._time_host_changed)
+        host_row.addWidget(self.time_host_combo, 1)
+        self.auto_refresh = QCheckBox("自动刷新（3 秒）")
+        self.auto_refresh.toggled.connect(self._toggle_auto_refresh)
+        host_row.addWidget(self.auto_refresh)
+        refresh_time = QPushButton("刷新")
+        refresh_time.clicked.connect(self._load_remote_time)
+        host_row.addWidget(refresh_time)
+        back_button = QPushButton("返回列表")
+        back_button.clicked.connect(lambda: self.tabs.setCurrentIndex(0))
+        host_row.addWidget(back_button)
+        layout.addLayout(host_row)
+
+        self.time_host_info = QLabel("请先选择 SSH 主机")
+        self.time_host_info.setObjectName("fieldHint")
+        layout.addWidget(self.time_host_info)
+
+        remote_card = QFrame()
+        remote_card.setObjectName("configCard")
+        remote_layout = QGridLayout(remote_card)
+        remote_layout.setHorizontalSpacing(12)
+        remote_layout.setVerticalSpacing(8)
+        remote_layout.addWidget(QLabel("当前系统时间"), 0, 0)
+        self.remote_time = QLabel("尚未读取")
+        self.remote_time.setObjectName("metricSummary")
+        self.remote_time.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        remote_layout.addWidget(self.remote_time, 0, 1, 1, 2)
+        remote_layout.addWidget(QLabel("秒时间戳"), 1, 0)
+        self.remote_epoch_seconds = QLabel("—")
+        self.remote_epoch_seconds.setFont(QFont("Consolas", 10))
+        self.remote_epoch_seconds.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        remote_layout.addWidget(self.remote_epoch_seconds, 1, 1)
+        copy_seconds = QPushButton("复制")
+        copy_seconds.clicked.connect(
+            lambda: self._copy_remote_value(self.remote_epoch_seconds)
+        )
+        remote_layout.addWidget(copy_seconds, 1, 2)
+        remote_layout.addWidget(QLabel("毫秒时间戳"), 2, 0)
+        self.remote_epoch_milliseconds = QLabel("—")
+        self.remote_epoch_milliseconds.setFont(QFont("Consolas", 10))
+        self.remote_epoch_milliseconds.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        remote_layout.addWidget(self.remote_epoch_milliseconds, 2, 1)
+        copy_milliseconds = QPushButton("复制")
+        copy_milliseconds.clicked.connect(
+            lambda: self._copy_remote_value(self.remote_epoch_milliseconds)
+        )
+        remote_layout.addWidget(copy_milliseconds, 2, 2)
+        remote_layout.setColumnStretch(1, 1)
+        layout.addWidget(remote_card)
+
+        tool_card, tool_layout = _section_card("时间戳解析 & 修改主机时间")
+        tool_actions = QHBoxLayout()
+        tool_actions.addStretch()
+        fill_now = QPushButton("填入当前")
+        fill_now.clicked.connect(self._fill_current_timestamp)
+        tool_actions.addWidget(fill_now)
+        set_button = QPushButton("修改主机时间")
+        set_button.setObjectName("primaryButton")
+        set_button.clicked.connect(self._set_remote_time)
+        tool_actions.addWidget(set_button)
+        tool_layout.addLayout(tool_actions)
+        self.remote_timestamp_panel = TimestampPanel()
+        tool_layout.addWidget(self.remote_timestamp_panel)
+        warning = QLabel("修改时间通常需要远程用户拥有 root 或等效权限。")
+        warning.setObjectName("fieldHint")
+        tool_layout.addWidget(warning)
+        layout.addWidget(tool_card, 1)
+
+        self.time_controls = [
+            self.time_host_combo,
+            self.auto_refresh,
+            refresh_time,
+            fill_now,
             set_button,
         ]
         return page
@@ -533,32 +645,27 @@ class SshHostWorkspace(QWidget):
                 QTableWidgetItem(key_name.name if key_name else "—"),
             )
             self.table.setItem(row, 4, QTableWidgetItem(host.remark or "—"))
-            actions = QWidget()
-            action_layout = QHBoxLayout(actions)
-            action_layout.setContentsMargins(3, 1, 3, 1)
-            action_layout.setSpacing(4)
-            for label, callback in (
-                ("测试", lambda _c=False, item=host: self._test_host(item)),
-                ("使用", lambda _c=False, item=host: self._use_host(item)),
-                ("编辑", lambda _c=False, item=host: self._edit_host(item)),
-                ("删除", lambda _c=False, item=host: self._delete_host(item)),
-            ):
-                button = QPushButton(label)
-                button.clicked.connect(callback)
-                action_layout.addWidget(button)
-            self.table.setCellWidget(row, 5, actions)
-        selected_id = self.host_combo.currentData() if self.host_combo.count() else ""
-        self.host_combo.blockSignals(True)
-        self.host_combo.clear()
-        for host in self.hosts:
-            self.host_combo.addItem(
-                f"{host.name} · {host.username}@{host.host}:{host.port}",
-                host.host_id,
+            actions = (
+                ("时间", lambda item=host: self._open_time_panel(item), True),
+                ("测试", lambda item=host: self._test_host(item), True),
+                ("编辑", lambda item=host: self._edit_host(item), True),
+                ("删除", lambda item=host: self._delete_host(item), True),
             )
-        index = self.host_combo.findData(selected_id)
-        if index >= 0:
-            self.host_combo.setCurrentIndex(index)
-        self.host_combo.blockSignals(False)
+            self.table.setCellWidget(row, 5, action_button_row(actions))
+        for combo in (self.host_combo, self.time_host_combo):
+            selected_id = combo.currentData() if combo.count() else ""
+            combo.blockSignals(True)
+            combo.clear()
+            for host in self.hosts:
+                combo.addItem(
+                    f"{host.name} · {host.username}@{host.host}:{host.port}",
+                    host.host_id,
+                )
+            index = combo.findData(selected_id)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+            combo.blockSignals(False)
+        self._update_time_host_info()
 
     def _add_host(self) -> None:
         dialog = SshHostDialog(parent=self)
@@ -594,15 +701,63 @@ class SshHostWorkspace(QWidget):
             self.hosts = load_ssh_hosts()
         self._refresh_hosts()
 
-    def _use_host(self, host: SshHostConfig) -> None:
-        index = self.host_combo.findData(host.host_id)
+    def _open_time_panel(self, host: SshHostConfig) -> None:
+        index = self.time_host_combo.findData(host.host_id)
         if index >= 0:
-            self.host_combo.setCurrentIndex(index)
-        self.tabs.setCurrentIndex(1)
+            self.time_host_combo.setCurrentIndex(index)
+        self.time_input_host_id = ""
+        self.remote_time.setText("正在读取…")
+        self.remote_epoch_seconds.setText("—")
+        self.remote_epoch_milliseconds.setText("—")
+        self.tabs.setCurrentIndex(2)
+        self._load_remote_time()
+
+    def _open_selected_time_panel(self) -> None:
+        host = self._selected_host()
+        if host is None:
+            QMessageBox.information(self, "选择主机", "请先新增并选择 SSH 主机")
+            return
+        self._open_time_panel(host)
 
     def _selected_host(self) -> Optional[SshHostConfig]:
         host_id = self.host_combo.currentData()
         return next((host for host in self.hosts if host.host_id == host_id), None)
+
+    def _selected_time_host(self) -> Optional[SshHostConfig]:
+        host_id = self.time_host_combo.currentData()
+        return next((host for host in self.hosts if host.host_id == host_id), None)
+
+    def _update_time_host_info(self) -> None:
+        host = self._selected_time_host()
+        self.time_host_info.setText(
+            "请先选择 SSH 主机"
+            if host is None
+            else f"{host.name}  ·  {host.username}@{host.host}:{host.port}"
+        )
+
+    def _time_host_changed(self) -> None:
+        self.time_input_host_id = ""
+        self.remote_time.setText("尚未读取")
+        self.remote_epoch_seconds.setText("—")
+        self.remote_epoch_milliseconds.setText("—")
+        self._update_time_host_info()
+        if self.tabs.currentIndex() == 2 and self._selected_time_host() is not None:
+            self._load_remote_time()
+
+    def _toggle_auto_refresh(self, enabled: bool) -> None:
+        if enabled:
+            self.auto_refresh_timer.start()
+            self._auto_refresh_remote_time()
+        else:
+            self.auto_refresh_timer.stop()
+
+    def _auto_refresh_remote_time(self) -> None:
+        if (
+            self.tabs.currentIndex() == 2
+            and self._selected_time_host() is not None
+            and not self.is_busy()
+        ):
+            self._load_remote_time()
 
     def _test_host(self, host: SshHostConfig) -> None:
         self._run_action(
@@ -630,26 +785,27 @@ class SshHostWorkspace(QWidget):
         )
 
     def _load_remote_time(self) -> None:
-        host = self._selected_host()
+        host = self._selected_time_host()
         if host is None:
             QMessageBox.information(self, "选择主机", "请先选择 SSH 主机")
             return
         self._run_action(lambda: get_ssh_host_time(host), self._show_remote_time)
 
     def _set_remote_time(self) -> None:
-        host = self._selected_host()
+        host = self._selected_time_host()
         if host is None:
             QMessageBox.information(self, "选择主机", "请先选择 SSH 主机")
             return
-        try:
-            timestamp = parse_timestamp(self.remote_timestamp.text()).epoch_seconds
-        except ValueError as error:
-            QMessageBox.warning(self, "时间无效", str(error))
+        result = self.remote_timestamp_panel.result
+        if result is None:
+            QMessageBox.warning(self, "时间无效", "请先在下方输入有效时间")
             return
+        timestamp = result.epoch_seconds
         answer = QMessageBox.question(
             self,
             "确认修改主机时间",
-            f"将“{host.name}”的系统时间修改为\n{parse_timestamp(timestamp).local_time}\n\n继续吗？",
+            f"将“{host.name}”的系统时间修改为\n{result.local_time}\n"
+            f"秒时间戳：{timestamp}\n\n继续吗？",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
@@ -657,6 +813,14 @@ class SshHostWorkspace(QWidget):
             lambda: set_ssh_host_time(host, timestamp),
             self._show_remote_time,
         )
+
+    def _fill_current_timestamp(self) -> None:
+        self.remote_timestamp_panel.use_now()
+
+    def _copy_remote_value(self, label: QLabel) -> None:
+        value = label.text()
+        if value != "—":
+            _copy_text(self, value)
 
     def _show_command_result(self, value: object) -> None:
         if not isinstance(value, SshCommandResult):
@@ -671,10 +835,14 @@ class SshHostWorkspace(QWidget):
         if not isinstance(value, SshHostTime):
             return
         self.remote_time.setText(
-            f"远程时间：{value.date_text}\n"
-            f"秒 {value.epoch_second}  ·  毫秒 {value.epoch_millisecond}"
+            value.date_text
         )
-        self.remote_timestamp.setText(str(value.epoch_second))
+        self.remote_epoch_seconds.setText(str(value.epoch_second))
+        self.remote_epoch_milliseconds.setText(str(value.epoch_millisecond))
+        host = self._selected_time_host()
+        if host is not None and self.time_input_host_id != host.host_id:
+            self.remote_timestamp_panel.set_input(value.epoch_second)
+            self.time_input_host_id = host.host_id
         self._append_output(f"[time] {value.date_text} · {value.epoch_second}\n")
 
     def _show_status(self, message: str) -> None:
@@ -697,7 +865,7 @@ class SshHostWorkspace(QWidget):
             return
         self.success_callback = on_success
         self.table.setEnabled(False)
-        for control in self.console_controls:
+        for control in (*self.console_controls, *self.time_controls):
             control.setEnabled(False)
         self.status_text.setText("SSH 操作进行中…")
         self.action_thread = QThread(self)
@@ -729,7 +897,7 @@ class SshHostWorkspace(QWidget):
         self.action_thread = None
         self.success_callback = None
         self.table.setEnabled(True)
-        for control in self.console_controls:
+        for control in (*self.console_controls, *self.time_controls):
             control.setEnabled(True)
 
     def is_busy(self) -> bool:
@@ -942,6 +1110,7 @@ class QuickAccessWorkspace(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(ACTION_TABLE_ROW_HEIGHT)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -997,20 +1166,13 @@ class QuickAccessWorkspace(QWidget):
             self.table.setItem(row, 2, QTableWidgetItem(link.category or "—"))
             self.table.setItem(row, 3, QTableWidgetItem(str(len(link.fields))))
             self.table.setItem(row, 4, QTableWidgetItem(link.remark or "—"))
-            actions = QWidget()
-            action_layout = QHBoxLayout(actions)
-            action_layout.setContentsMargins(3, 1, 3, 1)
-            action_layout.setSpacing(4)
-            for label, callback in (
-                ("打开", lambda _c=False, item=link: self._open_link(item)),
-                ("复制", lambda _c=False, item=link: self._copy_link(item)),
-                ("编辑", lambda _c=False, item=link: self._edit_link(item)),
-                ("删除", lambda _c=False, item=link: self._delete_link(item)),
-            ):
-                button = QPushButton(label)
-                button.clicked.connect(callback)
-                action_layout.addWidget(button)
-            self.table.setCellWidget(row, 5, actions)
+            actions = (
+                ("打开", lambda item=link: self._open_link(item), True),
+                ("复制", lambda item=link: self._copy_link(item), True),
+                ("编辑", lambda item=link: self._edit_link(item), True),
+                ("删除", lambda item=link: self._delete_link(item), True),
+            )
+            self.table.setCellWidget(row, 5, action_button_row(actions))
 
     def _link_for_row(self, row: int) -> Optional[QuickAccessLink]:
         item = self.table.item(row, 0)

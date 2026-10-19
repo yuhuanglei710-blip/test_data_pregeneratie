@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
 import jwt
-from dotenv import dotenv_values
 
 from base.add_money import login
+from base.env_config import environment_config, required_string
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 API_BLUEPRINT = "/api/operationManage"
 REQUEST_TIMEOUT = 15
 
@@ -28,10 +26,11 @@ class Background:
     """封装后台用户查找与详情查询。"""
 
     def __init__(self, environment: str = "dev"):
-        env_file = PROJECT_ROOT / f"{environment}.env"
-        domain = str(dotenv_values(env_file).get("background_domain") or "").strip()
-        if not domain:
-            raise RuntimeError(f"未在 {env_file.name} 中配置 background_domain")
+        domain = required_string(
+            environment_config(environment),
+            "back_ground_url",
+            context=f"environment.{environment}",
+        )
 
         self.environment = environment
         self.base_url = _normalize_base_url(domain)

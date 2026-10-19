@@ -5,7 +5,7 @@ import binascii
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 import jwt
@@ -13,19 +13,60 @@ import requests
 
 try:  # Support package and direct script imports.
     from .api_request import load_environment_api_base_url
+    from .env_config import config_section, required_string
 except ImportError:  # pragma: no cover - compatibility for direct execution.
     from api_request import load_environment_api_base_url
+    from env_config import config_section, required_string
 
 
-GAME_URL_PATH = "/v1/gamehall/self_game_url"
-SPIN_API = "https://h5gz-api.szhdev.top/v1/slot/spin"
-WEB_ORIGIN = "https://webnew.hotspin777.com"
-SPIN_ORIGIN = "https://h5gz.szhdev.top"
-REQUEST_TIMEOUT = 10
-ERROR_BODY_LIMIT = 300
-TOKEN_EXPIRY_LEEWAY = 5
-DEFAULT_BET_CENTS = 1_000
-TOKEN_ACTIVATION_RETRY_DELAYS = (0.5, 1.0, 2.0, 3.0)
+_SPIN_CONFIG = config_section("spin")
+
+
+def _mapping_value(config: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = config.get(key)
+    if not isinstance(value, dict):
+        raise RuntimeError(f"env.json 的 spin.{key} 必须是 JSON 对象")
+    return value
+
+
+def _positive_int_value(key: str) -> int:
+    value = _SPIN_CONFIG.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RuntimeError(f"env.json 的 spin.{key} 必须是正整数")
+    return value
+
+
+GAME_URL_PATH = required_string(
+    _SPIN_CONFIG,
+    "game_url_path",
+    context="spin",
+)
+SPIN_API = required_string(_SPIN_CONFIG, "spin_api", context="spin")
+SPIN_ORIGIN = required_string(_SPIN_CONFIG, "spin_origin", context="spin")
+REQUEST_TIMEOUT = _positive_int_value("request_timeout")
+ERROR_BODY_LIMIT = _positive_int_value("error_body_limit")
+TOKEN_EXPIRY_LEEWAY = _positive_int_value("token_expiry_leeway")
+DEFAULT_BET_CENTS = _positive_int_value("default_bet_cents")
+GAME_URL_REQUEST = _mapping_value(_SPIN_CONFIG, "game_url_request")
+BET_REQUEST = _mapping_value(_SPIN_CONFIG, "bet_request")
+DEFAULT_USER_AGENT = required_string(
+    _SPIN_CONFIG,
+    "user_agent",
+    context="spin",
+)
+SPIN_USER_AGENT = required_string(
+    _SPIN_CONFIG,
+    "spin_user_agent",
+    context="spin",
+)
+try:
+    TOKEN_ACTIVATION_RETRY_DELAYS = tuple(
+        float(value) for value in _SPIN_CONFIG["token_activation_retry_delays"]
+    )
+except (KeyError, TypeError, ValueError) as error:
+    raise RuntimeError(
+        "env.json 的 spin.token_activation_retry_delays 必须是数字数组"
+    ) from error
 
 
 @dataclass(frozen=True)
@@ -36,12 +77,8 @@ class SpinEnvironmentConfig:
     web_origin: str
     spin_api: str = SPIN_API
     spin_origin: str = SPIN_ORIGIN
-    version: Optional[str] = "8b339f30eee82f3486f27a5d3e42d12fea8543f0"
-    user_agent: str = (
-        "Mozilla/5.0 (Linux; Android 14; SM-A556B) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/153.0.0.0 Mobile Safari/537.36"
-    )
+    version: Optional[str] = None
+    user_agent: str = DEFAULT_USER_AGENT
 
     @property
     def game_url_api(self) -> str:
@@ -49,31 +86,36 @@ class SpinEnvironmentConfig:
         return f"{load_environment_api_base_url(self.environment)}{GAME_URL_PATH}"
 
 
-SPIN_ENVIRONMENT_CONFIGS = {
-    "dev": SpinEnvironmentConfig(
-        environment="dev",
-        web_origin=WEB_ORIGIN,
-    ),
-    "huidu": SpinEnvironmentConfig(
-        environment="huidu",
-        web_origin="https://newhdweb.ushdev.top",
-        user_agent=(
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 "
-            "Mobile/15E148 Safari/604.1"
-        ),
-        version=None,
-    ),
-    "yy": SpinEnvironmentConfig(
-        environment="yy",
-        web_origin="https://yyres.ushdev.top",
-        version=None,
-    ),
-    "individual": SpinEnvironmentConfig(
-        environment="individual",
-        web_origin=WEB_ORIGIN,
-    ),
-}
+def _load_spin_environment_configs() -> Dict[str, SpinEnvironmentConfig]:
+    configured = _mapping_value(_SPIN_CONFIG, "environments")
+    result: Dict[str, SpinEnvironmentConfig] = {}
+    for environment, raw_config in configured.items():
+        if not isinstance(raw_config, dict):
+            raise RuntimeError(
+                f"env.json 的 spin.environments.{environment} 必须是 JSON 对象"
+            )
+        version = raw_config.get("version")
+        if version is not None and not isinstance(version, str):
+            raise RuntimeError(
+                f"env.json 的 spin.environments.{environment}.version "
+                "必须是字符串或 null"
+            )
+        result[str(environment)] = SpinEnvironmentConfig(
+            environment=str(environment),
+            web_origin=required_string(
+                raw_config,
+                "web_origin",
+                context=f"spin.environments.{environment}",
+            ),
+            spin_api=str(raw_config.get("spin_api") or SPIN_API),
+            spin_origin=str(raw_config.get("spin_origin") or SPIN_ORIGIN),
+            version=version,
+            user_agent=str(raw_config.get("user_agent") or DEFAULT_USER_AGENT),
+        )
+    return result
+
+
+SPIN_ENVIRONMENT_CONFIGS = _load_spin_environment_configs()
 
 _game_token_cache: Dict[tuple[str, str], str] = {}
 _game_session_cache: Dict[tuple[str, str], str] = {}
@@ -232,11 +274,11 @@ def get_game_token(
     """用用户 token 换取游戏 token。"""
     config = _config_for_environment(environment)
     payload = {
-        "type": 1,
-        "game_id": 200001,
-        "game_channel": 4,
-        "exit_event": f"{config.web_origin}/home",
-        "cash_event": f"{config.web_origin}/backshop",
+        "type": GAME_URL_REQUEST["type"],
+        "game_id": GAME_URL_REQUEST["game_id"],
+        "game_channel": GAME_URL_REQUEST["game_channel"],
+        "exit_event": f"{config.web_origin}{GAME_URL_REQUEST['exit_path']}",
+        "cash_event": f"{config.web_origin}{GAME_URL_REQUEST['cash_path']}",
     }
 
     retry_delays = (*TOKEN_ACTIVATION_RETRY_DELAYS, None)
@@ -333,8 +375,8 @@ def dev_spin(
     payload = {
         "token": game_token,
         "bet": bet_amount,
-        "money_type": "SC",
-        "game_id": 100001,
+        "money_type": BET_REQUEST["money_type"],
+        "game_id": BET_REQUEST["game_id"],
         "session_id": (
             _game_session_cache.get(cache_key, "") if preserve_session else ""
         ),
@@ -345,7 +387,7 @@ def dev_spin(
         "Content-Type": "application/json",
         "Origin": config.spin_origin,
         "Referer": f"{config.spin_origin}/",
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": SPIN_USER_AGENT,
         "Authorization": f"Bearer {game_token}",
     }
 
