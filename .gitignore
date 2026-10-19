@@ -2,6 +2,7 @@
 .env
 __pycache__/
 *.py[cod]
+env.json
 accounts*.txt
 cache/channel_codes.json
 cache/channel_sources.json
