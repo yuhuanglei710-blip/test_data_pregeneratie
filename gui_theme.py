@@ -6,8 +6,9 @@
 import os
 from pathlib import Path
 
+from PySide6.QtCore import QEvent, QObject
 from PySide6.QtGui import QFont, QFontDatabase
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QAbstractSpinBox, QComboBox, QWidget
 
 WINDOWS_FONT_DIR = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
 UI_FONT_CANDIDATES = (
@@ -21,6 +22,39 @@ MONOSPACE_FONT_CANDIDATES = (
     "Consolas",
 )
 AUTO_ACCOUNT_SQL_PARAMETERS = {"uid", "userid"}
+
+
+class _WheelValueChangeBlocker(QObject):
+    """全局拦截下拉框和数值控件的滚轮改值。"""
+
+    @staticmethod
+    def _value_control(widget: object) -> bool:
+        current = widget if isinstance(widget, QWidget) else None
+        while current is not None:
+            if isinstance(current, QAbstractSpinBox):
+                return True
+            if isinstance(current, QComboBox):
+                # 下拉列表展开后仍允许滚动列表；关闭状态禁止改当前值。
+                return not current.view().isVisible()
+            current = current.parentWidget()
+        return False
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            event.type() == QEvent.Type.Wheel
+            and self._value_control(watched)
+        ):
+            event.ignore()
+            return True
+        return super().eventFilter(watched, event)
+
+
+def _install_wheel_value_change_blocker(app: QApplication) -> None:
+    if getattr(app, "_wheel_value_change_blocker", None) is not None:
+        return
+    blocker = _WheelValueChangeBlocker(app)
+    app.installEventFilter(blocker)
+    app._wheel_value_change_blocker = blocker
 
 
 def _best_font_family(candidates: tuple[str, ...]) -> str:
@@ -40,6 +74,7 @@ def _quality_font(family: str, point_size: float) -> QFont:
 
 def configure_application_fonts(app: QApplication) -> tuple[str, str]:
     """加载高清中文字体，并为所有 Qt 控件设置高质量矢量字体。"""
+    _install_wheel_value_change_blocker(app)
     for filename in (
         "Noto Sans SC (TrueType).otf",
         "Noto Sans SC Medium (TrueType).otf",
@@ -202,6 +237,21 @@ QFrame#configCard {
     border: 1px solid #dfe3e8;
     border-radius: 10px;
 }
+QFrame#userLookupQueryPanel {
+    background: #ffffff;
+    border: 1px solid #e4e7eb;
+    border-radius: 8px;
+}
+QFrame#userLookupResultPanel {
+    background: #ffffff;
+    border: 0;
+}
+QScrollArea#userLookupScroll,
+QScrollArea#userLookupScroll > QWidget > QWidget,
+QWidget#userLookupContent {
+    background: #ffffff;
+    border: 0;
+}
 QFrame#quickAccessDetail {
     background: #f8f9fc;
     border: 1px solid #e0e4ee;
@@ -215,9 +265,9 @@ QFrame#userProfileCard {
 }
 QLabel#userFieldValue {
     color: #252a31;
-    background: #f7f8fa;
-    border-radius: 6px;
-    padding: 7px 9px;
+    background: transparent;
+    border: 0;
+    padding: 6px 0;
 }
 QFrame#apkDropZone {
     background: #f8f9fb;

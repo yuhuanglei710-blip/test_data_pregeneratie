@@ -279,10 +279,12 @@ class _FakeCursor:
         self,
         row: tuple[object, ...],
         user_segment: int = 0,
+        update_rowcount: int = 1,
     ) -> None:
         self.row = row
         self.user_segment = user_segment
         self.rowcount = 0
+        self.update_rowcount = update_rowcount
         self.executions: list[tuple[str, tuple[int, ...]]] = []
         self.last_sql = ""
 
@@ -296,7 +298,21 @@ class _FakeCursor:
         self.executions.append((sql, parameters))
         self.last_sql = sql
         if sql.startswith("UPDATE"):
-            self.rowcount = 1
+            self.rowcount = self.update_rowcount
+            if "created_at=%s" in sql:
+                charge, withdraw, money, bonus, vip, created_at, user_id = parameters
+            else:
+                charge, withdraw, money, bonus, vip, user_id = parameters
+                created_at = self.row[6]
+            self.row = (
+                user_id,
+                charge,
+                withdraw,
+                money,
+                bonus,
+                vip,
+                created_at,
+            )
 
     def fetchone(self):
         if "FROM user_base" in self.last_sql:
@@ -309,8 +325,9 @@ class _FakeDatabase:
         self,
         row: tuple[object, ...],
         user_segment: int = 0,
+        update_rowcount: int = 1,
     ) -> None:
-        self.fake_cursor = _FakeCursor(row, user_segment)
+        self.fake_cursor = _FakeCursor(row, user_segment, update_rowcount)
         self.committed = False
         self.rolled_back = False
 
@@ -416,7 +433,7 @@ class PlayerTierDatabaseTests(unittest.TestCase):
             update_parameters,
             (400_000, 0, 307_000, 5_000, 4, 42),
         )
-        segment_sql, segment_parameters = database.fake_cursor.executions[2]
+        segment_sql, segment_parameters = database.fake_cursor.executions[3]
         self.assertIn("FROM user_base", segment_sql)
         self.assertEqual(segment_parameters, (42,))
 
@@ -461,6 +478,32 @@ class PlayerTierDatabaseTests(unittest.TestCase):
             update_parameters,
             (400_000, 0, 307_000, 5_000, 4, expected_created_at, 42),
         )
+
+    def test_construct_accepts_idempotent_update_with_zero_rowcount(self) -> None:
+        database = _FakeDatabase(
+            (42, 400_000, 0, 307_000, 5_000, 4, 1_900_000),
+            user_segment=2,
+            update_rowcount=0,
+        )
+
+        @contextmanager
+        def connection_context(_connection):
+            yield database
+
+        with patch(
+            "base.player_tier.open_database_connection",
+            side_effect=connection_context,
+        ):
+            result = construct_player_tier(
+                42,
+                TIER_CORE,
+                DatabaseConnectionConfig(),
+            )
+
+        self.assertTrue(database.committed)
+        self.assertFalse(database.rolled_back)
+        self.assertEqual(result.tier, TIER_CORE)
+        self.assertEqual(result.user_segment, 2)
 
     def test_construct_caps_bonus_when_it_exceeds_target_balance(self) -> None:
         database = _FakeDatabase(

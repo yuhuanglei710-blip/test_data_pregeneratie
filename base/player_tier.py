@@ -433,6 +433,7 @@ def construct_player_tier(
                     proposed,
                     money=constructed_money,
                     bonus=constructed_bonus,
+                    created_at=current.created_at,
                 )
                 if registration_age is None:
                     update_sql = (
@@ -471,14 +472,42 @@ def construct_player_tier(
                         proposed.user_id,
                     )
                 cursor.execute(update_sql, update_parameters)
-                if int(cursor.rowcount) != 1:
-                    raise RuntimeError("玩家分层数据更新失败")
-                proposed = replace(
-                    proposed,
+                # MySQL 默认只统计实际发生变化的行；目标值与当前值一致时
+                # rowcount 会是 0，但这仍是一次成功的幂等构造。回读并校验
+                # 数据库最终值，避免把这种情况误判为失败。
+                cursor.execute(
+                    "SELECT id, charge_total, withdraw_total, money, bonus, "
+                    "vip_level, created_at FROM `user` WHERE id=%s LIMIT 1",
+                    (proposed.user_id,),
+                )
+                updated_row = cursor.fetchone()
+                if updated_row is None:
+                    raise RuntimeError("玩家分层数据更新后无法读取")
+                updated = _metrics_from_row(updated_row, proposed.user_id)
+                expected_values = (
+                    proposed.charge_total,
+                    proposed.withdraw_total,
+                    proposed.money,
+                    proposed.bonus,
+                    proposed.vip_level,
+                    proposed.created_at,
+                )
+                actual_values = (
+                    updated.charge_total,
+                    updated.withdraw_total,
+                    updated.money,
+                    updated.bonus,
+                    updated.vip_level,
+                    updated.created_at,
+                )
+                if actual_values != expected_values:
+                    raise RuntimeError("玩家分层数据更新后校验失败")
+                updated = replace(
+                    updated,
                     user_segment=_fetch_user_segment(cursor, proposed.user_id),
                 )
             database.commit()
-            return proposed
+            return updated
         except Exception:
             database.rollback()
             raise

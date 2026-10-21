@@ -10,9 +10,25 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, QMimeData, QThread, QTimer, QUrl
-from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox, QPushButton
+from PySide6.QtCore import (
+    QEventLoop,
+    QMimeData,
+    QPoint,
+    QPointF,
+    QThread,
+    QTimer,
+    Qt,
+    QUrl,
+)
+from PySide6.QtGui import QFont, QWheelEvent
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+)
 
 from base.apk_manager import ApkInstallResult, CachedApk
 from base.api_request import ApiTemplate
@@ -56,6 +72,33 @@ class ApkConflictPromptTests(unittest.TestCase):
             prompt.done(QMessageBox.StandardButton.No.value)
         self.window.close()
         self.app.processEvents()
+
+    def test_mouse_wheel_does_not_change_combo_or_numeric_values(self) -> None:
+        combo = QComboBox()
+        combo.addItems(["a", "b", "web"])
+        combo.setCurrentIndex(1)
+        number = QSpinBox()
+        number.setRange(0, 10)
+        number.setValue(5)
+
+        for widget in (combo, number):
+            widget.show()
+            widget.setFocus()
+            self.app.processEvents()
+            event = QWheelEvent(
+                QPointF(5, 5),
+                QPointF(5, 5),
+                QPoint(),
+                QPoint(0, 120),
+                Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.NoModifier,
+                Qt.ScrollPhase.ScrollUpdate,
+                False,
+            )
+            QApplication.sendEvent(widget, event)
+
+        self.assertEqual(combo.currentIndex(), 1)
+        self.assertEqual(number.value(), 5)
 
     def test_signature_conflict_uses_non_blocking_prompt(self) -> None:
         with patch.object(
@@ -200,9 +243,9 @@ class ApkConflictPromptTests(unittest.TestCase):
 
     def test_user_lookup_navigation_and_result_rendering(self) -> None:
         self.window._switch_section(3)
-        self.window.user_lookup_uid.setValue(13425)
+        self.window.user_lookup_search.setText("13425")
         self.window._on_user_lookup_succeeded(
-            {
+            [{
                 "id": 13425,
                 "nickname": "Player_113425",
                 "username": "user@example.com",
@@ -219,28 +262,29 @@ class ApkConflictPromptTests(unittest.TestCase):
                 "channel_code": "Applovin-iOS",
                 "advertising_id": "advertising-123",
                 "platform": 3,
-                "pkg_name": "com.example.game",
-            }
+                "pkg_name": "web",
+                "user_segment": 2,
+            }]
         )
 
         self.assertEqual(self.window.page_title.text(), "用户查询")
         self.assertEqual(self.window.content_stack.currentIndex(), 9)
         self.assertFalse(self.window.user_lookup_result_scroll.isHidden())
         self.assertEqual(
-            self.window.user_lookup_field_values["platform"].text(),
-            "iOS（3）",
-        )
-        self.assertEqual(
-            self.window.user_lookup_field_values["balance"].text(),
-            "120 分",
-        )
-        self.assertEqual(
-            self.window.user_lookup_field_values["pkg_name"].text(),
-            "com.example.game",
-        )
-        self.assertEqual(
             self.window.user_lookup_field_values["advertising_id"].text(),
             "advertising-123",
+        )
+        self.assertEqual(
+            self.window.user_lookup_database_inputs["pkg_name"].currentData(),
+            "web",
+        )
+        self.assertEqual(
+            self.window.user_lookup_database_inputs["platform"].currentData(),
+            3,
+        )
+        self.assertEqual(
+            self.window.user_lookup_database_inputs["user_segment"].text(),
+            "2",
         )
         self.assertEqual(
             self.window.user_lookup_database_inputs["money"].text(),
@@ -260,6 +304,9 @@ class ApkConflictPromptTests(unittest.TestCase):
                 "withdraw_total": 32000,
                 "charge_times": 9,
                 "withdraw_times": 3,
+                "pkg_name": "a",
+                "platform": 2,
+                "user_segment": 3,
             }
         )
         self.assertEqual(
@@ -267,9 +314,82 @@ class ApkConflictPromptTests(unittest.TestCase):
             "5",
         )
         self.assertEqual(
-            self.window.user_lookup_field_values["balance"].text(),
-            "100,000 分",
+            self.window.user_lookup_database_inputs["pkg_name"].currentData(),
+            "a",
         )
+
+    def test_fuzzy_user_lookup_can_switch_between_matches(self) -> None:
+        first = {
+            "id": 10,
+            "email": "alex.one@example.com",
+            "pkg_name": "a",
+            "platform": 1,
+            "user_segment": 1,
+        }
+        second = {
+            "id": 20,
+            "email": "alex.two@example.com",
+            "pkg_name": "b",
+            "platform": 2,
+            "user_segment": 3,
+        }
+
+        self.window.user_lookup_search.setText("alex")
+        self.window._on_user_lookup_succeeded([first, second])
+        self.window.user_lookup_match_selector.setCurrentIndex(1)
+
+        self.assertFalse(self.window.user_lookup_match_selector.isHidden())
+        self.assertEqual(self.window.user_lookup_match_selector.count(), 2)
+        self.assertEqual(self.window.user_lookup_loaded_id, 20)
+        self.assertEqual(
+            self.window.user_lookup_database_inputs["pkg_name"].currentData(),
+            "b",
+        )
+        self.assertEqual(
+            self.window.user_lookup_database_inputs["platform"].currentData(),
+            2,
+        )
+
+    def test_current_user_can_execute_uid_bound_sql_template(self) -> None:
+        template = SqlTemplate(
+            "user-sql",
+            "修改当前用户 VIP",
+            "@userid=xxx;\n@viplevel=xxx;\n"
+            "UPDATE `user` SET vip_level=@viplevel WHERE id=@userid;",
+        )
+        unrelated = SqlTemplate(
+            "global-sql",
+            "全局 SQL",
+            "@value=xxx;\nUPDATE `settings` SET value=@value;",
+        )
+        self.window.sql_templates = [template, unrelated]
+        self.window._refresh_sql_template_combos(template.template_id)
+        self.window.user_lookup_loaded_id = 13425
+        self.window.user_lookup_loaded_environment = "dev"
+        combo = self.window.user_lookup_sql_template
+        combo.setCurrentIndex(combo.findData(template.template_id))
+        self.window._refresh_user_lookup_sql_parameter_inputs()
+
+        self.assertGreaterEqual(combo.findData(template.template_id), 0)
+        self.assertEqual(combo.findData(unrelated.template_id), -1)
+        self.assertEqual(
+            list(self.window.user_lookup_sql_parameter_inputs),
+            ["viplevel"],
+        )
+        self.window.user_lookup_sql_parameter_inputs["viplevel"].setText("5")
+
+        with (
+            patch.object(
+                QMessageBox,
+                "question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ),
+            patch.object(self.window, "_run_user_lookup_action") as run_action,
+        ):
+            self.window._execute_user_lookup_sql()
+
+        run_action.assert_called_once()
+        self.assertEqual(run_action.call_args.args[2], "sql")
 
     def test_sql_template_selection_builds_runtime_parameter_inputs(self) -> None:
         template = SqlTemplate(

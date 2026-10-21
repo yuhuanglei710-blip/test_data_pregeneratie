@@ -142,6 +142,7 @@ from base.feature_scenario import (
 from base.sql_data import (
     SqlTemplate,
     delete_sql_template,
+    execute_sql_template,
     generate_feature_data,
     load_sql_templates,
     parse_runtime_parameter,
@@ -156,7 +157,7 @@ from base.tournment_test import (
     create_accounts_and_bet,
 )
 from base.user import SUPPORTED_ENVIRONMENTS
-from base.user_data import EDITABLE_USER_FIELDS, fetch_user, update_user_fields
+from base.user_data import EDITABLE_USER_FIELDS, fetch_users, update_user_fields
 from gui_dialogs import (
     ApiTemplateDialog,
     ApkDropZone,
@@ -635,8 +636,8 @@ class WorkflowWindow(QMainWindow):
         layout.setSpacing(14)
 
         query_card = QFrame()
-        query_card.setObjectName("settingsPanel")
-        query_card.setMaximumWidth(430)
+        query_card.setObjectName("userLookupQueryPanel")
+        query_card.setMaximumWidth(390)
         query_layout = QVBoxLayout(query_card)
         query_layout.setContentsMargins(24, 22, 24, 22)
         query_layout.setSpacing(12)
@@ -645,8 +646,8 @@ class WorkflowWindow(QMainWindow):
         title.setObjectName("sectionTitle")
         query_layout.addWidget(title)
         hint = QLabel(
-            "直接从所选环境的 user 表按 UID 查询，不经过后台接口。"
-            "查询结果可在右侧原位编辑并保存。"
+            "输入 UID 可精确查询；输入邮箱关键字可模糊匹配。"
+            "查询和保存都直接访问数据库。"
         )
         hint.setObjectName("fieldHint")
         hint.setWordWrap(True)
@@ -656,9 +657,10 @@ class WorkflowWindow(QMainWindow):
         self.user_lookup_environment = QComboBox()
         self.user_lookup_environment.addItems(list(SUPPORTED_ENVIRONMENTS))
         self._add_form_row(form, 0, "运行环境", self.user_lookup_environment)
-        self.user_lookup_uid = self._spin_box(1, maximum=2_147_483_647)
-        self.user_lookup_uid.setMinimum(1)
-        self._add_form_row(form, 1, "用户 UID", self.user_lookup_uid)
+        self.user_lookup_search = QLineEdit()
+        self.user_lookup_search.setPlaceholderText("UID 或邮箱关键字")
+        self.user_lookup_search.returnPressed.connect(self._query_user_info)
+        self._add_form_row(form, 1, "UID / 邮箱", self.user_lookup_search)
         query_layout.addLayout(form)
 
         self.user_lookup_button = QPushButton("查询用户")
@@ -669,7 +671,7 @@ class WorkflowWindow(QMainWindow):
         layout.addWidget(query_card)
 
         result_card = QFrame()
-        result_card.setObjectName("settingsPanel")
+        result_card.setObjectName("userLookupResultPanel")
         result_layout = QVBoxLayout(result_card)
         result_layout.setContentsMargins(24, 22, 24, 22)
         result_layout.setSpacing(10)
@@ -683,6 +685,7 @@ class WorkflowWindow(QMainWindow):
         result_layout.addWidget(self.user_lookup_summary)
 
         self.user_lookup_content = QWidget()
+        self.user_lookup_content.setObjectName("userLookupContent")
         content_layout = QVBoxLayout(self.user_lookup_content)
         content_layout.setContentsMargins(0, 4, 0, 0)
         content_layout.setSpacing(10)
@@ -693,6 +696,17 @@ class WorkflowWindow(QMainWindow):
         hint.setWordWrap(True)
         content_layout.addWidget(hint)
 
+        self.user_lookup_match_label = QLabel("匹配用户")
+        self.user_lookup_match_label.setObjectName("fieldLabel")
+        self.user_lookup_match_label.setVisible(False)
+        content_layout.addWidget(self.user_lookup_match_label)
+        self.user_lookup_match_selector = QComboBox()
+        self.user_lookup_match_selector.setVisible(False)
+        self.user_lookup_match_selector.currentIndexChanged.connect(
+            self._on_user_lookup_match_selected
+        )
+        content_layout.addWidget(self.user_lookup_match_selector)
+
         fields_grid = QGridLayout()
         fields_grid.setHorizontalSpacing(10)
         fields_grid.setVerticalSpacing(10)
@@ -701,31 +715,30 @@ class WorkflowWindow(QMainWindow):
             ("uid", "UID"),
             ("email", "邮箱"),
             ("nickname", "昵称"),
-            ("pkg_name", "包名 pkg_name"),
-            ("platform", "平台 platform"),
-            ("balance", "总余额 money + bonus"),
             ("distribution_channel", "渠道"),
             ("login_distribution_channel", "登录渠道"),
             ("channel_code", "Channel Code"),
             ("advertising_id", "Advertising ID"),
         )
         for index, (key, label_text) in enumerate(detail_fields):
-            row = index // 2
-            column = (index % 2) * 2
+            row = index
             field_label = QLabel(label_text)
             field_label.setObjectName("fieldLabel")
-            fields_grid.addWidget(field_label, row, column)
+            fields_grid.addWidget(field_label, row, 0)
             field_value = QLabel("—")
             field_value.setObjectName("userFieldValue")
             field_value.setWordWrap(True)
             field_value.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse
             )
-            fields_grid.addWidget(field_value, row, column + 1)
+            fields_grid.addWidget(field_value, row, 1)
             self.user_lookup_field_values[key] = field_value
 
-        self.user_lookup_database_inputs: Dict[str, QLineEdit] = {}
+        self.user_lookup_database_inputs: Dict[str, QWidget] = {}
         database_fields = (
+            ("pkg_name", "包名 pkg_name"),
+            ("platform", "平台 platform"),
+            ("user_segment", "用户分层 user_segment"),
             ("vip_level", "VIP 等级"),
             ("money", "money（分）"),
             ("bonus", "bonus（分）"),
@@ -734,20 +747,31 @@ class WorkflowWindow(QMainWindow):
             ("charge_times", "充值次数"),
             ("withdraw_times", "提现次数"),
         )
-        first_edit_row = (len(detail_fields) + 1) // 2
+        first_edit_row = len(detail_fields)
         for index, (key, label_text) in enumerate(database_fields):
-            row = first_edit_row + index // 2
-            column = (index % 2) * 2
+            row = first_edit_row + index
             label = QLabel(label_text)
             label.setObjectName("fieldLabel")
-            field = QLineEdit()
-            field.setPlaceholderText("非负整数")
+            if key == "pkg_name":
+                field = QComboBox()
+                for package_name in ("a", "b", "web"):
+                    field.addItem(package_name, package_name)
+            elif key == "platform":
+                field = QComboBox()
+                for platform_name, platform_code in (
+                    ("Web（1）", 1),
+                    ("Android（2）", 2),
+                    ("iOS（3）", 3),
+                ):
+                    field.addItem(platform_name, platform_code)
+            else:
+                field = QLineEdit()
+                field.setPlaceholderText("非负整数")
             field.setEnabled(False)
-            fields_grid.addWidget(label, row, column)
-            fields_grid.addWidget(field, row, column + 1)
+            fields_grid.addWidget(label, row, 0)
+            fields_grid.addWidget(field, row, 1)
             self.user_lookup_database_inputs[key] = field
         fields_grid.setColumnStretch(1, 1)
-        fields_grid.setColumnStretch(3, 1)
         content_layout.addLayout(fields_grid)
 
         self.user_lookup_database_save_button = QPushButton("保存修改")
@@ -757,10 +781,53 @@ class WorkflowWindow(QMainWindow):
             self._save_user_database_fields
         )
         content_layout.addWidget(self.user_lookup_database_save_button)
+
+        sql_title = QLabel("对当前用户执行 SQL")
+        sql_title.setObjectName("sectionTitle")
+        content_layout.addWidget(sql_title)
+        sql_hint = QLabel(
+            "从缓存模板中选择 SQL；@uid / @userid 自动使用当前用户，其他参数在下方填写。"
+        )
+        sql_hint.setObjectName("fieldHint")
+        sql_hint.setWordWrap(True)
+        content_layout.addWidget(sql_hint)
+        self.user_lookup_sql_container = QWidget()
+        sql_layout = QVBoxLayout(self.user_lookup_sql_container)
+        sql_layout.setContentsMargins(0, 0, 0, 0)
+        sql_layout.setSpacing(8)
+        self.user_lookup_sql_template = SearchableComboBox()
+        self.user_lookup_sql_template.addItem("选择 SQL 模板", None)
+        for template in self._user_bound_sql_templates():
+            self.user_lookup_sql_template.addItem(
+                template.title,
+                template.template_id,
+            )
+        self.user_lookup_sql_template.currentIndexChanged.connect(
+            self._refresh_user_lookup_sql_parameter_inputs
+        )
+        sql_layout.addWidget(self.user_lookup_sql_template)
+        self.user_lookup_sql_parameter_inputs: Dict[str, QLineEdit] = {}
+        self.user_lookup_sql_parameter_layout = QGridLayout()
+        self.user_lookup_sql_parameter_layout.setContentsMargins(0, 0, 0, 0)
+        self.user_lookup_sql_parameter_layout.setHorizontalSpacing(8)
+        self.user_lookup_sql_parameter_layout.setVerticalSpacing(8)
+        sql_layout.addLayout(self.user_lookup_sql_parameter_layout)
+        self.user_lookup_sql_execute_button = QPushButton("对当前用户执行")
+        self.user_lookup_sql_execute_button.setObjectName("secondaryButton")
+        self.user_lookup_sql_execute_button.clicked.connect(
+            self._execute_user_lookup_sql
+        )
+        sql_layout.addWidget(self.user_lookup_sql_execute_button)
+        self.user_lookup_sql_container.setEnabled(False)
+        content_layout.addWidget(self.user_lookup_sql_container)
         content_layout.addStretch()
 
         result_scroll = QScrollArea()
+        result_scroll.setObjectName("userLookupScroll")
         result_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        result_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         result_scroll.setWidgetResizable(True)
         result_scroll.setWidget(self.user_lookup_content)
         result_scroll.setVisible(False)
@@ -770,7 +837,7 @@ class WorkflowWindow(QMainWindow):
 
         self.user_lookup_controls = (
             self.user_lookup_environment,
-            self.user_lookup_uid,
+            self.user_lookup_search,
             self.user_lookup_button,
         )
         self.user_lookup_database_controls = (
@@ -780,7 +847,7 @@ class WorkflowWindow(QMainWindow):
         self.user_lookup_environment.currentTextChanged.connect(
             self._invalidate_user_lookup_result
         )
-        self.user_lookup_uid.valueChanged.connect(
+        self.user_lookup_search.textChanged.connect(
             self._invalidate_user_lookup_result
         )
         return page
@@ -2518,6 +2585,17 @@ class WorkflowWindow(QMainWindow):
             None,
         )
 
+    def _user_bound_sql_templates(self) -> list[SqlTemplate]:
+        """只返回声明了 @uid 或 @userid 的当前用户 SQL 模板。"""
+        return [
+            template
+            for template in self.sql_templates
+            if any(
+                name.casefold() in AUTO_ACCOUNT_SQL_PARAMETERS
+                for name in sql_template_parameter_names(template)
+            )
+        ]
+
     def _selected_sql_template(
         self,
         combo: QComboBox,
@@ -2709,6 +2787,18 @@ class WorkflowWindow(QMainWindow):
             for template in self.sql_templates:
                 combo.addItem(template.title, template.template_id)
             self._restore_combo_selection(combo, selected)
+
+        user_sql_combo = getattr(self, "user_lookup_sql_template", None)
+        if user_sql_combo is not None:
+            selected = user_sql_combo.currentData()
+            user_sql_combo.blockSignals(True)
+            user_sql_combo.clear()
+            user_sql_combo.addItem("选择 SQL 模板", None)
+            for template in self._user_bound_sql_templates():
+                user_sql_combo.addItem(template.title, template.template_id)
+            self._restore_combo_selection(user_sql_combo, selected)
+            user_sql_combo.blockSignals(False)
+            self._refresh_user_lookup_sql_parameter_inputs()
 
         if hasattr(self, "feature_sql_list"):
             self.feature_sql_list.blockSignals(True)
@@ -3931,11 +4021,147 @@ class WorkflowWindow(QMainWindow):
         return bool(self.player_tier_thread and self.player_tier_thread.isRunning())
 
     # 数据库用户查询
+    def _refresh_user_lookup_sql_parameter_inputs(
+        self,
+        _index: int = -1,
+    ) -> None:
+        """为当前用户 SQL 模板生成除 UID 外的参数输入框。"""
+        if not hasattr(self, "user_lookup_sql_parameter_layout"):
+            return
+        while self.user_lookup_sql_parameter_layout.count():
+            item = self.user_lookup_sql_parameter_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.user_lookup_sql_parameter_inputs = {}
+        template = self._template_by_id(self.user_lookup_sql_template.currentData())
+        if template is None:
+            self.user_lookup_sql_execute_button.setEnabled(False)
+            return
+        manual_names = [
+            name
+            for name in sql_template_parameter_names(template)
+            if name.casefold() not in AUTO_ACCOUNT_SQL_PARAMETERS
+        ]
+        if not manual_names:
+            empty = QLabel("该模板没有需要手动填写的其他参数。")
+            empty.setObjectName("fieldHint")
+            self.user_lookup_sql_parameter_layout.addWidget(empty, 0, 0, 1, 2)
+        for row, name in enumerate(manual_names):
+            label = QLabel(f"@{name}")
+            label.setObjectName("fieldLabel")
+            self.user_lookup_sql_parameter_layout.addWidget(label, row, 0)
+            field = QLineEdit()
+            field.setPlaceholderText(f"请输入 {name}")
+            self.user_lookup_sql_parameter_layout.addWidget(field, row, 1)
+            self.user_lookup_sql_parameter_inputs[name] = field
+        self.user_lookup_sql_execute_button.setEnabled(
+            bool(self.user_lookup_loaded_id) and not self._is_user_lookup_busy()
+        )
+
+    def _user_lookup_sql_runtime_parameters(self) -> Dict[str, object]:
+        parameters: Dict[str, object] = {}
+        missing: list[str] = []
+        for name, field in self.user_lookup_sql_parameter_inputs.items():
+            raw_value = field.text().strip()
+            if not raw_value:
+                missing.append(name)
+                continue
+            try:
+                parameters[name] = parse_runtime_parameter(raw_value)
+            except ValueError as error:
+                raise ValueError(f"SQL 参数 @{name}：{error}") from error
+        if missing:
+            raise ValueError(
+                "请填写 SQL 参数：" + "、".join(f"@{name}" for name in missing)
+            )
+        return parameters
+
+    def _execute_user_lookup_sql(self) -> None:
+        if self._is_user_lookup_busy() or not self.user_lookup_loaded_id:
+            return
+        template = self._template_by_id(self.user_lookup_sql_template.currentData())
+        if template is None:
+            QMessageBox.information(self, "选择 SQL", "请先选择 SQL 模板。")
+            return
+        if template not in self._user_bound_sql_templates():
+            QMessageBox.information(
+                self,
+                "模板不可用",
+                "当前用户 SQL 必须声明 @uid 或 @userid。",
+            )
+            return
+        try:
+            parameters = self._user_lookup_sql_runtime_parameters()
+        except ValueError as error:
+            QMessageBox.information(self, "参数无效", str(error))
+            return
+        user_id = self.user_lookup_loaded_id
+        environment = self.user_lookup_loaded_environment
+        connection = self.database_connections_by_environment[environment]
+        parameter_text = "\n".join(
+            f"@{name} = {value}" for name, value in parameters.items()
+        ) or "无额外参数"
+        answer = QMessageBox.question(
+            self,
+            "确认执行 SQL",
+            (
+                f"环境：{environment}\nUID：{user_id}\n模板：{template.title}\n"
+                f"{parameter_text}\n\n确认对当前用户执行吗？"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        def execute() -> object:
+            result = execute_sql_template(
+                template,
+                user_id,
+                connection,
+                parameters,
+            )
+            users = fetch_users(user_id, connection, limit=1)
+            return result, users
+
+        self._run_user_lookup_action(
+            execute,
+            self._on_user_lookup_sql_executed,
+            "sql",
+        )
+
+    @Slot(object)
+    def _on_user_lookup_sql_executed(self, value: object) -> None:
+        if (
+            not isinstance(value, tuple)
+            or len(value) != 2
+            or not isinstance(value[1], list)
+        ):
+            self._on_user_lookup_failed("SQL 执行结果格式无效")
+            return
+        result, users = value
+        self._on_user_lookup_succeeded(users)
+        QMessageBox.information(
+            self,
+            "SQL 执行完成",
+            (
+                f"已执行 {getattr(result, 'statements', 0)} 条语句，"
+                f"影响 {getattr(result, 'affected_rows', 0)} 行，"
+                f"返回 {getattr(result, 'result_rows', 0)} 行。"
+            ),
+        )
+        self._set_status("●  SQL EXECUTED", "#228653")
+
     def _invalidate_user_lookup_result(self, _value: object = None) -> None:
         if self._is_user_lookup_busy() or not self.user_lookup_loaded_id:
             return
         self.user_lookup_loaded_id = None
         self.user_lookup_loaded_environment = ""
+        self.user_lookup_match_selector.clear()
+        self.user_lookup_match_selector.setVisible(False)
+        self.user_lookup_match_label.setVisible(False)
+        self.user_lookup_sql_container.setEnabled(False)
         for control in self.user_lookup_database_controls:
             control.setEnabled(False)
         self.user_lookup_result_scroll.setVisible(False)
@@ -3947,7 +4173,10 @@ class WorkflowWindow(QMainWindow):
             return
 
         environment = self.user_lookup_environment.currentText()
-        user_id = self.user_lookup_uid.value()
+        search_value = self.user_lookup_search.text().strip()
+        if not search_value:
+            QMessageBox.information(self, "请输入查询条件", "请输入 UID 或邮箱关键字。")
+            return
         connection = self.database_connections_by_environment[environment]
         if not is_database_connection_configured(connection):
             QMessageBox.information(
@@ -3958,16 +4187,19 @@ class WorkflowWindow(QMainWindow):
             return
         self.user_lookup_loaded_id = None
         self.user_lookup_loaded_environment = ""
+        self.user_lookup_match_selector.clear()
+        self.user_lookup_match_selector.setVisible(False)
+        self.user_lookup_match_label.setVisible(False)
         for control in self.user_lookup_database_controls:
             control.setEnabled(False)
         self.user_lookup_summary.setVisible(True)
         self.user_lookup_result_scroll.setVisible(False)
         self.user_lookup_summary.setText(
-            f"正在查询 {environment} · UID {user_id} …"
+            f"正在查询 {environment} · {search_value} …"
         )
 
         self._run_user_lookup_action(
-            lambda: fetch_user(user_id, connection),
+            lambda: fetch_users(search_value, connection),
             self._on_user_lookup_succeeded,
             "query",
         )
@@ -3982,6 +4214,8 @@ class WorkflowWindow(QMainWindow):
             control.setEnabled(False)
         for control in self.user_lookup_database_controls:
             control.setEnabled(False)
+        self.user_lookup_match_selector.setEnabled(False)
+        self.user_lookup_sql_container.setEnabled(False)
         for button in self.navigation_buttons:
             button.setEnabled(False)
         self.user_lookup_action_kind = action_kind
@@ -4001,18 +4235,46 @@ class WorkflowWindow(QMainWindow):
 
     @Slot(object)
     def _on_user_lookup_succeeded(self, value: object) -> None:
-        if value is None:
+        if not isinstance(value, list):
+            self._on_user_lookup_failed("数据库返回了无法识别的用户查询结果")
+            return
+        if not value:
             self.user_lookup_summary.setVisible(True)
             self.user_lookup_result_scroll.setVisible(False)
             self.user_lookup_summary.setText(
-                f"未找到 UID {self.user_lookup_uid.value()} 对应的用户。"
+                f"未找到与“{self.user_lookup_search.text().strip()}”匹配的用户。"
             )
             self._set_status("●  USER NOT FOUND", "#a66b13")
             return
-        if not isinstance(value, dict):
-            self._on_user_lookup_failed("数据库返回了无法识别的用户查询结果")
+        if not all(isinstance(item, dict) for item in value):
+            self._on_user_lookup_failed("数据库返回的用户列表格式无效")
             return
-        detail = value
+        self.user_lookup_matches = value
+        self.user_lookup_match_selector.blockSignals(True)
+        self.user_lookup_match_selector.clear()
+        for detail in value:
+            email = detail.get("email") or detail.get("username") or "无邮箱"
+            self.user_lookup_match_selector.addItem(
+                f"UID {detail.get('id', '—')} · {email}"
+            )
+        self.user_lookup_match_selector.setCurrentIndex(0)
+        self.user_lookup_match_selector.blockSignals(False)
+        has_multiple = len(value) > 1
+        self.user_lookup_match_label.setVisible(has_multiple)
+        self.user_lookup_match_selector.setVisible(has_multiple)
+        self._render_user_lookup_detail(value[0])
+        self.user_lookup_summary.setVisible(False)
+        self.user_lookup_result_scroll.setVisible(True)
+        self._set_status("●  USER QUERY DONE", "#228653")
+
+    @Slot(int)
+    def _on_user_lookup_match_selected(self, index: int) -> None:
+        matches = getattr(self, "user_lookup_matches", [])
+        if 0 <= index < len(matches):
+            self._render_user_lookup_detail(matches[index])
+
+    def _render_user_lookup_detail(self, detail: Dict[str, object]) -> None:
+        """把一条数据库用户记录填充到原位编辑表单。"""
 
         def number(field: str) -> int:
             try:
@@ -4020,24 +4282,10 @@ class WorkflowWindow(QMainWindow):
             except (TypeError, ValueError):
                 return 0
 
-        money = number("money")
-        bonus = number("bonus")
-        balance = money + bonus
-        charge_total = number("charge_total")
-        withdraw_total = number("withdraw_total")
-        platform_code = number("platform")
-        platform_name = {0: "通用", 1: "Web", 2: "Android", 3: "iOS"}.get(
-            platform_code, "未知"
-        )
-        platform = f"{platform_name}（{platform_code}）"
-
         field_values = {
             "uid": detail.get("id") or "—",
             "email": detail.get("email") or detail.get("username") or "—",
             "nickname": detail.get("nickname") or "—",
-            "pkg_name": detail.get("pkg_name") or "—",
-            "balance": f"{balance:,} 分",
-            "platform": platform,
             "distribution_channel": detail.get("distribution_channel") or "—",
             "login_distribution_channel": detail.get("login_distribution_channel") or "—",
             "channel_code": detail.get("channel_code") or "—",
@@ -4047,25 +4295,33 @@ class WorkflowWindow(QMainWindow):
             label.setText(str(field_values.get(key, "—")))
 
         database_values = {
+            "pkg_name": str(detail.get("pkg_name") or ""),
+            "platform": number("platform"),
+            "user_segment": number("user_segment"),
             "vip_level": number("vip_level"),
-            "charge_total": charge_total,
-            "money": money,
-            "bonus": bonus,
-            "withdraw_total": withdraw_total,
+            "charge_total": number("charge_total"),
+            "money": number("money"),
+            "bonus": number("bonus"),
+            "withdraw_total": number("withdraw_total"),
             "charge_times": number("charge_times"),
             "withdraw_times": number("withdraw_times"),
         }
         self.user_lookup_database_original = database_values
         for key, field in self.user_lookup_database_inputs.items():
-            field.setText(str(database_values[key]))
+            value = database_values[key]
+            if isinstance(field, QComboBox):
+                index = field.findData(value)
+                if index >= 0:
+                    field.setCurrentIndex(index)
+                else:
+                    field.setCurrentIndex(-1)
+            elif isinstance(field, QLineEdit):
+                field.setText(str(value))
 
         self.user_lookup_loaded_id = int(detail.get("id") or 0)
         self.user_lookup_loaded_environment = (
             self.user_lookup_environment.currentText()
         )
-        self.user_lookup_summary.setVisible(False)
-        self.user_lookup_result_scroll.setVisible(True)
-        self._set_status("●  USER QUERY DONE", "#228653")
 
     def _save_user_database_fields(self) -> None:
         if self._is_user_lookup_busy() or not self.user_lookup_loaded_id:
@@ -4080,20 +4336,31 @@ class WorkflowWindow(QMainWindow):
             )
             return
 
-        values: Dict[str, int] = {}
+        values: Dict[str, object] = {}
         for key in EDITABLE_USER_FIELDS:
-            text = self.user_lookup_database_inputs[key].text().replace(",", "").strip()
-            if not text.isdigit():
-                QMessageBox.information(
-                    self,
-                    "输入无效",
-                    f"{key} 必须是非负整数。",
-                )
-                return
-            values[key] = int(text)
+            field = self.user_lookup_database_inputs[key]
+            if isinstance(field, QComboBox):
+                value = field.currentData()
+                if value is None:
+                    QMessageBox.information(self, "输入无效", f"请选择 {key}。")
+                    return
+                values[key] = value
+            elif isinstance(field, QLineEdit):
+                text = field.text().replace(",", "").strip()
+                if not text.isdigit():
+                    QMessageBox.information(
+                        self,
+                        "输入无效",
+                        f"{key} 必须是非负整数。",
+                    )
+                    return
+                values[key] = int(text)
 
         original = getattr(self, "user_lookup_database_original", {})
         labels = {
+            "pkg_name": "包名 pkg_name",
+            "platform": "平台 platform",
+            "user_segment": "用户分层 user_segment",
             "vip_level": "VIP 等级",
             "charge_total": "支付总金额",
             "money": "余额 money",
@@ -4135,19 +4402,28 @@ class WorkflowWindow(QMainWindow):
         if not isinstance(value, dict):
             self._on_user_lookup_failed("数据库返回了无法识别的用户数据")
             return
-        updated = {key: int(value.get(key) or 0) for key in EDITABLE_USER_FIELDS}
+        updated = {
+            key: (
+                str(value.get(key) or "")
+                if key == "pkg_name"
+                else int(value.get(key) or 0)
+            )
+            for key in EDITABLE_USER_FIELDS
+        }
         self.user_lookup_database_original = updated
         for key, field in self.user_lookup_database_inputs.items():
-            field.setText(str(updated[key]))
-        self.user_lookup_field_values["balance"].setText(
-            f"{updated['money'] + updated['bonus']:,} 分"
-        )
+            if isinstance(field, QComboBox):
+                field.setCurrentIndex(field.findData(updated[key]))
+            elif isinstance(field, QLineEdit):
+                field.setText(str(updated[key]))
         self._set_status("●  DATABASE UPDATED", "#228653")
 
     @Slot(str)
     def _on_user_lookup_failed(self, message: str) -> None:
         if self.user_lookup_action_kind == "database":
             QMessageBox.critical(self, "数据库修改失败", message)
+        elif self.user_lookup_action_kind == "sql":
+            QMessageBox.critical(self, "SQL 执行失败", message)
         else:
             self.user_lookup_summary.setVisible(True)
             self.user_lookup_result_scroll.setVisible(False)
@@ -4163,6 +4439,11 @@ class WorkflowWindow(QMainWindow):
         can_edit = bool(self.user_lookup_loaded_id)
         for control in self.user_lookup_database_controls:
             control.setEnabled(can_edit)
+        self.user_lookup_sql_container.setEnabled(can_edit)
+        self._refresh_user_lookup_sql_parameter_inputs()
+        self.user_lookup_match_selector.setEnabled(
+            can_edit and self.user_lookup_match_selector.count() > 1
+        )
         for button in self.navigation_buttons:
             button.setEnabled(True)
 

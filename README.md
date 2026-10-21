@@ -125,12 +125,15 @@ iOS 安装、Android 日志、时间戳工具、SSH 主机、快捷访问和环�
 
 ## 用户查询
 
-“用户查询”页按运行环境和 UID 直接查询 `user` 表，不再调用后台用户接口。页面在同一信息区
-展示 UID、邮箱、昵称、`pkg_name`、`platform`、`money + bonus` 总余额、渠道、登录渠道、
-Channel Code 和 Advertising ID，并原位提供 `vip_level`、`charge_total`、`money`、`bonus`、
-`withdraw_total`、`charge_times` 和 `withdraw_times` 的编辑框。查询和保存都复用所选环境的
-数据库连接，并使用参数化 SQL 严格按 `user.id` 操作。金额使用数据库原值“分”；保存前会
-列出实际变更并要求确认，未配置数据库连接时不会执行查询或写入。
+“用户查询”页支持按 UID 精确查询，也支持按邮箱关键字模糊查询；邮箱命中多条记录时可从
+匹配列表中选择用户。页面在同一信息区展示基础信息，并原位提供 `pkg_name`（`a`、`b`、
+`web`）、`platform`（`1`、`2`、`3`）、`user_base.user_segment`、`vip_level`、
+`charge_total`、`money`、`bonus`、`withdraw_total`、`charge_times` 和 `withdraw_times` 的编辑。
+`money` 与 `bonus` 独立展示，不额外计算总余额。查询和保存都复用所选环境的数据库连接，
+并使用参数化 SQL 操作；保存前会列出实际变更并要求确认，未配置数据库连接时不会执行查询
+或写入。查询到用户后，还可直接选择缓存中声明了 `@uid` 或 `@userid` 的 SQL 模板：当前 UID
+自动绑定，其他参数原位填写，确认后在当前环境执行并自动刷新用户数据。SQL 模板缓存中同时
+提供“修改用户分层”，可按 `userid` 和 `usersegment` 独立执行。
 
 ## Android 设备安装
 
