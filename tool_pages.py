@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSplitter,
     QSpinBox,
     QTabWidget,
     QTableWidget,
@@ -1102,26 +1103,87 @@ class QuickAccessWorkspace(QWidget):
         toolbar.addWidget(add_button)
         card_layout.addLayout(toolbar)
 
-        self.table = QTableWidget(0, 6)
+        content = QSplitter(Qt.Orientation.Horizontal)
+        self.table = QTableWidget(0, 3)
         self.table.setObjectName("apkTable")
-        self.table.setHorizontalHeaderLabels(
-            ["名称", "地址", "分类", "字段", "备注", "操作"]
-        )
+        self.table.setHorizontalHeaderLabels(["名称", "分类", "备注"])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(ACTION_TABLE_ROW_HEIGHT)
+        self.table.verticalHeader().setDefaultSectionSize(40)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         self.table.cellDoubleClicked.connect(self._open_from_row)
-        card_layout.addWidget(self.table, 1)
+        self.table.currentCellChanged.connect(self._selection_changed)
+        content.addWidget(self.table)
+
+        detail = QFrame()
+        detail.setObjectName("quickAccessDetail")
+        detail.setMinimumWidth(360)
+        detail_layout = QVBoxLayout(detail)
+        detail_layout.setContentsMargins(18, 16, 18, 16)
+        detail_layout.setSpacing(10)
+        self.detail_title = QLabel("选择一条快捷链接")
+        self.detail_title.setObjectName("sectionTitle")
+        detail_layout.addWidget(self.detail_title)
+        self.detail_meta = QLabel("选中后可查看地址和逐项复制登录字段")
+        self.detail_meta.setObjectName("fieldHint")
+        detail_layout.addWidget(self.detail_meta)
+
+        url_label = QLabel("访问地址")
+        url_label.setObjectName("fieldLabel")
+        detail_layout.addWidget(url_label)
+        url_row = QHBoxLayout()
+        self.detail_url = QLineEdit()
+        self.detail_url.setReadOnly(True)
+        self.detail_url.setPlaceholderText("—")
+        url_row.addWidget(self.detail_url, 1)
+        self.copy_url_button = QPushButton("复制地址")
+        self.copy_url_button.setObjectName("secondaryButton")
+        self.copy_url_button.clicked.connect(self._copy_selected_url)
+        url_row.addWidget(self.copy_url_button)
+        detail_layout.addLayout(url_row)
+
+        field_header = QHBoxLayout()
+        field_label = QLabel("登录字段")
+        field_label.setObjectName("fieldLabel")
+        field_header.addWidget(field_label)
+        field_header.addStretch()
+        self.copy_all_button = QPushButton("复制全部")
+        self.copy_all_button.setObjectName("secondaryButton")
+        self.copy_all_button.clicked.connect(self._copy_selected_link)
+        field_header.addWidget(self.copy_all_button)
+        detail_layout.addLayout(field_header)
+        self.field_panel = QWidget()
+        self.field_layout = QVBoxLayout(self.field_panel)
+        self.field_layout.setContentsMargins(0, 0, 0, 0)
+        self.field_layout.setSpacing(7)
+        detail_layout.addWidget(self.field_panel)
+        detail_layout.addStretch()
+
+        detail_actions = QHBoxLayout()
+        self.open_button = QPushButton("打开网页")
+        self.open_button.setObjectName("primaryButton")
+        self.open_button.clicked.connect(self._open_selected_link)
+        detail_actions.addWidget(self.open_button)
+        self.edit_button = QPushButton("编辑")
+        self.edit_button.clicked.connect(self._edit_selected_link)
+        detail_actions.addWidget(self.edit_button)
+        detail_actions.addStretch()
+        self.delete_button = QPushButton("删除")
+        self.delete_button.clicked.connect(self._delete_selected_link)
+        detail_actions.addWidget(self.delete_button)
+        detail_layout.addLayout(detail_actions)
+        content.addWidget(detail)
+        content.setStretchFactor(0, 3)
+        content.setStretchFactor(1, 2)
+        content.setSizes([620, 400])
+        card_layout.addWidget(content, 1)
         self.status_text = QLabel(
-            "双击链接可在默认浏览器打开；字段值随链接保存在本机 cache。"
+            "双击列表项可打开网页；登录字段随链接保存在本机 cache。"
         )
         self.status_text.setObjectName("fieldHint")
         card_layout.addWidget(self.status_text)
@@ -1155,6 +1217,8 @@ class QuickAccessWorkspace(QWidget):
         return sorted(values, key=lambda item: (not item.is_top, item.name.casefold()))
 
     def _refresh(self) -> None:
+        selected = self._selected_link()
+        selected_id = selected.link_id if selected else ""
         rows = self._filtered()
         self.table.setRowCount(len(rows))
         for row, link in enumerate(rows):
@@ -1162,17 +1226,18 @@ class QuickAccessWorkspace(QWidget):
             name_item = QTableWidgetItem(name)
             name_item.setData(Qt.ItemDataRole.UserRole, link.link_id)
             self.table.setItem(row, 0, name_item)
-            self.table.setItem(row, 1, QTableWidgetItem(link.url))
-            self.table.setItem(row, 2, QTableWidgetItem(link.category or "—"))
-            self.table.setItem(row, 3, QTableWidgetItem(str(len(link.fields))))
-            self.table.setItem(row, 4, QTableWidgetItem(link.remark or "—"))
-            actions = (
-                ("打开", lambda item=link: self._open_link(item), True),
-                ("复制", lambda item=link: self._copy_link(item), True),
-                ("编辑", lambda item=link: self._edit_link(item), True),
-                ("删除", lambda item=link: self._delete_link(item), True),
-            )
-            self.table.setCellWidget(row, 5, action_button_row(actions))
+            self.table.setItem(row, 1, QTableWidgetItem(link.category or "—"))
+            self.table.setItem(row, 2, QTableWidgetItem(link.remark or "—"))
+        selected_row = next(
+            (row for row, link in enumerate(rows) if link.link_id == selected_id),
+            0 if rows else -1,
+        )
+        if selected_row >= 0:
+            self.table.setCurrentCell(selected_row, 0)
+            self._show_link_details(rows[selected_row])
+        else:
+            self.table.clearSelection()
+            self._show_link_details(None)
 
     def _link_for_row(self, row: int) -> Optional[QuickAccessLink]:
         item = self.table.item(row, 0)
@@ -1191,6 +1256,137 @@ class QuickAccessWorkspace(QWidget):
     def _copy_link(self, link: QuickAccessLink) -> None:
         _copy_text(self, quick_access_share_text(link))
         self.status_text.setText(f"已复制“{link.name}”的链接和登录字段")
+
+    def _selected_link(self) -> Optional[QuickAccessLink]:
+        return self._link_for_row(self.table.currentRow())
+
+    def _selection_changed(
+        self,
+        current_row: int,
+        _current_column: int,
+        _previous_row: int,
+        _previous_column: int,
+    ) -> None:
+        self._show_link_details(self._link_for_row(current_row))
+
+    def _clear_field_panel(self) -> None:
+        while self.field_layout.count():
+            item = self.field_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    @staticmethod
+    def _is_sensitive_field(key: str) -> bool:
+        normalized = key.strip().casefold().replace("_", "").replace("-", "")
+        return any(
+            marker in normalized
+            for marker in ("password", "passwd", "pwd", "密码", "secret", "token")
+        )
+
+    def _show_link_details(self, link: Optional[QuickAccessLink]) -> None:
+        self._clear_field_panel()
+        enabled = link is not None
+        for button in (
+            self.copy_url_button,
+            self.copy_all_button,
+            self.open_button,
+            self.edit_button,
+            self.delete_button,
+        ):
+            button.setEnabled(enabled)
+        if link is None:
+            self.detail_title.setText("选择一条快捷链接")
+            self.detail_meta.setText("选中后可查看地址和逐项复制登录字段")
+            self.detail_url.clear()
+            return
+
+        self.detail_title.setText(("★ " if link.is_top else "") + link.name)
+        meta = link.category or "未分类"
+        if link.remark:
+            meta += f" · {link.remark}"
+        self.detail_meta.setText(meta)
+        self.detail_url.setText(link.url)
+        self.detail_url.setCursorPosition(0)
+        if not link.fields:
+            empty = QLabel("未保存登录字段")
+            empty.setObjectName("fieldHint")
+            self.field_layout.addWidget(empty)
+            return
+        for field in link.fields:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(7)
+            key_label = QLabel(field.key)
+            key_label.setObjectName("fieldLabel")
+            key_label.setMinimumWidth(78)
+            row_layout.addWidget(key_label)
+            value = QLineEdit(field.value)
+            value.setReadOnly(True)
+            value.setCursorPosition(0)
+            sensitive = self._is_sensitive_field(field.key)
+            if sensitive:
+                value.setEchoMode(QLineEdit.EchoMode.Password)
+            row_layout.addWidget(value, 1)
+            if sensitive:
+                reveal = QPushButton("显示")
+                reveal.setCheckable(True)
+                reveal.setObjectName("secondaryButton")
+                reveal.toggled.connect(
+                    lambda checked, editor=value, button=reveal: self._toggle_field_visibility(
+                        editor, button, checked
+                    )
+                )
+                row_layout.addWidget(reveal)
+            copy_button = QPushButton("复制")
+            copy_button.setObjectName("secondaryButton")
+            copy_button.clicked.connect(
+                lambda _checked=False, item=field, owner=link: self._copy_field(
+                    owner, item
+                )
+            )
+            row_layout.addWidget(copy_button)
+            self.field_layout.addWidget(row)
+
+    @staticmethod
+    def _toggle_field_visibility(
+        editor: QLineEdit, button: QPushButton, checked: bool
+    ) -> None:
+        editor.setEchoMode(
+            QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+        )
+        button.setText("隐藏" if checked else "显示")
+
+    def _copy_field(self, link: QuickAccessLink, field: QuickAccessField) -> None:
+        _copy_text(self, field.value)
+        self.status_text.setText(f"已复制“{link.name}”的 {field.key}")
+
+    def _copy_selected_url(self) -> None:
+        link = self._selected_link()
+        if link:
+            _copy_text(self, link.url)
+            self.status_text.setText(f"已复制“{link.name}”的地址")
+
+    def _copy_selected_link(self) -> None:
+        link = self._selected_link()
+        if link:
+            self._copy_link(link)
+
+    def _open_selected_link(self) -> None:
+        link = self._selected_link()
+        if link:
+            self._open_link(link)
+
+    def _edit_selected_link(self) -> None:
+        link = self._selected_link()
+        if link:
+            self._edit_link(link)
+
+    def _delete_selected_link(self) -> None:
+        link = self._selected_link()
+        if link:
+            self._delete_link(link)
 
     def _add_link(self) -> None:
         dialog = QuickAccessDialog(self.categories, parent=self)

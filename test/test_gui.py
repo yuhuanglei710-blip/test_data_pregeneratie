@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QMimeData, QThread, QTimer, QUrl
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox, QPushButton
 
 from base.apk_manager import ApkInstallResult, CachedApk
 from base.api_request import ApiTemplate
@@ -23,7 +23,7 @@ from base.player_tier import (
     TARGET_NET_PROFIT_TOP,
 )
 from base.sql_data import SqlTemplate
-from base.quick_access import QuickAccessLink
+from base.quick_access import QuickAccessField, QuickAccessLink
 from base.ssh_host import SshHostConfig, SshHostTime
 from gui import (
     QueueWriter,
@@ -203,26 +203,23 @@ class ApkConflictPromptTests(unittest.TestCase):
         self.window.user_lookup_uid.setValue(13425)
         self.window._on_user_lookup_succeeded(
             {
-                "users": [{"id": 13425, "username": "user@example.com"}],
-                "detail": {
-                    "id": 13425,
-                    "nickname": "Player_113425",
-                    "username": "user@example.com",
-                    "email": "user@example.com",
-                    "money": 100,
-                    "bonus": 20,
-                    "vip_level": 0,
-                    "charge_total": 0,
-                    "withdraw_total": 30,
-                    "charge_times": 4,
-                    "withdraw_times": 2,
-                    "distribution_channel": "gpa17drop",
-                    "login_distribution_channel": "login-drop",
-                    "channel_code": "Applovin-iOS",
-                    "advertising_id": "advertising-123",
-                    "platform": 3,
-                },
-                "kyc_status": 3,
+                "id": 13425,
+                "nickname": "Player_113425",
+                "username": "user@example.com",
+                "email": "user@example.com",
+                "money": 100,
+                "bonus": 20,
+                "vip_level": 0,
+                "charge_total": 0,
+                "withdraw_total": 30,
+                "charge_times": 4,
+                "withdraw_times": 2,
+                "distribution_channel": "gpa17drop",
+                "login_distribution_channel": "login-drop",
+                "channel_code": "Applovin-iOS",
+                "advertising_id": "advertising-123",
+                "platform": 3,
+                "pkg_name": "com.example.game",
             }
         )
 
@@ -231,29 +228,27 @@ class ApkConflictPromptTests(unittest.TestCase):
         self.assertFalse(self.window.user_lookup_result_scroll.isHidden())
         self.assertEqual(
             self.window.user_lookup_field_values["platform"].text(),
-            "iOS",
+            "iOS（3）",
         )
         self.assertEqual(
             self.window.user_lookup_field_values["balance"].text(),
-            "100 分",
+            "120 分",
+        )
+        self.assertEqual(
+            self.window.user_lookup_field_values["pkg_name"].text(),
+            "com.example.game",
         )
         self.assertEqual(
             self.window.user_lookup_field_values["advertising_id"].text(),
             "advertising-123",
         )
         self.assertEqual(
-            self.window.user_lookup_field_values["charge_times"].text(),
-            "4 次",
-        )
-        self.assertEqual(
-            self.window.user_lookup_field_values["withdraw_times"].text(),
-            "2 次",
-        )
-        self.assertTrue(self.window.user_lookup_kyc_switch.isChecked())
-        self.assertEqual(self.window.user_lookup_kyc_switch.text(), "● 已通过")
-        self.assertEqual(
             self.window.user_lookup_database_inputs["money"].text(),
             "100",
+        )
+        self.assertEqual(
+            self.window.user_lookup_database_inputs["bonus"].text(),
+            "20",
         )
 
         self.window._on_user_database_updated(
@@ -261,22 +256,19 @@ class ApkConflictPromptTests(unittest.TestCase):
                 "vip_level": 5,
                 "charge_total": 250000,
                 "money": 88000,
+                "bonus": 12000,
                 "withdraw_total": 32000,
                 "charge_times": 9,
                 "withdraw_times": 3,
             }
         )
         self.assertEqual(
-            self.window.user_lookup_field_values["vip_level"].text(),
-            "VIP5",
+            self.window.user_lookup_database_inputs["vip_level"].text(),
+            "5",
         )
         self.assertEqual(
             self.window.user_lookup_field_values["balance"].text(),
-            "88,000 分",
-        )
-        self.assertEqual(
-            self.window.user_lookup_field_values["charge_times"].text(),
-            "9 次",
+            "100,000 分",
         )
 
     def test_sql_template_selection_builds_runtime_parameter_inputs(self) -> None:
@@ -373,7 +365,7 @@ class ApkConflictPromptTests(unittest.TestCase):
                         self.window.content_stack.currentIndex(), page_index
                     )
 
-    def test_tool_action_tables_leave_full_height_for_buttons(self) -> None:
+    def test_ssh_action_table_leaves_full_height_for_buttons(self) -> None:
         ssh_workspace = self.window.ssh_host_workspace
         ssh_workspace.hosts = [
             SshHostConfig(name="开发机", host="127.0.0.1", username="root")
@@ -381,24 +373,50 @@ class ApkConflictPromptTests(unittest.TestCase):
         with patch("tool_pages.load_ssh_private_keys", return_value={}):
             ssh_workspace._refresh_hosts()
 
-        quick_workspace = self.window.quick_access_workspace
-        quick_workspace.links = [
-            QuickAccessLink(name="测试后台", url="https://example.test")
-        ]
-        quick_workspace._refresh()
         self.app.processEvents()
 
-        for table in (ssh_workspace.table, quick_workspace.table):
-            with self.subTest(table=table):
-                self.assertGreaterEqual(
-                    table.rowHeight(0), ACTION_TABLE_ROW_HEIGHT
-                )
-                action_cell = table.cellWidget(0, 5)
-                self.assertIsNotNone(action_cell)
-                self.assertEqual(
-                    len(action_cell.findChildren(QPushButton)),
-                    4,
-                )
+        self.assertGreaterEqual(
+            ssh_workspace.table.rowHeight(0), ACTION_TABLE_ROW_HEIGHT
+        )
+        action_cell = ssh_workspace.table.cellWidget(0, 5)
+        self.assertIsNotNone(action_cell)
+        self.assertEqual(len(action_cell.findChildren(QPushButton)), 4)
+
+    def test_quick_access_selection_shows_copyable_details(self) -> None:
+        workspace = self.window.quick_access_workspace
+        workspace.links = [
+            QuickAccessLink(
+                name="测试后台",
+                url="https://example.test",
+                category="测试环境",
+                remark="日常回归",
+                fields=[
+                    QuickAccessField("username", "tester"),
+                    QuickAccessField("password", "secret"),
+                ],
+            )
+        ]
+        workspace._refresh()
+        self.app.processEvents()
+
+        self.assertEqual(workspace.table.columnCount(), 3)
+        self.assertEqual(workspace.detail_title.text(), "测试后台")
+        self.assertEqual(workspace.detail_url.text(), "https://example.test")
+        self.assertIn("测试环境", workspace.detail_meta.text())
+        self.assertEqual(workspace.field_layout.count(), 2)
+        password_row = workspace.field_layout.itemAt(1).widget()
+        password_value = password_row.findChild(QLineEdit)
+        self.assertEqual(password_value.echoMode(), QLineEdit.EchoMode.Password)
+
+        with patch("tool_pages._copy_text") as copy_text:
+            copy_buttons = [
+                button
+                for button in password_row.findChildren(QPushButton)
+                if button.text() == "复制"
+            ]
+            self.assertEqual(len(copy_buttons), 1)
+            copy_buttons[0].click()
+        copy_text.assert_called_once_with(workspace, "secret")
 
     def test_ssh_time_page_keeps_full_timestamp_tool(self) -> None:
         workspace = self.window.ssh_host_workspace

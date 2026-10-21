@@ -67,7 +67,7 @@ SECTION_INFO = (
     ("数据准备", "账号生成", "批量生成测试账号，或使用指定邮箱创建单个账号。"),
     ("数据准备", "锦标赛造数", "创建参赛账号并完成充值、下注等锦标赛数据准备。"),
     ("数据准备", "玩家分层", "按净利润优先、利润率兜底识别玩家层级，并可按 UID 构造目标分层数据。"),
-    ("数据准备", "用户查询", "按 UID 查找用户，并读取后台用户详细信息。"),
+    ("数据准备", "用户查询", "按 UID 直接查询并编辑数据库用户信息。"),
     ("接口与流程", "SQL 数据模板", "维护并执行可复用 SQL，用于快速准备业务测试数据。"),
     ("接口与流程", "API 请求模板", "保存、调试并复用环境化的 HTTP 请求。"),
     ("接口与流程", "自动化场景", "把 SQL、API、变量提取和断言编排为完整流程。"),
@@ -202,6 +202,11 @@ QFrame#configCard {
     border: 1px solid #dfe3e8;
     border-radius: 10px;
 }
+QFrame#quickAccessDetail {
+    background: #f8f9fc;
+    border: 1px solid #e0e4ee;
+    border-radius: 9px;
+}
 QFrame#terminalPanel, QFrame#configCard, QFrame#navigation { background: #ffffff; }
 QFrame#userProfileCard {
     background: #f8f9fc;
@@ -213,26 +218,6 @@ QLabel#userFieldValue {
     background: #f7f8fa;
     border-radius: 6px;
     padding: 7px 9px;
-}
-QPushButton#kycSwitch {
-    min-width: 104px;
-    max-width: 104px;
-    min-height: 30px;
-    color: #b33b45;
-    background: #fff0f1;
-    border: 1px solid #f1cdd1;
-    border-radius: 15px;
-    padding: 0 10px;
-}
-QPushButton#kycSwitch:checked {
-    color: #207a4d;
-    background: #eaf7f0;
-    border-color: #c9ead8;
-}
-QPushButton#kycSwitch:disabled {
-    color: #8a919c;
-    background: #f1f3f5;
-    border-color: #dfe3e8;
 }
 QFrame#apkDropZone {
     background: #f8f9fb;
@@ -432,4 +417,3 @@ QScrollBar::handle:vertical {
 QScrollBar::handle:vertical:hover { background: #9da5af; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 """
-

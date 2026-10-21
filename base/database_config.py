@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, Iterator, Tuple, Union
 
+from .env_config import database_environment_for
 from .local_tool_config import SSH_PRIVATE_KEYS_FILE
 from .user import SUPPORTED_ENVIRONMENTS
 
@@ -218,6 +219,9 @@ def load_database_connections(
         connections[environment] = DatabaseConnectionConfig.from_mapping(
             scoped.get(environment)
         )
+    for environment in SUPPORTED_ENVIRONMENTS:
+        database_environment = database_environment_for(environment)
+        connections[environment] = connections[database_environment]
     return connections
 
 
@@ -230,8 +234,12 @@ def save_database_connection(
     if environment not in SUPPORTED_ENVIRONMENTS:
         raise ValueError(f"不支持的环境：{environment}")
     validate_database_connection(connection)
+    database_environment = database_environment_for(environment)
     connections = load_database_connections(path)
-    connections[environment] = connection
+    connections[database_environment] = connection
+    for name in SUPPORTED_ENVIRONMENTS:
+        if database_environment_for(name) == database_environment:
+            connections[name] = connection
     config_path = Path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = config_path.with_suffix(f"{config_path.suffix}.tmp")

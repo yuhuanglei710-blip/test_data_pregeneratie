@@ -58,6 +58,32 @@ def environment_config(
     return config
 
 
+def database_environment_for(
+    environment: str,
+    project_root: Union[str, Path] = PROJECT_ROOT,
+) -> str:
+    """返回环境实际使用的数据库环境，未配置共享时返回自身。"""
+    environments = config_section("environment", project_root)
+    config = environment_config(environment, project_root)
+    database_environment = config.get("database_environment", environment)
+    if (
+        not isinstance(database_environment, str)
+        or not database_environment.strip()
+    ):
+        raise RuntimeError(
+            "env.json 的 "
+            f"environment.{environment}.database_environment 必须是非空字符串"
+        )
+    database_environment = database_environment.strip()
+    if database_environment not in environments:
+        raise RuntimeError(
+            "env.json 的 "
+            f"environment.{environment}.database_environment "
+            f"引用了不存在的环境 {database_environment!r}"
+        )
+    return database_environment
+
+
 def required_string(
     config: Mapping[str, Any],
     key: str,

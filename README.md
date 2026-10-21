@@ -125,17 +125,12 @@ iOS 安装、Android 日志、时间戳工具、SSH 主机、快捷访问和环�
 
 ## 用户查询
 
-“用户查询”页按运行环境和 UID 依次调用后台 `GetUserList` 与 `GetUserInfo`：先确认用户存在，
-再展示 UID、邮箱、余额、累充、累提、充值次数、提现次数、平台、渠道、登录渠道、
-Channel Code、VIP 等级和 Advertising ID。查询用户时还会调用 `GetKycStatus` 获取 KYC 状态；
-状态 `3` 显示为已通过，状态 `2` 显示为已失败。KYC 以用户数据中的开关展示，可通过
-`UpdateKycStatus` 在通过和失败间切换，业务键固定为 `10011`，更新成功后会重新读取最新状态。
-程序会复用已有后台登录逻辑，按所选环境自动获取认证 Token，无需在页面手动填写。
-所选环境需要在 `env.json` 的 `environment.<环境>.back_ground_url` 中配置后台地址。
-页面还支持通过所选环境的数据库连接，使用参数化 SQL 严格按 `user.id` 修改
-`vip_level`、`charge_total`、`money`、`withdraw_total`、`charge_times` 和
-`withdraw_times`。金额使用数据库原值“分”；保存前会列出实际变更并要求确认，未配置数据库
-连接时不会执行写入。
+“用户查询”页按运行环境和 UID 直接查询 `user` 表，不再调用后台用户接口。页面在同一信息区
+展示 UID、邮箱、昵称、`pkg_name`、`platform`、`money + bonus` 总余额、渠道、登录渠道、
+Channel Code 和 Advertising ID，并原位提供 `vip_level`、`charge_total`、`money`、`bonus`、
+`withdraw_total`、`charge_times` 和 `withdraw_times` 的编辑框。查询和保存都复用所选环境的
+数据库连接，并使用参数化 SQL 严格按 `user.id` 操作。金额使用数据库原值“分”；保存前会
+列出实际变更并要求确认，未配置数据库连接时不会执行查询或写入。
 
 ## Android 设备安装
 
@@ -237,8 +232,9 @@ Linux 主机时间。主机时间页完整集成时间戳解析和偏移工具�
 主机信息保存在 `cache/ssh_hosts.json`。SSH 不使用 Agent 或自动密钥搜索。修改远程系统时间
 通常需要 root 或等效权限。
 
-“快捷访问”支持链接分类、置顶、检索、浏览器打开和摘要复制；每条链接可维护账号、密码、
-AppKey 等任意键值字段，数据保存在 `cache/quick_access.json`。这两个本地 JSON 文件均已由
+“快捷访问”支持链接分类、置顶、检索、浏览器打开和摘要复制；选中链接后可在详情区单独复制
+地址或登录字段，密码等敏感字段默认隐藏。每条链接可维护账号、密码、AppKey 等任意键值字段，
+数据保存在 `cache/quick_access.json`。这两个本地 JSON 文件均已由
 `cache/` 规则排除版本控制，但字段和密码仍属于本机明文数据，请妥善保护项目目录。
 
 通用工具的数据文件位置统一在项目根目录 `env.json` 的 `local` 对象中配置，包括 `TOOL_DATA_DIR`、

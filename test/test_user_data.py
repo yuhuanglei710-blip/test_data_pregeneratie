@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from base.database_config import DatabaseConnectionConfig
-from base.user_data import normalize_editable_user_values, update_user_fields
+from base.user_data import fetch_user, normalize_editable_user_values, update_user_fields
 
 
 class _Cursor:
@@ -48,14 +48,15 @@ class UserDataTests(unittest.TestCase):
             "vip_level": 5,
             "charge_total": 200_000,
             "money": 90_000,
+            "bonus": 5_000,
             "withdraw_total": 30_000,
             "charge_times": 8,
             "withdraw_times": 2,
         }
         database = _Database(
             [
-                (4, 100_000, 50_000, 10_000, 3, 1),
-                (5, 200_000, 90_000, 30_000, 8, 2),
+                (4, 100_000, 50_000, 2_000, 10_000, 3, 1),
+                (5, 200_000, 90_000, 5_000, 30_000, 8, 2),
             ]
         )
 
@@ -81,8 +82,55 @@ class UserDataTests(unittest.TestCase):
         self.assertTrue(update_sql.endswith("WHERE id=%s"))
         self.assertEqual(
             parameters,
-            (5, 200_000, 90_000, 30_000, 8, 2, 607425),
+            (5, 200_000, 90_000, 5_000, 30_000, 8, 2, 607425),
         )
+
+    def test_fetches_user_detail_directly_by_user_id(self) -> None:
+        database = _Database(
+            [
+                (
+                    607425,
+                    "user@example.com",
+                    "user@example.com",
+                    "Player",
+                    3,
+                    "com.example.game",
+                    "gpa17drop",
+                    "login-drop",
+                    "Applovin-iOS",
+                    "advertising-123",
+                    5,
+                    200_000,
+                    90_000,
+                    5_000,
+                    30_000,
+                    8,
+                    2,
+                )
+            ]
+        )
+
+        @contextmanager
+        def connection_context(_connection):
+            yield database
+
+        with patch(
+            "base.user_data.open_database_connection",
+            side_effect=connection_context,
+        ):
+            detail = fetch_user(607425, DatabaseConnectionConfig())
+
+        self.assertIsNotNone(detail)
+        self.assertEqual(detail["pkg_name"], "com.example.game")
+        self.assertEqual(detail["platform"], 3)
+        self.assertEqual(detail["money"], 90_000)
+        self.assertEqual(detail["bonus"], 5_000)
+        query, parameters = database.fake_cursor.executions[0]
+        self.assertIn("`pkg_name`", query)
+        self.assertIn("`platform`", query)
+        self.assertIn("`money`", query)
+        self.assertIn("`bonus`", query)
+        self.assertEqual(parameters, (607425,))
 
     def test_missing_user_rolls_back(self) -> None:
         database = _Database([None])
@@ -102,6 +150,7 @@ class UserDataTests(unittest.TestCase):
                         "vip_level",
                         "charge_total",
                         "money",
+                        "bonus",
                         "withdraw_total",
                         "charge_times",
                         "withdraw_times",
@@ -117,6 +166,7 @@ class UserDataTests(unittest.TestCase):
             "vip_level": 256,
             "charge_total": 0,
             "money": 0,
+            "bonus": 0,
             "withdraw_total": 0,
             "charge_times": 0,
             "withdraw_times": 0,

@@ -1,8 +1,8 @@
-"""按 UID 读取和更新 user 表中允许编辑的用户字段。"""
+"""按 UID 直接读取和更新 user 表中的用户数据。"""
 
 from __future__ import annotations
 
-from typing import Dict, Mapping
+from typing import Dict, Mapping, Optional
 
 from .database_config import DatabaseConnectionConfig, open_database_connection
 
@@ -11,9 +11,23 @@ EDITABLE_USER_FIELDS = (
     "vip_level",
     "charge_total",
     "money",
+    "bonus",
     "withdraw_total",
     "charge_times",
     "withdraw_times",
+)
+USER_DETAIL_FIELDS = (
+    "id",
+    "email",
+    "username",
+    "nickname",
+    "platform",
+    "pkg_name",
+    "distribution_channel",
+    "login_distribution_channel",
+    "channel_code",
+    "advertising_id",
+    *EDITABLE_USER_FIELDS,
 )
 MAX_UNSIGNED_INT = 4_294_967_295
 
@@ -61,6 +75,37 @@ def _values_from_row(row: object) -> Dict[str, int]:
     }
 
 
+def _detail_from_row(row: object) -> Dict[str, object]:
+    if not isinstance(row, (tuple, list)) or len(row) < len(USER_DETAIL_FIELDS):
+        raise RuntimeError("数据库返回的用户数据格式无效")
+    detail = {
+        field: row[index]
+        for index, field in enumerate(USER_DETAIL_FIELDS)
+    }
+    for field in EDITABLE_USER_FIELDS:
+        detail[field] = int(detail[field] or 0)
+    detail["id"] = int(detail["id"])
+    detail["platform"] = int(detail["platform"] or 0)
+    return detail
+
+
+def fetch_user(
+    user_id: int,
+    connection: DatabaseConnectionConfig,
+) -> Optional[Dict[str, object]]:
+    """使用参数化 SQL 按 user.id 直接读取页面所需字段。"""
+    normalized_user_id = _normalize_user_id(user_id)
+    columns = ", ".join(f"`{field}`" for field in USER_DETAIL_FIELDS)
+    with open_database_connection(connection) as database:
+        with database.cursor() as cursor:
+            cursor.execute(
+                f"SELECT {columns} FROM `user` WHERE id=%s LIMIT 1",
+                (normalized_user_id,),
+            )
+            row = cursor.fetchone()
+    return None if row is None else _detail_from_row(row)
+
+
 def update_user_fields(
     user_id: int,
     values: Mapping[str, object],
@@ -81,7 +126,7 @@ def update_user_fields(
                     raise ValueError(f"未找到 UID {normalized_user_id}")
                 cursor.execute(
                     "UPDATE `user` SET vip_level=%s, charge_total=%s, money=%s, "
-                    "withdraw_total=%s, charge_times=%s, withdraw_times=%s "
+                    "bonus=%s, withdraw_total=%s, charge_times=%s, withdraw_times=%s "
                     "WHERE id=%s",
                     tuple(normalized[field] for field in EDITABLE_USER_FIELDS)
                     + (normalized_user_id,),

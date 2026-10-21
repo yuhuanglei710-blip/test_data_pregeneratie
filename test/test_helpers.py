@@ -1425,6 +1425,35 @@ class DatabaseConfigTests(unittest.TestCase):
         self.assertEqual(connections["yy"].ssh_host, "yy-ssh.example.test")
         self.assertEqual(connections["huidu"].ssh_host, "")
 
+    def test_individual_environment_shares_dev_database_connection(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = f"{temp_dir}/database_connections.json"
+            with open(config_file, "w", encoding="utf-8") as stream:
+                json.dump(
+                    {
+                        "database_connections_by_environment": {
+                            "dev": {
+                                "ssh_host": "dev-ssh.example.test",
+                                "database_name": "ush_dev",
+                            },
+                            "individual": {
+                                "ssh_host": "personal-ssh.example.test",
+                                "database_name": "personal",
+                            },
+                        }
+                    },
+                    stream,
+                )
+
+            connections = load_database_connections(config_file)
+
+        self.assertIs(connections["individual"], connections["dev"])
+        self.assertEqual(
+            connections["individual"].ssh_host,
+            "dev-ssh.example.test",
+        )
+        self.assertEqual(connections["individual"].database_name, "ush_dev")
+
     def test_missing_private_key_is_rejected(self):
         connection = self._connection("missing-key-id", "ssh.example.test")
 
