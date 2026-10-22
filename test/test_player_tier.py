@@ -603,7 +603,7 @@ class PlayerTierDatabaseTests(unittest.TestCase):
             amount=1_000,
             spin_count=3,
             bet_amount=100,
-            spin_workers=5,
+            spin_workers=1,
             refresh_user_token=ANY,
         )
 

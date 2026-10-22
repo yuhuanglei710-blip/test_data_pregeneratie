@@ -214,7 +214,9 @@ python -m base.tournment_test
 响应时，可在代码调用中传入 `verbose=True`。失败响应会保留状态码和截断后的响应内容。
 批量流程会复用未过期的游戏 token。串行下注会将每次响应中的 `session_id` 传给下一次
 下注；并行下注会复用 token，但每次请求使用独立 session。账号并发和单账号下注并发
-可以分别设置，默认都是 5。
+可以分别设置。账号默认并发为 5；单账号下注默认使用串行模式（并发数 1），避免同一
+token 的并发请求触发服务端限流或 session 冲突。单次下注失败后会按
+`spin.spin_retry_delays` 的间隔重试，默认等待 0.5 秒、1 秒后各重试一次。
 选择 `huidu` 灰度环境时，游戏 token 会从灰度 `self_game_url` 获取，网页 Origin、token
 缓存和游戏 session 也会按环境隔离，不会与测试环境混用。
 选择 `yy` 环境时，游戏 token 接口读取 `environment.yy.domain`，请求 Origin 和退出/收银

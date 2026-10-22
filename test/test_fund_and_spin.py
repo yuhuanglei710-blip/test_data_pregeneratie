@@ -7,6 +7,36 @@ from base import fund_and_spin
 
 
 class FundAndSpinTests(unittest.TestCase):
+    def test_default_spin_worker_is_serial(self) -> None:
+        self.assertEqual(fund_and_spin.DEFAULT_SPIN_WORKERS, 1)
+
+    def test_retries_a_failed_spin_before_aborting(self) -> None:
+        spin_runner = Mock(side_effect=[None, Mock()])
+
+        with (
+            patch.object(fund_and_spin.spin, "dev_spin", spin_runner),
+            patch.object(fund_and_spin.spin, "SPIN_RETRY_DELAYS", (0.5,)),
+            patch.object(fund_and_spin.time, "sleep") as sleep,
+        ):
+            fund_and_spin.place_spins("user-token", 1)
+
+        self.assertEqual(spin_runner.call_count, 2)
+        sleep.assert_called_once_with(0.5)
+
+    def test_reports_failure_after_spin_retries_are_exhausted(self) -> None:
+        with (
+            patch.object(fund_and_spin.spin, "dev_spin", return_value=None) as spin,
+            patch.object(fund_and_spin.spin, "SPIN_RETRY_DELAYS", (0.5, 1.0)),
+            patch.object(fund_and_spin.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(
+                fund_and_spin.SpinWorkflowError,
+                "已尝试 3 次",
+            ):
+                fund_and_spin.place_spins("user-token", 1)
+
+        self.assertEqual(spin.call_count, 3)
+
     def test_funds_before_running_spins(self) -> None:
         events = []
         spin_runner = Mock(side_effect=lambda *_args, **_kwargs: events.append("spin"))

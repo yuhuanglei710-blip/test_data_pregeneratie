@@ -2445,17 +2445,20 @@ class WorkflowWindow(QMainWindow):
         parallel = QPushButton("并行")
         parallel.setObjectName("modeButton")
         parallel.setCheckable(True)
-        parallel.setChecked(True)
 
         group = QButtonGroup(holder)
         group.setExclusive(True)
         group.addButton(serial)
         group.addButton(parallel)
+        if max_workers.value() <= 1:
+            serial.setChecked(True)
+        else:
+            parallel.setChecked(True)
         serial.toggled.connect(lambda _checked: self._sync_execution_mode_inputs())
         parallel.toggled.connect(lambda _checked: self._sync_execution_mode_inputs())
         row.addWidget(serial, 1)
         row.addWidget(parallel, 1)
-        max_workers.setEnabled(True)
+        max_workers.setEnabled(parallel.isChecked())
         return holder, serial, parallel
 
     def _account_creation_mode_control(

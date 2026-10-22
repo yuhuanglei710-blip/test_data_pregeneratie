@@ -67,6 +67,16 @@ except (KeyError, TypeError, ValueError) as error:
     raise RuntimeError(
         "env.json 的 spin.token_activation_retry_delays 必须是数字数组"
     ) from error
+try:
+    SPIN_RETRY_DELAYS = tuple(
+        float(value) for value in _SPIN_CONFIG["spin_retry_delays"]
+    )
+    if any(delay < 0 for delay in SPIN_RETRY_DELAYS):
+        raise ValueError
+except (KeyError, TypeError, ValueError) as error:
+    raise RuntimeError(
+        "env.json 的 spin.spin_retry_delays 必须是非负数字数组"
+    ) from error
 
 
 @dataclass(frozen=True)

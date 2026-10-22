@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -16,7 +17,9 @@ except ImportError:  # pragma: no cover - compatibility for direct execution.
 
 INITIAL_BALANCE = 1_000_000
 INITIAL_SPIN_COUNT = 30
-DEFAULT_SPIN_WORKERS = 5
+# 同一游戏 token 的并发下注容易触发服务端限流或 session 冲突。
+# 默认保持串行；需要压测时仍可在界面手动切换为并行。
+DEFAULT_SPIN_WORKERS = 1
 
 
 class SpinWorkflowError(RuntimeError):
@@ -57,21 +60,38 @@ def place_spins(
     if spin_workers <= 0:
         raise ValueError("下注并发数必须大于 0")
 
+    def place_spin(spin_index: int, *, preserve_session: bool) -> None:
+        retry_delays = (*spin.SPIN_RETRY_DELAYS, None)
+        for attempt, retry_delay in enumerate(retry_delays, 1):
+            if stop_requested and stop_requested():
+                raise FundingWorkflowCancelled("用户已停止任务")
+            spin_options = {
+                "environment": environment,
+                "bet_amount": bet_amount,
+                "verbose": verbose,
+            }
+            if not preserve_session:
+                spin_options["preserve_session"] = False
+            if spin.dev_spin(user_token, **spin_options) is not None:
+                return
+            if retry_delay is None:
+                raise SpinWorkflowError(
+                    f"第 {spin_index}/{spin_count} 次下注失败"
+                    f"（已尝试 {attempt} 次）"
+                )
+            print(
+                f"[spin] 第 {spin_index}/{spin_count} 次下注失败，"
+                f"{retry_delay:g} 秒后重试 "
+                f"({attempt}/{len(retry_delays)})"
+            )
+            time.sleep(retry_delay)
+
     if spin_workers > 1:
         if not spin.get_valid_game_token(user_token, environment=environment):
             raise SpinWorkflowError("获取游戏 token 失败")
 
         def place_parallel_spin(spin_index: int) -> None:
-            if stop_requested and stop_requested():
-                raise FundingWorkflowCancelled("用户已停止任务")
-            if spin.dev_spin(
-                user_token,
-                environment=environment,
-                bet_amount=bet_amount,
-                preserve_session=False,
-                verbose=verbose,
-            ) is None:
-                raise SpinWorkflowError(f"第 {spin_index}/{spin_count} 次下注失败")
+            place_spin(spin_index, preserve_session=False)
 
         with ThreadPoolExecutor(
             max_workers=min(spin_workers, spin_count),
@@ -86,15 +106,7 @@ def place_spins(
         return
 
     for spin_index in range(1, spin_count + 1):
-        if stop_requested and stop_requested():
-            raise FundingWorkflowCancelled("用户已停止任务")
-        if spin.dev_spin(
-            user_token,
-            environment=environment,
-            bet_amount=bet_amount,
-            verbose=verbose,
-        ) is None:
-            raise SpinWorkflowError(f"第 {spin_index}/{spin_count} 次下注失败")
+        place_spin(spin_index, preserve_session=True)
 
 
 def fund_and_spin(
